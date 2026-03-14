@@ -7,6 +7,9 @@
 // Three mulmod64 variants are provided because __int128 may not be available
 // or efficient on all GPU targets. Cross-variant agreement is validated in
 // test_modular.cu.
+//
+// Additionally, mulmod_small / powmod_small are provided for moduli < 2^32,
+// which avoids all 128-bit arithmetic — a*b fits in 64 bits when a,b < m < 2^32.
 
 #include <cstdint>
 
@@ -134,11 +137,39 @@ uint64_t mulmod64_v3(uint64_t a, uint64_t b, uint64_t m) {
 
 // ============================================================================
 // Default mulmod64 — selects Variant 1 (__int128)
-//   This is the fastest correct path and matches the Rust source directly.
+//   This is the fastest correct path for the general case and matches the
+//   Rust source directly.
 // ============================================================================
 __host__ __device__ __forceinline__
 uint64_t mulmod64(uint64_t a, uint64_t b, uint64_t m) {
     return mulmod64_v1(a, b, m);
+}
+
+// ============================================================================
+// Small-modulus fast path: mulmod_small / powmod_small
+//   When m < 2^32, a and b (already reduced mod m) each fit in 32 bits.
+//   Their product a*b < 2^64, so no 128-bit arithmetic is needed at all.
+//   This eliminates the most expensive part of MR for our norm ranges.
+// ============================================================================
+__host__ __device__ __forceinline__
+uint64_t mulmod_small(uint64_t a, uint64_t b, uint64_t m) {
+    // Caller guarantees a, b < m < 2^32, so a*b < 2^64.
+    return (a * b) % m;
+}
+
+__host__ __device__ __forceinline__
+uint64_t powmod_small(uint64_t base, uint64_t exp, uint64_t m) {
+    if (m == 1) return 0;
+    uint64_t result = 1;
+    base %= m;
+    while (exp > 0) {
+        if (exp & 1ULL) {
+            result = mulmod_small(result, base, m);
+        }
+        base = mulmod_small(base, base, m);
+        exp >>= 1;
+    }
+    return result;
 }
 
 // ============================================================================
