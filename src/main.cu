@@ -22,6 +22,8 @@
 #include <fstream>
 
 #include <cuda_runtime.h>
+#include <thrust/sort.h>
+#include <thrust/execution_policy.h>
 
 #include "types.h"
 #include "modular_arith.cuh"
@@ -29,6 +31,15 @@
 #include "cornacchia.cuh"
 #include "sieve_base.cuh"
 #include "sieve_kernel.cuh"
+
+struct GPrimeComparator {
+    __host__ __device__
+    bool operator()(const GaussianPrime& x, const GaussianPrime& y) const {
+        if (x.norm != y.norm) return x.norm < y.norm;
+        if (x.a != y.a) return x.a < y.a;
+        return x.b < y.b;
+    }
+};
 
 // Declared in kernel.cu (MR kernel)
 extern __global__ void gaussian_prime_kernel(
@@ -126,8 +137,7 @@ static void thermal_check() {
 
 // ---------------------------------------------------------------------------
 // CPU-side: generate inert primes (p ≡ 3 mod 4, norm = p²)
-// Used only in MR mode. In sieve mode, the Cornacchia dispatch kernel
-// handles inert primes from the sieve's prime output.
+// Used in MR mode and in sieve mode (after split-prime GPU processing).
 // ---------------------------------------------------------------------------
 static void generate_inert_primes(uint64_t norm_lo, uint64_t norm_hi,
                                   std::vector<GaussianPrime>& out) {
@@ -154,7 +164,8 @@ static void generate_inert_primes(uint64_t norm_lo, uint64_t norm_hi,
 }
 
 // ---------------------------------------------------------------------------
-// Sieve mode: segmented sieve → Cornacchia dispatch
+// Sieve mode: segmented sieve (split primes only) → Cornacchia dispatch
+// + CPU inert-prime generation.
 // ---------------------------------------------------------------------------
 static void run_sieve_mode(const Config& cfg,
                            std::vector<GaussianPrime>& all_primes) {
@@ -188,14 +199,14 @@ static void run_sieve_mode(const Config& cfg,
     // 3. Allocate sieve output buffer
     // Size based on per-batch capacity.
     // Each batch covers segments_per_batch * SEGMENT_SPAN norms.
-    // PNT: primes per batch ~ batch_span / ln(batch_span). 1.5x safety margin.
+    // PNT: primes per batch ~ batch_span / ln(batch_span), scaled for p == 1 (mod 4) output.
     uint32_t segments_per_batch = 10000;
     uint64_t batch_norm_span = (uint64_t)segments_per_batch * SEGMENT_SPAN;
     // Cap batch span to actual range for buffer estimation
     uint64_t effective_span = (cfg.norm_hi - cfg.norm_lo < batch_norm_span)
                             ? (cfg.norm_hi - cfg.norm_lo) : batch_norm_span;
     double ln_batch = log((double)(effective_span > 10 ? effective_span : 10));
-    uint64_t est_primes = (uint64_t)((double)effective_span / ln_batch * 1.5) + 65536;
+    uint64_t est_primes = (uint64_t)((double)effective_span / ln_batch * 0.8) + 65536;
     if (est_primes > 120000000ULL) est_primes = 120000000ULL;
     uint32_t max_sieve_output = (uint32_t)est_primes;
 
@@ -238,6 +249,128 @@ static void run_sieve_mode(const Config& cfg,
         uint64_t total_span = current_hi - aligned_lo;
         uint32_t num_segs = (uint32_t)((total_span + SEGMENT_SPAN - 1) / SEGMENT_SPAN);
 
+        uint64_t* d_bucket_hits = nullptr;
+        uint32_t* d_bucket_offsets = nullptr;
+
+        // Build large-prime buckets for this batch: O(large-primes + hits), consumed as O(hits/segment).
+        if (small_count < base_primes.size() && num_segs > 0u) {
+            std::vector<uint32_t> seg_hit_counts(num_segs, 0u);
+            const uint64_t start_odd = aligned_lo + 1u;
+
+            // Pass 1: count hits per segment.
+            for (uint32_t i = small_count; i < base_primes.size(); ++i) {
+                const uint32_t p = base_primes[i];
+                if ((p & 1u) == 0u) {
+                    continue;
+                }
+
+                const uint64_t p64 = static_cast<uint64_t>(p);
+                uint64_t first = 0u;
+                const uint64_t p2 = p64 * p64;
+                if (p2 >= start_odd) {
+                    first = p2;
+                } else {
+                    const uint64_t rem = start_odd % p64;
+                    first = (rem == 0u) ? start_odd : (start_odd + (p64 - rem));
+                }
+                if ((first & 1u) == 0u) {
+                    first += p64;
+                }
+
+                const uint64_t step = p64 << 1u;
+                for (; first < current_hi; first += step) {
+                    const uint64_t s64 = (first - aligned_lo) / SEGMENT_SPAN;
+                    if (s64 >= num_segs) {
+                        break;
+                    }
+                    seg_hit_counts[static_cast<uint32_t>(s64)]++;
+                }
+            }
+
+            std::vector<uint32_t> host_bucket_offsets(num_segs + 1u, 0u);
+            bool offsets_ok = true;
+            uint64_t total_hits64 = 0u;
+            for (uint32_t s = 0; s < num_segs; ++s) {
+                total_hits64 += static_cast<uint64_t>(seg_hit_counts[s]);
+                if (total_hits64 > 0xFFFFFFFFULL) {
+                    offsets_ok = false;
+                    break;
+                }
+                host_bucket_offsets[s + 1u] = static_cast<uint32_t>(total_hits64);
+            }
+
+            if (offsets_ok) {
+                const uint32_t total_hits = static_cast<uint32_t>(total_hits64);
+                std::vector<uint64_t> host_bucket_hits(total_hits > 0u ? total_hits : 1u, 0u);
+                std::vector<uint32_t> fill_pos(num_segs, 0u);
+
+                // Pass 2: fill bit positions.
+                for (uint32_t i = small_count; i < base_primes.size(); ++i) {
+                    const uint32_t p = base_primes[i];
+                    if ((p & 1u) == 0u) {
+                        continue;
+                    }
+
+                    const uint64_t p64 = static_cast<uint64_t>(p);
+                    uint64_t first = 0u;
+                    const uint64_t p2 = p64 * p64;
+                    if (p2 >= start_odd) {
+                        first = p2;
+                    } else {
+                        const uint64_t rem = start_odd % p64;
+                        first = (rem == 0u) ? start_odd : (start_odd + (p64 - rem));
+                    }
+                    if ((first & 1u) == 0u) {
+                        first += p64;
+                    }
+
+                    const uint64_t step = p64 << 1u;
+                    for (; first < current_hi; first += step) {
+                        const uint64_t s64 = (first - aligned_lo) / SEGMENT_SPAN;
+                        if (s64 >= num_segs) {
+                            break;
+                        }
+                        const uint32_t s = static_cast<uint32_t>(s64);
+                        const uint64_t seg_lo = aligned_lo + static_cast<uint64_t>(s) * SEGMENT_SPAN;
+                        const uint32_t bit = static_cast<uint32_t>((first - seg_lo - 1u) >> 1u);
+                        const uint32_t slot = host_bucket_offsets[s] + fill_pos[s];
+                        host_bucket_hits[slot] = static_cast<uint64_t>(bit);
+                        fill_pos[s]++;
+                    }
+                }
+
+                uint64_t* d_bucket_hits_mut = nullptr;
+                uint32_t* d_bucket_offsets_mut = nullptr;
+                const size_t bucket_hits_bytes = static_cast<size_t>(host_bucket_hits.size()) * sizeof(uint64_t);
+                const size_t bucket_offsets_bytes = static_cast<size_t>(host_bucket_offsets.size()) * sizeof(uint32_t);
+
+                cudaError_t bucket_err = cudaMalloc(&d_bucket_offsets_mut, bucket_offsets_bytes);
+                if (bucket_err == cudaSuccess) {
+                    bucket_err = cudaMemcpy(d_bucket_offsets_mut, host_bucket_offsets.data(),
+                                            bucket_offsets_bytes, cudaMemcpyHostToDevice);
+                }
+                if (bucket_err == cudaSuccess) {
+                    bucket_err = cudaMalloc(&d_bucket_hits_mut, bucket_hits_bytes);
+                }
+                if (bucket_err == cudaSuccess) {
+                    bucket_err = cudaMemcpy(d_bucket_hits_mut, host_bucket_hits.data(),
+                                            bucket_hits_bytes, cudaMemcpyHostToDevice);
+                }
+
+                if (bucket_err == cudaSuccess) {
+                    d_bucket_hits = d_bucket_hits_mut;
+                    d_bucket_offsets = d_bucket_offsets_mut;
+                } else {
+                    if (d_bucket_offsets_mut != nullptr) cudaFree(d_bucket_offsets_mut);
+                    if (d_bucket_hits_mut != nullptr) cudaFree(d_bucket_hits_mut);
+                    fprintf(stderr, "WARNING: bucket upload failed, using fallback Phase 2C (%s)\n",
+                            cudaGetErrorString(bucket_err));
+                }
+            } else {
+                fprintf(stderr, "WARNING: bucket offsets overflow, using fallback Phase 2C\n");
+            }
+        }
+
         // Reset sieve counter
         cudaMemset(d_sieve_count, 0, sizeof(uint32_t));
 
@@ -249,11 +382,13 @@ static void run_sieve_mode(const Config& cfg,
             current_lo, current_hi,
             d_base_primes, (uint32_t)base_primes.size(),
             tiny_count, small_count,
-            nullptr, nullptr,  // No bucketed large primes (Phase 2C handles them in-kernel)
+            d_bucket_hits, d_bucket_offsets,
             d_sieve_out, max_sieve_output, d_sieve_count
         );
         cudaDeviceSynchronize();
         err = cudaGetLastError();
+        if (d_bucket_hits != nullptr) cudaFree(d_bucket_hits);
+        if (d_bucket_offsets != nullptr) cudaFree(d_bucket_offsets);
         if (err != cudaSuccess) {
             fprintf(stderr, "Sieve kernel error: %s\n", cudaGetErrorString(err));
             break;
@@ -307,6 +442,9 @@ static void run_sieve_mode(const Config& cfg,
 
     fprintf(stderr, "[sieve] Total raw primes from sieve: %lu\n",
             (unsigned long)total_sieve_primes);
+
+    // Add inert primes p == 3 (mod 4), norm = p^2, on CPU.
+    generate_inert_primes(cfg.norm_lo, cfg.norm_hi, all_primes);
 
     // Cleanup
     cudaFree(d_base_primes);
@@ -452,16 +590,31 @@ int main(int argc, char** argv) {
         run_mr_mode(cfg, all_primes);
     }
 
+    // --- Sort by (norm, a, b) on GPU via managed memory (Jetson unified mem) ---
+    {
+        GaussianPrime* managed = nullptr;
+        size_t n = all_primes.size();
+        cudaError_t merr = cudaMallocManaged(&managed, n * sizeof(GaussianPrime));
+        if (merr == cudaSuccess && managed != nullptr) {
+            memcpy(managed, all_primes.data(), n * sizeof(GaussianPrime));
+            cudaDeviceSynchronize();
+            thrust::sort(thrust::device, managed, managed + n, GPrimeComparator());
+            cudaDeviceSynchronize();
+            memcpy(all_primes.data(), managed, n * sizeof(GaussianPrime));
+            cudaFree(managed);
+        } else {
+            // Fallback: CPU sort if managed alloc fails
+            std::sort(all_primes.begin(), all_primes.end(),
+                      [](const GaussianPrime& x, const GaussianPrime& y) {
+                          if (x.norm != y.norm) return x.norm < y.norm;
+                          if (x.a != y.a) return x.a < y.a;
+                          return x.b < y.b;
+                      });
+        }
+    }
+
     auto t_end = std::chrono::high_resolution_clock::now();
     double elapsed = std::chrono::duration<double>(t_end - t_start).count();
-
-    // --- Sort by (norm, a, b) ---
-    std::sort(all_primes.begin(), all_primes.end(),
-              [](const GaussianPrime& x, const GaussianPrime& y) {
-                  if (x.norm != y.norm) return x.norm < y.norm;
-                  if (x.a != y.a) return x.a < y.a;
-                  return x.b < y.b;
-              });
 
     // --- Write output ---
     FILE* fout = nullptr;

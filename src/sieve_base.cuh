@@ -6,9 +6,9 @@
 #include <cmath>
 
 // Sieve constants
-#define SEGMENT_SPAN    131072u         // Norms per segment (2^17)
-#define BITMAP_WORDS    2048u           // 65536 bits / 32 bits per word (odd-only)
-#define BITMAP_BYTES    8192u           // 2048 * 4
+#define SEGMENT_SPAN    262144u         // Norms per segment (2^18)
+#define BITMAP_WORDS    4096u           // 131072 bits / 32 bits per word (odd-only)
+#define BITMAP_BYTES    16384u          // 4096 * 4
 #define THREADS_PER_BLK 256u
 #define TINY_THRESHOLD  256u            // Primes below this use cooperative marking
 

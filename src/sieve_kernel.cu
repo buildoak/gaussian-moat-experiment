@@ -75,10 +75,6 @@ __global__ void segmented_sieve_kernel(
         return;
     }
 
-    // Bucketed large-prime hits are reserved for the follow-up optimization path.
-    (void)bucket_hits;
-    (void)bucket_offsets;
-
     if (norm_hi <= norm_lo || output_primes == nullptr || output_count == nullptr) {
         return;
     }
@@ -165,26 +161,42 @@ __global__ void segmented_sieve_kernel(
         }
         __syncthreads();
 
-        // Phase 2C: large primes p > SEGMENT_SPAN, at most one odd hit per segment.
-        for (uint32_t i = small_limit + tid; i < base_prime_count; i += blockDim.x) {
-            const uint32_t p = base_primes[i];
-            if ((p & 1u) == 0u) {
-                continue;
+        // Phase 2C: large primes p > SEGMENT_SPAN via per-segment buckets when provided.
+        if (bucket_hits != nullptr && bucket_offsets != nullptr) {
+            const uint32_t bucket_start = bucket_offsets[seg_idx];
+            const uint32_t bucket_end = bucket_offsets[seg_idx + 1u];
+            for (uint32_t i = bucket_start + tid; i < bucket_end; i += blockDim.x) {
+                const uint32_t bit = static_cast<uint32_t>(bucket_hits[i]);
+                if (bit < valid_odd_count) {
+                    const uint32_t word = bit >> 5;
+                    const uint32_t mask = 1u << (bit & 31u);
+                    atomicOr(&bitmap[word], mask);
+                }
             }
+        } else {
+            // Fallback compatibility path: iterate all large primes in-kernel.
+            for (uint32_t i = small_limit + tid; i < base_prime_count; i += blockDim.x) {
+                const uint32_t p = base_primes[i];
+                if ((p & 1u) == 0u) {
+                    continue;
+                }
 
-            uint64_t first_multiple = 0u;
-            if (!first_odd_multiple_in_segment(p, seg_lo, seg_hi, &first_multiple)) {
-                continue;
-            }
+                uint64_t first_multiple = 0u;
+                if (!first_odd_multiple_in_segment(p, seg_lo, seg_hi, &first_multiple)) {
+                    continue;
+                }
 
-            const uint64_t bit = (first_multiple - seg_lo - 1u) >> 1;
-            if (bit < valid_odd_count) {
-                const uint32_t word = static_cast<uint32_t>(bit >> 5);
-                const uint32_t mask = 1u << (bit & 31u);
-                atomicOr(&bitmap[word], mask);
+                const uint64_t bit = (first_multiple - seg_lo - 1u) >> 1;
+                if (bit < valid_odd_count) {
+                    const uint32_t word = static_cast<uint32_t>(bit >> 5);
+                    const uint32_t mask = 1u << (bit & 31u);
+                    atomicOr(&bitmap[word], mask);
+                }
             }
         }
         __syncthreads();
+
+        const uint32_t mod4_mask_val = ((seg_lo & 3u) == 0u) ? 0x55555555u : 0xAAAAAAAAu;
 
         if (tid == 0 && seg_lo == 0u) {
             bitmap[0] |= 1u;  // Number 1 is not prime.
@@ -201,7 +213,7 @@ __global__ void segmented_sieve_kernel(
             local_word_indices[i] = word_idx;
 
             const uint32_t valid_mask = valid_mask_for_word(word_idx, valid_odd_count);
-            const uint32_t prime_mask = (~bitmap[word_idx]) & valid_mask;
+            const uint32_t prime_mask = (~bitmap[word_idx]) & valid_mask & mod4_mask_val;
             local_prime_words[i] = prime_mask;
             local_count += static_cast<uint32_t>(__popc(prime_mask));
         }

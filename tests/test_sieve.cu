@@ -160,6 +160,41 @@ struct GPrime {
     }
 };
 
+// Helper: test whether a number is prime (trial division for small values)
+static bool test_is_prime(uint64_t n) {
+    if (n < 2) return false;
+    if (n < 4) return true;
+    if (n % 2 == 0 || n % 3 == 0) return false;
+    for (uint64_t i = 5; i * i <= n; i += 6) {
+        if (n % i == 0 || n % (i + 2) == 0) return false;
+    }
+    return true;
+}
+
+// Helper: generate inert primes (p == 3 mod 4, norm = p^2) on CPU
+static void test_generate_inert_primes(uint64_t norm_lo, uint64_t norm_hi,
+                                       std::vector<GPrime>& out) {
+    uint64_t p_lo = (norm_lo <= 1) ? 3 : (uint64_t)sqrt((double)norm_lo);
+    while (p_lo > 0 && p_lo * p_lo < norm_lo) p_lo++;
+    if (p_lo < 3) p_lo = 3;
+    if (p_lo % 2 == 0) p_lo++;
+    if (p_lo % 4 == 1) p_lo += 2;
+
+    uint64_t p_hi = (uint64_t)sqrt((double)(norm_hi - 1));
+
+    for (uint64_t p = p_lo; p <= p_hi; p += 4) {
+        if (p * p >= norm_hi) break;
+        if (p * p < norm_lo) continue;
+        if (test_is_prime(p)) {
+            GPrime gp;
+            gp.a = (int32_t)p;
+            gp.b = 0;
+            gp.norm = p * p;
+            out.push_back(gp);
+        }
+    }
+}
+
 static std::vector<GPrime> run_full_pipeline(uint64_t norm_lo, uint64_t norm_hi) {
     std::vector<GPrime> result;
 
@@ -246,6 +281,9 @@ static std::vector<GPrime> run_full_pipeline(uint64_t norm_lo, uint64_t norm_hi)
     cudaFree(d_gp_out);
     cudaFree(d_gp_count);
 
+    // Add inert primes (p == 3 mod 4, norm = p^2) from CPU
+    test_generate_inert_primes(norm_lo, norm_hi, result);
+
     std::sort(result.begin(), result.end());
     return result;
 }
@@ -275,18 +313,18 @@ void test_gpu_sieve_vs_cpu() {
     for (const auto& tc : cases) {
         auto gpu_primes = run_sieve_gpu(tc.lo, tc.hi);
 
-        // CPU reference: all primes in [lo, hi)
+        // CPU reference: primes p == 1 mod 4 in [lo, hi)
+        // (Sieve now only outputs primes == 1 mod 4; inert primes handled on CPU)
         auto cpu_all = simple_sieve_cpu(tc.hi);
         std::vector<uint64_t> cpu_primes;
         for (uint64_t p : cpu_all) {
             if (p >= tc.lo && p < tc.hi) {
-                // Sieve only returns odd primes (2 is not in bitmap)
-                if (p > 2) cpu_primes.push_back(p);
+                if (p > 2 && (p & 3u) == 1u) cpu_primes.push_back(p);
             }
         }
         std::sort(cpu_primes.begin(), cpu_primes.end());
 
-        // Remove prime 2 from GPU output (sieve doesn't produce it since it's even)
+        // GPU output already filtered to mod-1 primes
         std::vector<uint64_t> gpu_filtered;
         for (uint64_t p : gpu_primes) {
             if (p > 2) gpu_filtered.push_back(p);
@@ -461,36 +499,36 @@ void test_self_consistency() {
 void test_segment_boundaries() {
     printf("=== Segment boundary test ===\n");
 
-    // Test a range that spans exactly one segment boundary (131072)
-    // Primes near 131072: 131071 is prime, 131101 is prime
-    auto primes = run_sieve_gpu(131060, 131110);
+    // Test a range that spans the segment boundary at SEGMENT_SPAN (262144).
+    // 262153 is prime and == 1 mod 4 (262153 % 4 == 1).
+    auto primes = run_sieve_gpu(262130, 262200);
 
-    // Check that 131071 is in the output
-    bool found_131071 = false;
+    bool found_262153 = false;
     for (uint64_t p : primes) {
-        if (p == 131071) found_131071 = true;
+        if (p == 262153) found_262153 = true;
     }
-    CHECK(found_131071, "Prime 131071 found near segment boundary");
+    CHECK(found_262153, "Prime 262153 (==1 mod 4) found near segment boundary");
 
     // Test that the range across multiple segments gives same result as CPU
+    // (only p == 1 mod 4 primes, matching new sieve behaviour)
     auto gpu_wide = run_sieve_gpu(0, 500000);
     auto cpu_all = simple_sieve_cpu(500000);
-    std::vector<uint64_t> cpu_odd;
+    std::vector<uint64_t> cpu_mod1;
     for (uint64_t p : cpu_all) {
-        if (p > 2) cpu_odd.push_back(p);
+        if (p > 2 && (p & 3u) == 1u) cpu_mod1.push_back(p);
     }
 
-    CHECK(gpu_wide.size() == cpu_odd.size(),
+    CHECK(gpu_wide.size() == cpu_mod1.size(),
           "Multi-segment: GPU=%zu vs CPU=%zu (range 0-500000)",
-          gpu_wide.size(), cpu_odd.size());
+          gpu_wide.size(), cpu_mod1.size());
 
-    if (gpu_wide.size() == cpu_odd.size()) {
+    if (gpu_wide.size() == cpu_mod1.size()) {
         bool all_match = true;
         for (size_t i = 0; i < gpu_wide.size(); i++) {
-            if (gpu_wide[i] != cpu_odd[i]) {
+            if (gpu_wide[i] != cpu_mod1[i]) {
                 all_match = false;
                 printf("  First mismatch at [%zu]: GPU=%lu, CPU=%lu\n",
-                       i, (unsigned long)gpu_wide[i], (unsigned long)cpu_odd[i]);
+                       i, (unsigned long)gpu_wide[i], (unsigned long)cpu_mod1[i]);
                 break;
             }
         }
