@@ -1,0 +1,11 @@
+build/
+*.o
+*.d
+*.nsys-rep
+*.ncu-rep
+reference/
+output/
+profiles/
+thermal/
+*.bin
+.cache/
