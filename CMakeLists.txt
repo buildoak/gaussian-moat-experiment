@@ -23,6 +23,7 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math -lineinfo --ptxas-
 add_executable(gm_cuda_primes
     src/main.cu
     src/kernel.cu
+    src/sieve_kernel.cu
 )
 target_include_directories(gm_cuda_primes PRIVATE src/)
 
@@ -46,3 +47,10 @@ add_executable(gm_test_integration
     tests/test_integration.cu
 )
 target_include_directories(gm_test_integration PRIVATE src/)
+
+# --- Sieve test target ---
+add_executable(gm_test_sieve
+    tests/test_sieve.cu
+    src/sieve_kernel.cu
+)
+target_include_directories(gm_test_sieve PRIVATE src/)
