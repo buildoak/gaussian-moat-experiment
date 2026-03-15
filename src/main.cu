@@ -251,7 +251,7 @@ static void run_sieve_mode(const Config& cfg,
         uint32_t num_segs = (uint32_t)((total_span + SEGMENT_SPAN - 1) / SEGMENT_SPAN);
 
         uint64_t* d_bucket_hits = nullptr;
-        uint32_t* d_bucket_offsets = nullptr;
+        uint64_t* d_bucket_offsets = nullptr;
 
         // Build large-prime buckets for this batch: O(large-primes + hits), consumed as O(hits/segment).
         if (small_count < base_primes.size() && num_segs > 0u) {
@@ -288,87 +288,78 @@ static void run_sieve_mode(const Config& cfg,
                 }
             }
 
-            std::vector<uint32_t> host_bucket_offsets(num_segs + 1u, 0u);
-            bool offsets_ok = true;
+            std::vector<uint64_t> host_bucket_offsets(num_segs + 1u, 0u);
             uint64_t total_hits64 = 0u;
             for (uint32_t s = 0; s < num_segs; ++s) {
                 total_hits64 += static_cast<uint64_t>(seg_hit_counts[s]);
-                if (total_hits64 > 0xFFFFFFFFULL) {
-                    offsets_ok = false;
-                    break;
-                }
-                host_bucket_offsets[s + 1u] = static_cast<uint32_t>(total_hits64);
+                host_bucket_offsets[s + 1u] = total_hits64;
             }
 
-            if (offsets_ok) {
-                const uint32_t total_hits = static_cast<uint32_t>(total_hits64);
-                std::vector<uint64_t> host_bucket_hits(total_hits > 0u ? total_hits : 1u, 0u);
-                std::vector<uint32_t> fill_pos(num_segs, 0u);
+            const uint64_t total_hits = total_hits64;
+            std::vector<uint64_t> host_bucket_hits(total_hits > 0u ? total_hits : 1u, 0u);
+            std::vector<uint32_t> fill_pos(num_segs, 0u);
 
-                // Pass 2: fill bit positions.
-                for (uint32_t i = small_count; i < base_primes.size(); ++i) {
-                    const uint32_t p = base_primes[i];
-                    if ((p & 1u) == 0u) {
-                        continue;
-                    }
-
-                    const uint64_t p64 = static_cast<uint64_t>(p);
-                    uint64_t first = 0u;
-                    const uint64_t p2 = p64 * p64;
-                    if (p2 >= start_odd) {
-                        first = p2;
-                    } else {
-                        const uint64_t rem = start_odd % p64;
-                        first = (rem == 0u) ? start_odd : (start_odd + (p64 - rem));
-                    }
-                    if ((first & 1u) == 0u) {
-                        first += p64;
-                    }
-
-                    const uint64_t step = p64 << 1u;
-                    for (; first < current_hi; first += step) {
-                        const uint64_t s64 = (first - aligned_lo) / SEGMENT_SPAN;
-                        if (s64 >= num_segs) {
-                            break;
-                        }
-                        const uint32_t s = static_cast<uint32_t>(s64);
-                        const uint64_t seg_lo = aligned_lo + static_cast<uint64_t>(s) * SEGMENT_SPAN;
-                        const uint32_t bit = static_cast<uint32_t>((first - seg_lo - 1u) >> 1u);
-                        const uint32_t slot = host_bucket_offsets[s] + fill_pos[s];
-                        host_bucket_hits[slot] = static_cast<uint64_t>(bit);
-                        fill_pos[s]++;
-                    }
+            // Pass 2: fill bit positions.
+            for (uint32_t i = small_count; i < base_primes.size(); ++i) {
+                const uint32_t p = base_primes[i];
+                if ((p & 1u) == 0u) {
+                    continue;
                 }
 
-                uint64_t* d_bucket_hits_mut = nullptr;
-                uint32_t* d_bucket_offsets_mut = nullptr;
-                const size_t bucket_hits_bytes = static_cast<size_t>(host_bucket_hits.size()) * sizeof(uint64_t);
-                const size_t bucket_offsets_bytes = static_cast<size_t>(host_bucket_offsets.size()) * sizeof(uint32_t);
-
-                cudaError_t bucket_err = cudaMalloc(&d_bucket_offsets_mut, bucket_offsets_bytes);
-                if (bucket_err == cudaSuccess) {
-                    bucket_err = cudaMemcpy(d_bucket_offsets_mut, host_bucket_offsets.data(),
-                                            bucket_offsets_bytes, cudaMemcpyHostToDevice);
-                }
-                if (bucket_err == cudaSuccess) {
-                    bucket_err = cudaMalloc(&d_bucket_hits_mut, bucket_hits_bytes);
-                }
-                if (bucket_err == cudaSuccess) {
-                    bucket_err = cudaMemcpy(d_bucket_hits_mut, host_bucket_hits.data(),
-                                            bucket_hits_bytes, cudaMemcpyHostToDevice);
-                }
-
-                if (bucket_err == cudaSuccess) {
-                    d_bucket_hits = d_bucket_hits_mut;
-                    d_bucket_offsets = d_bucket_offsets_mut;
+                const uint64_t p64 = static_cast<uint64_t>(p);
+                uint64_t first = 0u;
+                const uint64_t p2 = p64 * p64;
+                if (p2 >= start_odd) {
+                    first = p2;
                 } else {
-                    if (d_bucket_offsets_mut != nullptr) cudaFree(d_bucket_offsets_mut);
-                    if (d_bucket_hits_mut != nullptr) cudaFree(d_bucket_hits_mut);
-                    fprintf(stderr, "WARNING: bucket upload failed, using fallback Phase 2C (%s)\n",
-                            cudaGetErrorString(bucket_err));
+                    const uint64_t rem = start_odd % p64;
+                    first = (rem == 0u) ? start_odd : (start_odd + (p64 - rem));
                 }
+                if ((first & 1u) == 0u) {
+                    first += p64;
+                }
+
+                const uint64_t step = p64 << 1u;
+                for (; first < current_hi; first += step) {
+                    const uint64_t s64 = (first - aligned_lo) / SEGMENT_SPAN;
+                    if (s64 >= num_segs) {
+                        break;
+                    }
+                    const uint32_t s = static_cast<uint32_t>(s64);
+                    const uint64_t seg_lo = aligned_lo + static_cast<uint64_t>(s) * SEGMENT_SPAN;
+                    const uint32_t bit = static_cast<uint32_t>((first - seg_lo - 1u) >> 1u);
+                    const uint64_t slot = host_bucket_offsets[s] + fill_pos[s];
+                    host_bucket_hits[slot] = static_cast<uint64_t>(bit);
+                    fill_pos[s]++;
+                }
+            }
+
+            uint64_t* d_bucket_hits_mut = nullptr;
+            uint64_t* d_bucket_offsets_mut = nullptr;
+            const size_t bucket_hits_bytes = static_cast<size_t>(host_bucket_hits.size()) * sizeof(uint64_t);
+            const size_t bucket_offsets_bytes = static_cast<size_t>(host_bucket_offsets.size()) * sizeof(uint64_t);
+
+            cudaError_t bucket_err = cudaMalloc(&d_bucket_offsets_mut, bucket_offsets_bytes);
+            if (bucket_err == cudaSuccess) {
+                bucket_err = cudaMemcpy(d_bucket_offsets_mut, host_bucket_offsets.data(),
+                                        bucket_offsets_bytes, cudaMemcpyHostToDevice);
+            }
+            if (bucket_err == cudaSuccess) {
+                bucket_err = cudaMalloc(&d_bucket_hits_mut, bucket_hits_bytes);
+            }
+            if (bucket_err == cudaSuccess) {
+                bucket_err = cudaMemcpy(d_bucket_hits_mut, host_bucket_hits.data(),
+                                        bucket_hits_bytes, cudaMemcpyHostToDevice);
+            }
+
+            if (bucket_err == cudaSuccess) {
+                d_bucket_hits = d_bucket_hits_mut;
+                d_bucket_offsets = d_bucket_offsets_mut;
             } else {
-                fprintf(stderr, "WARNING: bucket offsets overflow, using fallback Phase 2C\n");
+                if (d_bucket_offsets_mut != nullptr) cudaFree(d_bucket_offsets_mut);
+                if (d_bucket_hits_mut != nullptr) cudaFree(d_bucket_hits_mut);
+                fprintf(stderr, "WARNING: bucket upload failed, using fallback Phase 2C (%s)\n",
+                        cudaGetErrorString(bucket_err));
             }
         }
 

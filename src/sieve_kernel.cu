@@ -66,7 +66,7 @@ __global__ void segmented_sieve_kernel(
     uint32_t tiny_prime_count,
     uint32_t small_prime_count,
     const uint64_t* __restrict__ bucket_hits,
-    const uint32_t* __restrict__ bucket_offsets,
+    const uint64_t* __restrict__ bucket_offsets,
     uint64_t* __restrict__ output_primes,
     uint32_t max_output,
     uint32_t* output_count
@@ -163,9 +163,9 @@ __global__ void segmented_sieve_kernel(
 
         // Phase 2C: large primes p > SEGMENT_SPAN via per-segment buckets when provided.
         if (bucket_hits != nullptr && bucket_offsets != nullptr) {
-            const uint32_t bucket_start = bucket_offsets[seg_idx];
-            const uint32_t bucket_end = bucket_offsets[seg_idx + 1u];
-            for (uint32_t i = bucket_start + tid; i < bucket_end; i += blockDim.x) {
+            const uint64_t bucket_start = bucket_offsets[seg_idx];
+            const uint64_t bucket_end = bucket_offsets[seg_idx + 1u];
+            for (uint64_t i = bucket_start + tid; i < bucket_end; i += blockDim.x) {
                 const uint32_t bit = static_cast<uint32_t>(bucket_hits[i]);
                 if (bit < valid_odd_count) {
                     const uint32_t word = bit >> 5;
