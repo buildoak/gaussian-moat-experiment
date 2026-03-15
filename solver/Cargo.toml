@@ -1,0 +1,24 @@
+[package]
+name = "gaussian-moat-solver"
+version = "0.1.0"
+edition = "2021"
+description = "Experimental Rust solver for reproducing and extending Gaussian moat computations."
+publish = false
+
+[dependencies]
+num_cpus = "1.17"
+rayon = "1.10"
+fxhash = "0.2"
+smallvec = "1.13"
+clap = { version = "4", features = ["derive"] }
+libc = "0.2"
+memmap2 = "0.9"
+
+[[bin]]
+name = "dump-primes"
+path = "src/bin/dump_primes.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
