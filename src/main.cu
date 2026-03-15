@@ -26,6 +26,7 @@
 #include <thrust/execution_policy.h>
 
 #include "types.h"
+#include "device_config.cuh"
 #include "modular_arith.cuh"
 #include "miller_rabin.cuh"
 #include "cornacchia.cuh"
@@ -127,6 +128,7 @@ static int read_gpu_temp() {
 }
 
 static void thermal_check() {
+#if THERMAL_CHECK_ENABLED
     int temp = read_gpu_temp();
     if (temp > 78) {
         fprintf(stderr, "[THERMAL] GPU at %d°C — pausing 30s to cool\n", temp);
@@ -134,6 +136,7 @@ static void thermal_check() {
         struct timespec ts = {30, 0};
         nanosleep(&ts, nullptr);
     }
+#endif
 }
 
 // ---------------------------------------------------------------------------
@@ -201,7 +204,7 @@ static void run_sieve_mode(const Config& cfg,
     // Size based on per-batch capacity.
     // Each batch covers segments_per_batch * SEGMENT_SPAN norms.
     // PNT: primes per batch ~ batch_span / ln(batch_span), scaled for p == 1 (mod 4) output.
-    uint32_t segments_per_batch = 2000;
+    uint32_t segments_per_batch = SEGMENTS_PER_BATCH_BASE;
     uint64_t batch_norm_span = (uint64_t)segments_per_batch * SEGMENT_SPAN;
     // Cap batch span to actual range for buffer estimation
     uint64_t effective_span = (cfg.norm_hi - cfg.norm_lo < batch_norm_span)
@@ -368,7 +371,7 @@ static void run_sieve_mode(const Config& cfg,
         cudaMemset(d_sieve_count, 0, sizeof(uint32_t));
 
         // Launch sieve kernel
-        int grid = (num_segs < 1024) ? (int)num_segs : 1024;
+        int grid = (num_segs < GRID_CAP) ? (int)num_segs : GRID_CAP;
         if (grid < 1) grid = 1;
 
         segmented_sieve_kernel<<<grid, THREADS_PER_BLK>>>(
@@ -583,10 +586,14 @@ int main(int argc, char** argv) {
         run_mr_mode(cfg, all_primes);
     }
 
-    // --- Sort by (norm, a, b) on GPU via managed memory (Jetson unified mem) ---
+    // --- Sort by (norm, a, b) on GPU ---
     {
-        GaussianPrime* managed = nullptr;
         size_t n = all_primes.size();
+        bool sort_ok = false;
+
+#if USE_MANAGED_MEMORY
+        // Jetson path: unified memory, no explicit copies needed
+        GaussianPrime* managed = nullptr;
         cudaError_t merr = cudaMallocManaged(&managed, n * sizeof(GaussianPrime));
         if (merr == cudaSuccess && managed != nullptr) {
             memcpy(managed, all_primes.data(), n * sizeof(GaussianPrime));
@@ -595,8 +602,26 @@ int main(int argc, char** argv) {
             cudaDeviceSynchronize();
             memcpy(all_primes.data(), managed, n * sizeof(GaussianPrime));
             cudaFree(managed);
-        } else {
-            // Fallback: CPU sort if managed alloc fails
+            sort_ok = true;
+        }
+#else
+        // Discrete GPU path (A100 etc): explicit cudaMalloc + cudaMemcpy
+        GaussianPrime* d_sort = nullptr;
+        cudaError_t merr = cudaMalloc(&d_sort, n * sizeof(GaussianPrime));
+        if (merr == cudaSuccess && d_sort != nullptr) {
+            cudaMemcpy(d_sort, all_primes.data(), n * sizeof(GaussianPrime),
+                       cudaMemcpyHostToDevice);
+            thrust::sort(thrust::device, d_sort, d_sort + n, GPrimeComparator());
+            cudaDeviceSynchronize();
+            cudaMemcpy(all_primes.data(), d_sort, n * sizeof(GaussianPrime),
+                       cudaMemcpyDeviceToHost);
+            cudaFree(d_sort);
+            sort_ok = true;
+        }
+#endif
+
+        if (!sort_ok) {
+            // Fallback: CPU sort if GPU alloc fails
             std::sort(all_primes.begin(), all_primes.end(),
                       [](const GaussianPrime& x, const GaussianPrime& y) {
                           if (x.norm != y.norm) return x.norm < y.norm;

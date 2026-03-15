@@ -295,38 +295,64 @@ __global__ void cornacchia_dispatch_kernel(
     uint64_t norm_hi
 ) {
     const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= prime_count || primes == nullptr || output == nullptr || output_count == nullptr) {
-        return;
-    }
 
-    const uint64_t p = primes[idx];
-    if (p == 2u) {
-        return;
-    }
+    // --- Per-thread Cornacchia computation ---
+    bool has_result = false;
+    int32_t res_a = 0;
+    int32_t res_b = 0;
+    uint64_t res_norm = 0;
 
-    if ((p & 3u) == 1u) {
-        int32_t a = 0;
-        int32_t b = 0;
-        if (cornacchia(p, &a, &b)) {
-            const uint32_t slot = atomicAdd(output_count, 1u);
-            if (slot < max_output) {
-                output[slot].a = a;
-                output[slot].b = b;
-                output[slot].norm = p;
+    if (idx < prime_count && primes != nullptr && output != nullptr && output_count != nullptr) {
+        const uint64_t p = primes[idx];
+
+        if (p != 2u) {
+            if ((p & 3u) == 1u) {
+                int32_t a = 0;
+                int32_t b = 0;
+                if (cornacchia(p, &a, &b)) {
+                    has_result = true;
+                    res_a = a;
+                    res_b = b;
+                    res_norm = p;
+                }
+            } else if ((p & 3u) == 3u) {
+                const __uint128_t inert_norm = static_cast<__uint128_t>(p) * static_cast<__uint128_t>(p);
+                if (inert_norm >= norm_lo && inert_norm < norm_hi &&
+                    p <= static_cast<uint64_t>(INT32_MAX)) {
+                    has_result = true;
+                    res_a = static_cast<int32_t>(p);
+                    res_b = 0;
+                    res_norm = static_cast<uint64_t>(inert_norm);
+                }
             }
         }
-        return;
     }
 
-    if ((p & 3u) == 3u) {
-        const __uint128_t inert_norm = static_cast<__uint128_t>(p) * static_cast<__uint128_t>(p);
-        if (inert_norm >= norm_lo && inert_norm < norm_hi && p <= static_cast<uint64_t>(INT32_MAX)) {
-            const uint32_t slot = atomicAdd(output_count, 1u);
-            if (slot < max_output) {
-                output[slot].a = static_cast<int32_t>(p);
-                output[slot].b = 0;
-                output[slot].norm = static_cast<uint64_t>(inert_norm);
-            }
+    // --- Warp-level output compaction ---
+    // Same pattern as MR kernel in kernel.cu: __ballot_sync + __popc +
+    // warp prefix sum. One atomic per warp instead of per thread.
+    const unsigned ballot = __ballot_sync(0xFFFFFFFF, has_result);
+    const int warp_count = __popc(ballot);
+
+    if (warp_count == 0) return;
+
+    // Lane 0 reserves slots for the whole warp
+    uint32_t warp_base = 0;
+    const int lane = threadIdx.x & 31;
+    if (lane == 0) {
+        warp_base = atomicAdd(output_count, static_cast<uint32_t>(warp_count));
+    }
+    warp_base = __shfl_sync(0xFFFFFFFF, warp_base, 0);
+
+    // Each thread with a result writes to its offset within the warp allocation
+    if (has_result) {
+        const unsigned lower_mask = (1u << lane) - 1u;
+        const int offset = __popc(ballot & lower_mask);
+        const uint32_t slot = warp_base + static_cast<uint32_t>(offset);
+        if (slot < max_output) {
+            output[slot].a = res_a;
+            output[slot].b = res_b;
+            output[slot].norm = res_norm;
         }
     }
 }

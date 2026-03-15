@@ -5,10 +5,12 @@
 #include <cstdint>
 #include <cmath>
 
-// Sieve constants
-#define SEGMENT_SPAN    262144u         // Norms per segment (2^18)
-#define BITMAP_WORDS    4096u           // 131072 bits / 32 bits per word (odd-only)
-#define BITMAP_BYTES    16384u          // 4096 * 4
+#include "device_config.cuh"
+
+// Sieve constants — derived from device_config.cuh
+#define SEGMENT_SPAN    DEVICE_SEGMENT_SPAN
+#define BITMAP_WORDS    DEVICE_BITMAP_WORDS
+#define BITMAP_BYTES    DEVICE_BITMAP_BYTES
 #define THREADS_PER_BLK 256u
 #define TINY_THRESHOLD  256u            // Primes below this use cooperative marking
 

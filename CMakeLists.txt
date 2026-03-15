@@ -6,18 +6,30 @@ set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Jetson Orin Nano — Ampere SM 8.7
-set(CMAKE_CUDA_ARCHITECTURES 87)
+# --- Device selection ---
+# Usage:
+#   cmake -DTARGET_DEVICE=jetson ..   (default — Jetson Orin Nano, SM 8.7)
+#   cmake -DTARGET_DEVICE=a100 ..     (A100, SM 8.0)
+set(TARGET_DEVICE "jetson" CACHE STRING "Target device: jetson or a100")
+
+if(TARGET_DEVICE STREQUAL "a100")
+    message(STATUS "Target device: A100 (SM 8.0, 108 SMs)")
+    set(CMAKE_CUDA_ARCHITECTURES 80)
+    set(GM_MAXRREGCOUNT 64)
+    add_compile_definitions(TARGET_A100)
+else()
+    message(STATUS "Target device: Jetson Orin Nano (SM 8.7, 8 SMs)")
+    set(CMAKE_CUDA_ARCHITECTURES 87)
+    set(GM_MAXRREGCOUNT 48)
+endif()
 
 # Compiler flags
 # -O3: maximum optimization
 # --use_fast_math: faster transcendentals (used in isqrt seed)
 # -lineinfo: debug info without perf cost
 # --ptxas-options=-v: register/smem usage reporting
-# --maxrregcount=40: limit registers to improve occupancy on sm_87 (1024 threads/SM)
-# maxrregcount=48: 65536/48 = 1365 threads/SM, still > 1024 max, so full occupancy.
-# Gives compiler more room for ILP in MR inner loop vs 40-reg constraint.
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math -lineinfo --ptxas-options=-v --maxrregcount=48")
+# --maxrregcount: tuned per device (48 Jetson, 64 A100)
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math -lineinfo --ptxas-options=-v --maxrregcount=${GM_MAXRREGCOUNT}")
 
 # --- Main target ---
 add_executable(gm_cuda_primes

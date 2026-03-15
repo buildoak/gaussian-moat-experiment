@@ -137,8 +137,17 @@ uint64_t mulmod64_v3(uint64_t a, uint64_t b, uint64_t m) {
 
 // ============================================================================
 // Default mulmod64 — selects Variant 1 (__int128)
-//   This is the fastest correct path for the general case and matches the
-//   Rust source directly.
+//
+//   __int128 is the fastest correct path for all architectures. On CUDA
+//   device code, nvcc compiles __int128 multiplication to a tight sequence
+//   of MUL/MADC instructions — no 128-iteration loop. This is faster than
+//   Variant 2's __umul64hi + reduce128 (which uses a 128-iteration
+//   bit-by-bit schoolbook division loop).
+//
+//   Variant 2 (__umul64hi + reduce128) exists for reference/testing but
+//   should NOT be used as the default — the reduce128 loop is the bottleneck.
+//
+//   Matches the Rust source directly: ((a as u128 * b as u128) % m as u128) as u64
 // ============================================================================
 __host__ __device__ __forceinline__
 uint64_t mulmod64(uint64_t a, uint64_t b, uint64_t m) {

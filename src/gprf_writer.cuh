@@ -19,6 +19,12 @@ struct GPRFHeader {
 
 static_assert(sizeof(GPRFHeader) == 64, "GPRFHeader must be 64 bytes");
 
+// Each record is: int32_t a (4) + int32_t b (4) + uint64_t norm (8) = 16 bytes
+static constexpr size_t GPRF_RECORD_SIZE = sizeof(int32_t) + sizeof(int32_t) + sizeof(uint64_t);
+
+// Default write buffer: 64KB (holds 4096 records exactly)
+static constexpr size_t GPRF_BUFFER_SIZE = 65536u;
+
 class PrimeFileWriter {
     FILE* fp_;
     uint64_t written_;
@@ -26,9 +32,21 @@ class PrimeFileWriter {
     uint64_t norm_max_;
     uint64_t sieve_bound_;
 
+    // Write buffer — accumulate records, flush in bulk
+    uint8_t buf_[GPRF_BUFFER_SIZE];
+    size_t buf_pos_;
+
+    void flush_buffer() {
+        if (buf_pos_ > 0 && fp_) {
+            fwrite(buf_, 1, buf_pos_, fp_);
+            buf_pos_ = 0;
+        }
+    }
+
 public:
     PrimeFileWriter(const char* path, uint64_t sieve_bound)
-        : fp_(nullptr), written_(0), norm_min_(UINT64_MAX), norm_max_(0), sieve_bound_(sieve_bound)
+        : fp_(nullptr), written_(0), norm_min_(UINT64_MAX), norm_max_(0),
+          sieve_bound_(sieve_bound), buf_pos_(0)
     {
         fp_ = fopen(path, "wb");
         if (!fp_) {
@@ -44,9 +62,19 @@ public:
     }
 
     void write(int32_t a, int32_t b, uint64_t norm) {
-        fwrite(&a, sizeof(a), 1, fp_);
-        fwrite(&b, sizeof(b), 1, fp_);
-        fwrite(&norm, sizeof(norm), 1, fp_);
+        // Flush if adding this record would exceed buffer
+        if (buf_pos_ + GPRF_RECORD_SIZE > GPRF_BUFFER_SIZE) {
+            flush_buffer();
+        }
+
+        // Append record to buffer (memcpy preserves byte layout)
+        memcpy(buf_ + buf_pos_, &a, sizeof(a));
+        buf_pos_ += sizeof(a);
+        memcpy(buf_ + buf_pos_, &b, sizeof(b));
+        buf_pos_ += sizeof(b);
+        memcpy(buf_ + buf_pos_, &norm, sizeof(norm));
+        buf_pos_ += sizeof(norm);
+
         written_++;
         if (norm < norm_min_) norm_min_ = norm;
         if (norm > norm_max_) norm_max_ = norm;
@@ -54,6 +82,11 @@ public:
 
     void finalize() {
         if (!fp_) return;
+
+        // Flush remaining buffered records
+        flush_buffer();
+
+        // Rewrite header with final counts
         fseek(fp_, 0, SEEK_SET);
         GPRFHeader hdr;
         memset(&hdr, 0, sizeof(hdr));
