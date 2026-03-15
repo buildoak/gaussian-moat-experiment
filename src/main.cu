@@ -31,6 +31,7 @@
 #include "cornacchia.cuh"
 #include "sieve_base.cuh"
 #include "sieve_kernel.cuh"
+#include "gprf_writer.cuh"
 
 struct GPrimeComparator {
     __host__ __device__
@@ -617,21 +618,30 @@ int main(int argc, char** argv) {
     double elapsed = std::chrono::duration<double>(t_end - t_start).count();
 
     // --- Write output ---
-    FILE* fout = nullptr;
-    if (cfg.output == "/dev/null") {
-        fout = fopen("/dev/null", "w");
+    bool use_gprf = (cfg.output.size() >= 5 &&
+                     cfg.output.compare(cfg.output.size() - 5, 5, ".gprf") == 0);
+    if (use_gprf) {
+        PrimeFileWriter writer(cfg.output.c_str(), cfg.norm_hi);
+        for (const auto& gp : all_primes) {
+            writer.write(gp.a, gp.b, gp.norm);
+        }
+        writer.finalize();
     } else {
-        fout = fopen(cfg.output.c_str(), "w");
+        FILE* fout = nullptr;
+        if (cfg.output == "/dev/null") {
+            fout = fopen("/dev/null", "w");
+        } else {
+            fout = fopen(cfg.output.c_str(), "w");
+        }
+        if (!fout) {
+            fprintf(stderr, "FATAL: Cannot open output file: %s\n", cfg.output.c_str());
+            return 1;
+        }
+        for (const auto& gp : all_primes) {
+            fprintf(fout, "%d %d %lu\n", gp.a, gp.b, (unsigned long)gp.norm);
+        }
+        fclose(fout);
     }
-    if (!fout) {
-        fprintf(stderr, "FATAL: Cannot open output file: %s\n", cfg.output.c_str());
-        return 1;
-    }
-
-    for (const auto& gp : all_primes) {
-        fprintf(fout, "%d %d %lu\n", gp.a, gp.b, (unsigned long)gp.norm);
-    }
-    fclose(fout);
 
     // --- Stats ---
     uint64_t total_range = cfg.norm_hi - cfg.norm_lo;
