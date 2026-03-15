@@ -212,7 +212,8 @@ static void run_sieve_mode(const Config& cfg,
     // Use actual norm position for density estimate, not just batch span
     double ln_norm = log((double)(cfg.norm_lo > 10 ? cfg.norm_lo + effective_span : effective_span));
     uint64_t est_primes = (uint64_t)((double)effective_span / ln_norm * 0.8) + 65536;
-    if (est_primes > 40000000ULL) est_primes = 40000000ULL;
+    // A100 has 40GB VRAM; allow up to 120M entries (~2.9GB total for sieve+GP buffers)
+    if (est_primes > 120000000ULL) est_primes = 120000000ULL;
     uint32_t max_sieve_output = (uint32_t)est_primes;
 
     uint64_t* d_sieve_out = nullptr;

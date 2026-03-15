@@ -55,14 +55,16 @@ pub fn run_angular(config: &AngularConfig) -> AngularResult {
             reader.norm_min,
             reader.norm_max
         );
+        // When a prime file is provided, trust the file's norm range.
+        // Do NOT apply the start_norm filter — the file already contains
+        // exactly the primes for this band. Applying start_norm would
+        // reject all primes when the file's norm range matches the
+        // computed start_norm (Bug: start_distance filter rejects all
+        // GPRF primes).
         if norm_bound > 0 && norm_bound < u64::MAX {
-            reader.iter_norm_range(start_norm, norm_bound).collect()
+            reader.iter_norm_range(reader.norm_min, norm_bound).collect()
         } else {
-            if start_norm > 2 {
-                reader.iter_norm_range(start_norm, u64::MAX).collect()
-            } else {
-                reader.iter().collect()
-            }
+            reader.iter().collect()
         }
     } else {
         let mut stream = if config.upper_bound {
@@ -338,11 +340,15 @@ fn effective_wedge_count(requested: u32) -> u32 {
         return requested;
     }
     let cores = num_cpus::get();
-    // 4 wedges per core: good parallelism without memory explosion.
-    // No artificial floor — on 6-core Jetson, 24 wedges is correct.
-    // On 108-core A100, gives 432 wedges. Capped at 4096.
-    let base = 4 * cores;
-    let ceiling = 4096usize;
+    // 1 wedge per core: good parallelism without memory explosion.
+    // Each wedge allocates its own BandProcessor with grid hash map,
+    // node vectors, and union-find — overhead is ~O(primes/wedges) per
+    // wedge but with significant constant factors. At >32 wedges the
+    // per-wedge allocation overhead dominates: 124 wedges on A100 used
+    // 82.6 GB RSS for 13.7M primes (~6KB/prime vs expected ~16B).
+    // Cap at 32 to keep memory sane while still saturating cores.
+    let base = cores;
+    let ceiling = 32usize;
     base.max(4).min(ceiling) as u32
 }
 

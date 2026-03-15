@@ -148,8 +148,7 @@ cd "$REMOTE_DIR"
 mkdir -p build-a100
 cd build-a100
 cmake .. \
-    -DCMAKE_CUDA_ARCHITECTURES=80 \
-    -DCMAKE_CUDA_FLAGS="-O3 --use_fast_math -lineinfo --ptxas-options=-v" \
+    -DTARGET_DEVICE=a100 \
     2>&1 | tail -5
 make -j$(nproc) gm_cuda_primes 2>&1 | tail -10
 
