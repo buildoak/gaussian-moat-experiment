@@ -9,3 +9,10 @@ profiles/
 thermal/
 *.bin
 .cache/
+*.gprf
+runs/
+tmp/
+*.log
+.vscode/
+.idea/
+solver/target/
