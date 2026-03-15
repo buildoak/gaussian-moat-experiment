@@ -201,14 +201,15 @@ static void run_sieve_mode(const Config& cfg,
     // Size based on per-batch capacity.
     // Each batch covers segments_per_batch * SEGMENT_SPAN norms.
     // PNT: primes per batch ~ batch_span / ln(batch_span), scaled for p == 1 (mod 4) output.
-    uint32_t segments_per_batch = 10000;
+    uint32_t segments_per_batch = 2000;
     uint64_t batch_norm_span = (uint64_t)segments_per_batch * SEGMENT_SPAN;
     // Cap batch span to actual range for buffer estimation
     uint64_t effective_span = (cfg.norm_hi - cfg.norm_lo < batch_norm_span)
                             ? (cfg.norm_hi - cfg.norm_lo) : batch_norm_span;
-    double ln_batch = log((double)(effective_span > 10 ? effective_span : 10));
-    uint64_t est_primes = (uint64_t)((double)effective_span / ln_batch * 0.8) + 65536;
-    if (est_primes > 120000000ULL) est_primes = 120000000ULL;
+    // Use actual norm position for density estimate, not just batch span
+    double ln_norm = log((double)(cfg.norm_lo > 10 ? cfg.norm_lo + effective_span : effective_span));
+    uint64_t est_primes = (uint64_t)((double)effective_span / ln_norm * 0.8) + 65536;
+    if (est_primes > 40000000ULL) est_primes = 40000000ULL;
     uint32_t max_sieve_output = (uint32_t)est_primes;
 
     uint64_t* d_sieve_out = nullptr;
