@@ -353,11 +353,11 @@ impl BandProcessor {
 
         let (cx, cy) = self.cell_key(a, b);
 
-        // Collect candidates that pass distance check into a stack buffer.
-        // With SmallVec<[u32; 8]> cells, 9 cells * 8 entries = 72 max candidates.
-        // We filter by generation and distance inline, so the union buffer is small.
-        let mut to_union: [u32; 72] = [0u32; 72];
-        let mut union_count = 0usize;
+        // Two-phase: collect then union (required by borrow checker —
+        // can't mutate self via union_components while iterating self.grid).
+        // Filter by generation + distance inline during collection.
+        // No hard cap — Vec grows if needed. No silent neighbor drops.
+        let mut to_union: SmallVec<[u32; 32]> = SmallVec::new();
 
         for dy in -1i32..=1 {
             for dx in -1i32..=1 {
@@ -375,18 +375,15 @@ impl BandProcessor {
                         let da = (a - self.node_a[idx]) as i64;
                         let db = (b - self.node_b[idx]) as i64;
                         let dist_sq = (da * da + db * db) as u64;
-                        if dist_sq <= self.k_squared
-                            && union_count < to_union.len()
-                        {
-                            to_union[union_count] = candidate;
-                            union_count += 1;
+                        if dist_sq <= self.k_squared {
+                            to_union.push(candidate);
                         }
                     }
                 }
             }
         }
 
-        for &candidate in &to_union[..union_count] {
+        for &candidate in &to_union {
             self.union_components(node_id, candidate);
         }
     }

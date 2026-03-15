@@ -338,10 +338,12 @@ fn effective_wedge_count(requested: u32) -> u32 {
         return requested;
     }
     let cores = num_cpus::get();
+    // 4 wedges per core: good parallelism without memory explosion.
+    // No artificial floor — on 6-core Jetson, 24 wedges is correct.
+    // On 108-core A100, gives 432 wedges. Capped at 4096.
     let base = 4 * cores;
-    let floor = 130usize;
     let ceiling = 4096usize;
-    base.max(floor).min(ceiling) as u32
+    base.max(4).min(ceiling) as u32
 }
 
 fn estimate_uf_capacity(primes_processed: u64, num_wedges: u32) -> usize {
