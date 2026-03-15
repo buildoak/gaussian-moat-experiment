@@ -570,8 +570,12 @@ mod tests {
         primes
     }
 
+    /// Lower-bound mode (no start-distance): discovers the origin at norm=2
+    /// and grows the component from scratch. Expects 14 primes in the origin
+    /// component. The TRUE invariant is the farthest reachable Gaussian prime:
+    /// (11, 4) at distance sqrt(137) ≈ 11.705.
     #[test]
-    fn k2_2_detects_moat_with_expected_farthest_point() {
+    fn k2_2_lower_bound_detects_moat_at_farthest_point() {
         let mut processor = BandProcessor::new(2);
         let primes = gaussian_primes_up_to_norm(200);
 
@@ -584,12 +588,26 @@ mod tests {
         }
 
         let moat = moat.expect("expected moat detection for k^2=2 by norm 200");
-        assert_eq!((moat.farthest_a, moat.farthest_b), (11, 4));
-        assert!((moat.farthest_distance - 137f64.sqrt()).abs() < 1e-9);
+
+        // PRIMARY gate: farthest reachable point is (11, 4) at sqrt(137)
+        assert_eq!(
+            (moat.farthest_a, moat.farthest_b),
+            (11, 4),
+            "farthest point must be (11, 4)"
+        );
+        assert!(
+            (moat.farthest_distance - 137f64.sqrt()).abs() < 1e-9,
+            "farthest distance must be sqrt(137) ≈ 11.705"
+        );
     }
 
+    /// Upper-bound mode (start-distance=8): seeds the origin at (0,0) and
+    /// connects all primes within boundary. Expects 10 primes in the origin
+    /// component (mode-specific: this count depends on --start-distance=8)
+    /// and 17 total primes processed. The farthest point invariant (11, 4)
+    /// holds regardless of mode.
     #[test]
-    fn k2_2_upper_bound_origin_component_size_is_10() {
+    fn k2_2_upper_bound_detects_moat_at_farthest_point() {
         let mut processor = BandProcessor::new_upper_bound(2, 8);
         let primes = gaussian_primes_up_to_norm(200);
 
@@ -605,9 +623,17 @@ mod tests {
         }
 
         let _moat = moat.expect("expected moat detection for k^2=2 upper-bound by norm 200");
+
+        // PRIMARY gate: farthest reachable point is (11, 4) regardless of mode
+        assert_eq!(
+            (processor.farthest_a(), processor.farthest_b()),
+            (11, 4),
+            "farthest point must be (11, 4)"
+        );
+
+        // Mode-specific: origin_component_size=10 only holds for start-distance=8
         let summary = processor.stats();
         assert_eq!(summary.origin_component_size, 10);
-        assert_eq!((processor.farthest_a(), processor.farthest_b()), (11, 4));
         assert_eq!(processor.primes_processed, 17);
     }
 
