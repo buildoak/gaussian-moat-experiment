@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 
 use crate::sieve::GaussianPrime;
 use crate::union_find::UnionFind;
-use fxhash::FxHashMap;
+use fxhash::{FxHashMap, FxHashSet};
 use smallvec::SmallVec;
 
 const NO_SLOT: u32 = u32::MAX;
@@ -103,7 +103,7 @@ pub struct BandProcessor {
     k_squared: u64,
     cell_size: i32,
 
-    grid: FxHashMap<(i32, i32), SmallVec<[u32; 4]>>,
+    grid: FxHashMap<(i32, i32), SmallVec<[u32; 8]>>,
 
     node_a: Vec<i32>,
     node_b: Vec<i32>,
@@ -115,7 +115,7 @@ pub struct BandProcessor {
 
     uf: UnionFind,
     eviction_queue: VecDeque<(u32, u32)>,
-    pinned_slots: Vec<(u32, u32)>,
+    pinned_slots: FxHashSet<(u32, u32)>,
 
     origin_slot: u32,
     origin_gen: u32,
@@ -182,7 +182,7 @@ impl BandProcessor {
             component_far_norm: Vec::new(),
             uf: UnionFind::new(uf_capacity),
             eviction_queue: VecDeque::new(),
-            pinned_slots: Vec::new(),
+            pinned_slots: FxHashSet::default(),
             origin_slot: NO_SLOT,
             origin_gen: NO_GEN,
             farthest_a: 0,
@@ -286,14 +286,7 @@ impl BandProcessor {
     }
 
     pub fn pin_slot(&mut self, slot: u32, gen: u32) {
-        if self
-            .pinned_slots
-            .iter()
-            .any(|&(pinned_slot, pinned_gen)| pinned_slot == slot && pinned_gen == gen)
-        {
-            return;
-        }
-        self.pinned_slots.push((slot, gen));
+        self.pinned_slots.insert((slot, gen));
     }
 
     pub fn find_root(&mut self, slot: u32) -> u32 {
@@ -359,31 +352,42 @@ impl BandProcessor {
         debug_assert_eq!(self.node_gen[node_id as usize], gen);
 
         let (cx, cy) = self.cell_key(a, b);
-        let mut candidates: SmallVec<[u32; 32]> = SmallVec::new();
+
+        // Collect candidates that pass distance check into a stack buffer.
+        // With SmallVec<[u32; 8]> cells, 9 cells * 8 entries = 72 max candidates.
+        // We filter by generation and distance inline, so the union buffer is small.
+        let mut to_union: [u32; 72] = [0u32; 72];
+        let mut union_count = 0usize;
+
         for dy in -1i32..=1 {
             for dx in -1i32..=1 {
                 if let Some(bucket) = self.grid.get(&(cx + dx, cy + dy)) {
-                    candidates.extend(bucket.iter().copied());
+                    for &candidate in bucket.iter() {
+                        if candidate == node_id {
+                            continue;
+                        }
+
+                        let idx = candidate as usize;
+                        if self.node_gen[idx] != self.uf.generation(candidate) {
+                            continue;
+                        }
+
+                        let da = (a - self.node_a[idx]) as i64;
+                        let db = (b - self.node_b[idx]) as i64;
+                        let dist_sq = (da * da + db * db) as u64;
+                        if dist_sq <= self.k_squared
+                            && union_count < to_union.len()
+                        {
+                            to_union[union_count] = candidate;
+                            union_count += 1;
+                        }
+                    }
                 }
             }
         }
 
-        for candidate in candidates {
-            if candidate == node_id {
-                continue;
-            }
-
-            let idx = candidate as usize;
-            if self.node_gen[idx] != self.uf.generation(candidate) {
-                continue;
-            }
-
-            let da = (a - self.node_a[idx]) as i64;
-            let db = (b - self.node_b[idx]) as i64;
-            let dist_sq = (da * da + db * db) as u64;
-            if dist_sq <= self.k_squared {
-                self.union_components(node_id, candidate);
-            }
+        for &candidate in &to_union[..union_count] {
+            self.union_components(node_id, candidate);
         }
     }
 
@@ -477,9 +481,7 @@ impl BandProcessor {
     }
 
     fn is_pinned(&self, slot: u32, gen: u32) -> bool {
-        self.pinned_slots
-            .iter()
-            .any(|&(pinned_slot, pinned_gen)| pinned_slot == slot && pinned_gen == gen)
+        self.pinned_slots.contains(&(slot, gen))
     }
 
     fn remove_from_grid(&mut self, slot: u32) {
