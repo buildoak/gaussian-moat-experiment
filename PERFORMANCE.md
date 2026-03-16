@@ -208,6 +208,95 @@ The solver cannot operate on windowed GPRFs (offset from origin) because the
 connectivity search starts at the origin. sqrt(36)-scale connector benchmarks
 require a contiguous GPRF from [0, 6.4e15) which would be ~100+ GB.
 
+## RTX 4090 vs Jetson Orin Benchmark (2026-03-16)
+
+Commit: `5611393477e1626e8a81aec345bf1691533acbc8`
+
+**Hardware:**
+- **4090:** NVIDIA GeForce RTX 4090 (SM 8.9, 128 SMs, 24 GB VRAM), 28 vCPUs, 64 GB RAM, vast.ai (South Korea)
+- **Jetson:** NVIDIA Orin Nano (SM 8.7, 8 SMs, 8 GB), 6-core ARM A78AE, 8 GB unified memory
+
+### Experiment 1: CUDA Sieve Baseline
+
+| Scale | Metric | 4090 | Jetson | Ratio (4090/Jetson) |
+|-------|--------|------|--------|---------------------|
+| 10^9 (near origin) | Primes found | 25,425,200 | 25,425,200 | 1.0x (exact match) |
+| 10^9 | Wall time | 0.77s | 3.54s | 4.6x faster |
+| 10^9 | Primes/sec | 33.0M | 7.18M | **4.6x** |
+| 10^9 | Candidates/sec | 1,300M | 282M | 4.6x |
+| 10^15 (sqrt(36) scale) | Primes found | 14,473,703 | 14,473,703 | 1.0x (exact match) |
+| 10^15 | Wall time | 2.99s | 8.88s | 3.0x faster |
+| 10^15 | Primes/sec | 4.84M | 1.63M | **3.0x** |
+| 10^15 | Candidates/sec | 334M | 113M | 3.0x |
+
+Notes:
+- 4090 processes entire 1e9 window in a single batch (24 GB VRAM); Jetson needs 2 batches (8 GB)
+- Ratio narrows at 10^15 due to base prime generation overhead (CPU-bound on both)
+
+### Experiment 2: Connector Baseline (k^2=36, auto wedges, 100M GPRF)
+
+GPRF: 2,881,124 primes from [0, 10^8) norm range.
+
+| Metric | 4090 (27 wedges) | Jetson (6 wedges) | Notes |
+|--------|-----------------|-------------------|-------|
+| Primes/sec | 7,176 | 9,815 | Jetson faster due to fewer wedges |
+| Wall time | 401.5s | 293.5s | |
+| RSS | 14.6 GB | 3.5 GB | |
+| Farthest point | (8458, 5335) | (8458, 5335) | Exact match |
+
+**Critical finding:** Auto wedge count (angular=0) picks wedges = CPU cores. 4090 host has 28 cores -> 27 wedges, causing 4x more overlap than Jetson's 6 wedges. More wedges = more per-prime work and higher memory. The "auto" setting is not optimal for either device.
+
+### Experiment 3: Wedge Sweep (k^2=36, 100M GPRF)
+
+| Wedges | 4090 p/s | Jetson p/s | 4090/Jetson | 4090 RSS | Jetson RSS | 4090 Wall | Jetson Wall |
+|--------|----------|-----------|-------------|----------|-----------|-----------|-------------|
+| 4 | **28,279** | 10,692 | **2.6x** | 2.3 GB | 2.3 GB | 102s | 269s |
+| 8 | 21,879 | 5,374 | 4.1x | 4.6 GB | 3.5 GB | 132s | 536s |
+| 16 | 12,882 | 3,323 | 3.9x | 8.7 GB | 4.7 GB | 224s | 867s |
+| 32 | 6,284 | 1,589 | 4.0x | 14.8 GB | 6.4 GB | 459s | 1813s |
+
+Key observations:
+- **Wedge=4 is the sweet spot** on both devices: highest throughput, lowest memory
+- 4090 is consistently 2.6-4.1x faster than Jetson at the same wedge count
+- RSS scales linearly with wedge count (overlap zones dominate memory)
+- Going from 4 to 32 wedges: 4.5x slowdown on 4090, 6.7x on Jetson
+- The 4090 advantage grows with more wedges (CPU parallelism utilizes more cores)
+
+### Experiment 4: Upper-Bound sqrt(36) (start-distance mode, 100M GPRF)
+
+| Start Distance | 4090 p/s | Jetson p/s | 4090/Jetson | Farthest Point |
+|----------------|----------|-----------|-------------|----------------|
+| sd=6 | 7,236 | 9,794 | 0.74x | (8458, 5335) |
+| sd=7 | 7,254 | 9,759 | 0.74x | (8458, 5335) |
+
+Notes:
+- UB mode uses auto wedges (27 on 4090, 6 on Jetson) -- same story as baseline
+- Correct farthest point on both devices at both start distances
+- At matched wedge counts, 4090 would be ~2.6x faster (per wedge sweep data)
+
+### Experiment 5: Correctness Gate (k^2=2)
+
+| Mode | 4090 | Jetson | Expected |
+|------|------|--------|----------|
+| Lower-bound | farthest_point: (11, 4) | farthest_point: (11, 4) | (11, 4) |
+| Upper-bound (sd=8) | farthest_point: (11, 4) | farthest_point: (11, 4) | (11, 4) |
+| Gate | **PASS** | **PASS** | |
+
+Both devices produce identical, correct results.
+
+### Memory Limits
+
+- **Jetson:** Full 1e9 GPRF (25M primes) with auto=6 wedges was OOM-killed during merge phase. 100M GPRF (2.9M primes) works with up to 32 wedges (6.4 GB peak).
+- **4090 host:** Full 1e9 GPRF (25M primes) with auto=27 wedges was OOM-killed at 274M wedge_primes. 100M GPRF works at all tested wedge counts (peak 14.8 GB at 32 wedges).
+
+### Observations and Implications
+
+1. **Sieve: 4090 is 3-4.6x faster than Jetson.** The gap narrows at higher norms because base prime generation is CPU-bound.
+2. **Connector: wedge count dominates throughput, not raw CPU speed.** Fewer wedges = less overlap = faster. Wedge=4 is optimal.
+3. **Memory is the critical constraint.** The per-wedge overlap replication causes RSS to scale roughly linearly with wedge count. At 25M primes with 27 wedges, even 64 GB RAM is insufficient.
+4. **Auto wedge detection is harmful.** Setting wedges=cores worked for small datasets but fails for large ones. Recommendation: default to 4 wedges regardless of core count, let user override.
+5. **Both devices produce bitwise identical results** on all experiments (same prime counts, same farthest points).
+
 ## Key Takeaways
 
 - CUDA sieve is 3-10x faster than Rust internal sieve for prime generation
@@ -216,6 +305,8 @@ require a contiguous GPRF from [0, 6.4e15) which would be ~100+ GB.
 - At high norm scales the sieve degrades gracefully (6.67M -> 1.45M at 10^15)
 - Jetson with GPRF file matches or exceeds cloud baseline throughput
 - A100 sieve is ~6x faster than Jetson at same scale (24M vs 6.67M at 10^9)
+- 4090 sieve is ~4.6x faster than Jetson, ~1.5x faster than A100 at 10^9
 - At 10^18, CPU base-prime generation becomes the dominant bottleneck (69% of wall time)
 - MR kernel may outperform sieve at very high norms by eliminating CPU prep entirely
 - Solver memory scaling is the critical path for full campaign feasibility
+- **Wedge count is the dominant tuning parameter**: fewer wedges = faster + less RAM
