@@ -77,6 +77,12 @@ fn main() {
         if result.moat_found {
             println!("MOAT_FOUND");
         }
+        // Machine-readable summary line for chunked campaign scripting
+        println!(
+            "RESULT farthest_norm={} farthest_point=({},{}) component_size={} primes_processed={}",
+            farthest_norm, result.farthest_a, result.farthest_b,
+            result.component_size, result.primes_processed
+        );
         if args.profile {
             print_profile(result.elapsed.as_secs_f64(), result.primes_processed);
         }
@@ -149,4 +155,10 @@ fn print_summary(result: &ProbeResult) {
     println!("origin component size: {}", result.component_size);
     println!("primes processed: {}", result.primes_processed);
     println!("elapsed: {:.3}s", result.elapsed.as_secs_f64());
+    // Machine-readable summary line for chunked campaign scripting
+    println!(
+        "RESULT farthest_norm={} farthest_point=({},{}) component_size={} primes_processed={}",
+        farthest_norm, result.farthest_a, result.farthest_b,
+        result.component_size, result.primes_processed
+    );
 }
