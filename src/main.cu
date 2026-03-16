@@ -62,18 +62,20 @@ struct Config {
     std::string mode    = "sieve";   // "sieve" (default) or "mr"
     uint32_t batch_size = 5u * 1000u * 1000u;   // 5M candidates per batch (MR mode)
     int block_size      = 128;                   // threads per block (MR mode)
+    uint64_t k_squared  = 0;                     // step parameter for GPRF header
 };
 
 static void print_usage(const char* prog) {
     fprintf(stderr,
-        "Usage: %s --norm-lo N --norm-hi N --output FILE [--mode sieve|mr] [--batch-size N] [--block-size N]\n"
+        "Usage: %s --norm-lo N --norm-hi N --output FILE [--mode sieve|mr] [--batch-size N] [--block-size N] [--k-squared N]\n"
         "\n"
         "  --norm-lo N      Lower bound of norm range (inclusive)\n"
         "  --norm-hi N      Upper bound of norm range (exclusive)\n"
         "  --output FILE    Output file path (text: a b norm per line)\n"
         "  --mode MODE      'sieve' (default, fast) or 'mr' (legacy Miller-Rabin)\n"
         "  --batch-size N   Candidates per GPU batch [MR mode] (default 5000000)\n"
-        "  --block-size N   Threads per block [MR mode]: 128, 256, or 512 (default 128)\n",
+        "  --block-size N   Threads per block [MR mode]: 128, 256, or 512 (default 128)\n"
+        "  --k-squared N    Step parameter k^2 for GPRF header metadata (default 0)\n",
         prog);
 }
 
@@ -92,6 +94,8 @@ static Config parse_args(int argc, char** argv) {
             cfg.batch_size = (uint32_t)strtoul(argv[++i], nullptr, 10);
         } else if (strcmp(argv[i], "--block-size") == 0 && i + 1 < argc) {
             cfg.block_size = (int)strtol(argv[++i], nullptr, 10);
+        } else if (strcmp(argv[i], "--k-squared") == 0 && i + 1 < argc) {
+            cfg.k_squared = strtoull(argv[++i], nullptr, 10);
         } else {
             fprintf(stderr, "Unknown argument: %s\n", argv[i]);
             print_usage(argv[0]);
@@ -397,8 +401,11 @@ static void run_sieve_mode(const Config& cfg,
         cudaMemcpy(&sieve_count, d_sieve_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
         if (sieve_count > max_sieve_output) {
-            fprintf(stderr, "WARNING: Sieve buffer overflow (%u > %u)\n", sieve_count, max_sieve_output);
-            sieve_count = max_sieve_output;
+            fprintf(stderr,
+                "FATAL: sieve output overflow — %u primes exceed buffer capacity %u. "
+                "Increase EST_PRIME_FACTOR or reduce batch size.\n",
+                sieve_count, max_sieve_output);
+            exit(1);
         }
 
         // Launch Cornacchia dispatch kernel
@@ -420,6 +427,14 @@ static void run_sieve_mode(const Config& cfg,
 
             uint32_t gp_count = 0;
             cudaMemcpy(&gp_count, d_gp_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
+
+            if (gp_count > max_sieve_output) {
+                fprintf(stderr,
+                    "FATAL: Cornacchia output overflow — %u primes exceed buffer capacity %u. "
+                    "Increase EST_PRIME_FACTOR or reduce batch size.\n",
+                    gp_count, max_sieve_output);
+                exit(1);
+            }
 
             if (gp_count > 0) {
                 size_t prev = all_primes.size();
@@ -516,8 +531,11 @@ static void run_mr_mode(const Config& cfg,
             cudaMemcpy(&count, d_count, sizeof(uint32_t), cudaMemcpyDeviceToHost);
 
             if (count > max_output) {
-                fprintf(stderr, "WARNING: Output buffer overflow (%u > %u)\n", count, max_output);
-                count = max_output;
+                fprintf(stderr,
+                    "FATAL: MR output overflow — %u primes exceed buffer capacity %u. "
+                    "Increase EST_PRIME_FACTOR or reduce batch size.\n",
+                    count, max_output);
+                exit(1);
             }
 
             if (count > 0) {
@@ -641,7 +659,7 @@ int main(int argc, char** argv) {
     bool use_gprf = (cfg.output.size() >= 5 &&
                      cfg.output.compare(cfg.output.size() - 5, 5, ".gprf") == 0);
     if (use_gprf) {
-        PrimeFileWriter writer(cfg.output.c_str(), cfg.norm_hi);
+        PrimeFileWriter writer(cfg.output.c_str(), cfg.norm_hi, cfg.k_squared);
         for (const auto& gp : all_primes) {
             writer.write(gp.a, gp.b, gp.norm);
         }

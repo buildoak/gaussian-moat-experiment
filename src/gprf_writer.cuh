@@ -31,6 +31,7 @@ class PrimeFileWriter {
     uint64_t norm_min_;
     uint64_t norm_max_;
     uint64_t sieve_bound_;
+    uint64_t k_squared_;
 
     // Write buffer — accumulate records, flush in bulk
     uint8_t buf_[GPRF_BUFFER_SIZE];
@@ -44,9 +45,9 @@ class PrimeFileWriter {
     }
 
 public:
-    PrimeFileWriter(const char* path, uint64_t sieve_bound)
+    PrimeFileWriter(const char* path, uint64_t sieve_bound, uint64_t k_squared = 0)
         : fp_(nullptr), written_(0), norm_min_(UINT64_MAX), norm_max_(0),
-          sieve_bound_(sieve_bound), buf_pos_(0)
+          sieve_bound_(sieve_bound), k_squared_(k_squared), buf_pos_(0)
     {
         fp_ = fopen(path, "wb");
         if (!fp_) {
@@ -95,7 +96,7 @@ public:
         hdr.prime_count = written_;
         hdr.norm_min = (written_ > 0) ? norm_min_ : 0;
         hdr.norm_max = (written_ > 0) ? norm_max_ : 0;
-        hdr.k_squared = 0;
+        hdr.k_squared = k_squared_;
         hdr.sieve_bound = sieve_bound_;
         fwrite(&hdr, sizeof(hdr), 1, fp_);
         fclose(fp_);
