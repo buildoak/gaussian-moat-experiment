@@ -297,6 +297,52 @@ Both devices produce identical, correct results.
 4. **Auto wedge detection is harmful.** Setting wedges=cores worked for small datasets but fails for large ones. Recommendation: default to 4 wedges regardless of core count, let user override.
 5. **Both devices produce bitwise identical results** on all experiments (same prime counts, same farthest points).
 
+## Post-Fix Connector (cab53c3)
+
+### Root Cause: Angular Overlap Replication Bug
+
+Commits d45612b through e9780cc contained a critical bug in the angular wedge decomposition.
+The overlap radius was computed globally as `overlap_radians = sqrt(k^2) / sqrt(start_norm)`
+instead of per-prime using each prime's actual norm. In lower-bound mode, `start_norm` defaults
+to 2, producing `overlap = sqrt(36) / sqrt(2) = 4.24 radians`. Since the first octant spans
+only `pi/4 = 0.785 radians`, an overlap of 4.24 radians meant every prime was replicated to
+every wedge. With N wedges, this created N full copies of the problem: zero parallelism benefit,
+Nx memory consumption, and throughput inversely proportional to wedge count.
+
+The fix in cab53c3 computes overlap per-prime using the prime's own norm. High-norm primes
+(the vast majority) have tiny angular overlap and route to only 1-2 wedges.
+
+### Post-Fix Validation Status
+
+**Pending.** The post-fix connector has not been re-benchmarked at sqrt(36) scale. The
+historical 1.35-1.78M primes/sec baseline on Jetson was measured on the pre-consolidation
+codebase (before d45612b) and cannot be directly compared to the current architecture.
+
+### Pre-Fix Reference Data (do not use for capacity planning)
+
+These numbers are from commit 5611393 (pre-fix), measured on 100M GPRF (2,881,124 primes,
+norm range [0, 10^8), k^2=36).
+
+| Wedges | RTX 4090 host (primes/sec) | Jetson Orin Nano (primes/sec) | 4090/Jetson |
+|--------|---------------------------|------------------------------|-------------|
+| 4 | 28,279 | 10,692 | 2.6x |
+| 8 | 21,879 | 5,374 | 4.1x |
+| 16 | 12,882 | 3,323 | 3.9x |
+| 32 | 6,284 | 1,589 | 4.0x |
+
+The inverse scaling with wedge count is the signature of the replication bug: more wedges
+meant more copies of the full problem, not more parallelism.
+
+### RTX 4090 CUDA Sieve Numbers (Experiment Matrix, commit 5611393)
+
+| Scale | Primes Found | Wall Time | Primes/sec | Candidates/sec |
+|-------|-------------|-----------|-----------|----------------|
+| 10^8 (100M norms) | -- | -- | 10.9M | -- |
+| 10^9 (1B norms) | 25,425,200 | 0.77s | 33.0M | 1,300M |
+| 10^15 (sqrt(36)) | 14,473,703 | 2.99s | 4.84M | 334M |
+
+Prime counts match Jetson exactly at every scale (correctness gate: PASS).
+
 ## Key Takeaways
 
 - CUDA sieve is 3-10x faster than Rust internal sieve for prime generation
