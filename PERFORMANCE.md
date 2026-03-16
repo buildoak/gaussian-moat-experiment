@@ -122,6 +122,92 @@ is 69% of wall time, MR could be dramatically faster. The crossover point
 - **Requires major architectural changes**: streaming solver, GPU bucket
   construction or MR mode, pipeline overlap
 
+## A100-SXM4-40GB — Post-D3 Segmented Sieve (vast.ai, 2026-03-16)
+
+Hardware: NVIDIA A100-SXM4-40GB, 108 SMs, SM 8.0, 40 GB HBM2e
+Host: 12-vCPU Intel Xeon @ 2.20GHz, 85 GB RAM
+CUDA: 12.1 (driver 550.163.01)
+
+### What changed: D3 Segmented Base Sieve
+
+Replaced naive `vector<bool>` base prime generation with L1-friendly 16KB segmented
+Eratosthenes. Validated 4.6x speedup (Jetson) translates to A100 x86 host.
+
+### CUDA Sieve Results (D3)
+
+| Scale | Mode | Primes | Wall Time | Primes/sec | Candidates/sec | Base Sieve Time |
+|-------|------|--------|-----------|-----------|----------------|-----------------|
+| 10^9 (near origin) | sieve | 25.4M | 1.23s | 20.7M | 812M | 0.000s |
+| 10^9 (near origin) | MR | 25.4M | 2.82s | 9.0M | 355M | n/a |
+| 10^15 (sqrt(36)) | sieve | 14.5M | 3.61s | 4.0M | 277M | 0.087s |
+| 10^15 (sqrt(36)) | MR | 14.5M | 8.29s | 1.7M | 121M | n/a |
+| 10^18 (sqrt(40)) | sieve | 12.1M | 9.09s | 1.33M | 110M | 2.908s |
+| 10^18 (sqrt(40)) | MR | 12.1M | 8.07s | 1.49M | 124M | n/a |
+
+### Comparison: Pre-D3 (March 15) vs Post-D3 (March 16)
+
+| Scale | Pre-D3 Sieve | Post-D3 Sieve | Delta | Pre-D3 Base Gen | Post-D3 Base Gen |
+|-------|-------------|--------------|-------|-----------------|-----------------|
+| 10^9 | 24.0M/sec (1.06s) | 20.7M/sec (1.23s) | -14% | ~0s | 0.000s |
+| 10^15 | 3.96M/sec (3.37s) | 4.0M/sec (3.61s) | +1% | negligible | 0.087s |
+| 10^18 | 988K/sec (12.2s) | 1.33M/sec (9.09s) | +35% | 8.7s | 2.908s |
+
+Key finding: **D3 delivers a 3.0x improvement on base prime generation at 10^18**
+(8.7s -> 2.9s). Total wall time improves 25% (12.2s -> 9.1s). At lower scales the
+base sieve was already negligible, so D3 has no meaningful impact there. The slight
+regression at 10^9 is noise (different host CPU: Intel Xeon vs AMD EPYC).
+
+### Bottleneck Analysis (10^18, Post-D3)
+
+| Phase | Wall Time | % of Total | Pre-D3 | Change |
+|-------|----------|-----------|--------|--------|
+| Base prime generation | 2.9s | 32% | 8.7s (69%) | **3.0x faster** |
+| CPU bucket construction | ~0.3s | 3% | ~0.3s (2%) | same |
+| GPU sieve kernel | ~3.2s | 35% | 3.2s (25%) | same (now largest) |
+| GPU sort + D2H | ~0.4s | 4% | 0.4s (3%) | same |
+| Other overhead | ~2.2s | 24% | - | - |
+
+The GPU sieve kernel is now the dominant bottleneck at 10^18, not base prime generation.
+
+### MR vs Sieve Crossover
+
+At 10^18, MR (1.49M/sec) now beats the sieve (1.33M/sec) by 12%. MR has zero CPU prep
+time, making it increasingly attractive as norm scale grows. The crossover point is
+between 10^15 (sieve 2.4x faster) and 10^18 (MR 1.12x faster).
+
+### OpenMP Experiment: CPU Bucket Construction
+
+Added `#pragma omp parallel for schedule(dynamic, 256)` to both passes of the
+two-pass bucket scatter loop, with atomic operations for shared counters.
+
+| Scale | Without OMP | With OMP | Delta |
+|-------|------------|---------|-------|
+| 10^15 | 3.637s (3.98M/sec) | 3.693s (3.92M/sec) | -1.5% (slower) |
+| 10^18 | 9.122s (1.32M/sec) | 9.116s (1.32M/sec) | +0.07% (noise) |
+
+**Conclusion:** OpenMP on bucket construction provides zero benefit on x86. The bucket
+phase is only ~0.3s (3% of wall time) at 10^18 -- thread creation overhead cancels any
+parallelism gain. This is NOT the ARM 64-bit division issue we hypothesized; the bucket
+construction is simply not a bottleneck. Optimization effort should target the GPU sieve
+kernel (now 35% of wall time) or switch to MR mode at high scales.
+
+### Rust Angular Connector on A100 Host
+
+| Scenario | k^2 | Wedges | Primes Processed | Wall Time | Throughput | RSS |
+|----------|-----|--------|-----------------|-----------|-----------|-----|
+| Near-origin, angular=32 | 2 | 32 | 2,110 | 0.037s | 57K/sec | 20 MB |
+| Near-origin, angular=32 | 4 | 32 | 2,110 | 0.031s | 68K/sec | 19 MB |
+| Near-origin, angular=32 | 6 | 32 | 783,093 | 157.8s | 5.0K/sec | 4.0 GB |
+| Near-origin, angular=0 | 6 | 12 | 783,093 | 69.6s | 11.2K/sec | 2.3 GB |
+
+Note: k^2=2 and k^2=4 terminate early (moat found quickly). k^2=6 is the
+computationally expensive case -- 25M primes loaded but only 783K processed
+before the search exhausts all reachable primes.
+
+The solver cannot operate on windowed GPRFs (offset from origin) because the
+connectivity search starts at the origin. sqrt(36)-scale connector benchmarks
+require a contiguous GPRF from [0, 6.4e15) which would be ~100+ GB.
+
 ## Key Takeaways
 
 - CUDA sieve is 3-10x faster than Rust internal sieve for prime generation
