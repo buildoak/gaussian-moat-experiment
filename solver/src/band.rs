@@ -129,6 +129,10 @@ pub struct BandProcessor {
     boundary_norm: u64,
     boundary_plus_k: u64,
 
+    /// Resume mode: primes with norm < this value auto-connect to origin.
+    /// Set by set_resume_farthest_norm(). 0 = disabled.
+    resume_connect_norm: u64,
+
     primes_processed: u64,
 }
 
@@ -193,6 +197,7 @@ impl BandProcessor {
             upper_bound,
             boundary_norm,
             boundary_plus_k,
+            resume_connect_norm: 0,
             primes_processed: 0,
         };
 
@@ -237,6 +242,15 @@ impl BandProcessor {
             && self.origin_slot != NO_SLOT
             && self.origin_gen == self.uf.generation(self.origin_slot)
             && prime.norm < self.boundary_plus_k
+        {
+            self.union_components(self.origin_slot, slot);
+        }
+
+        // Resume mode: auto-connect primes in the overlap zone to origin
+        if self.resume_connect_norm > 0
+            && self.origin_slot != NO_SLOT
+            && self.origin_gen == self.uf.generation(self.origin_slot)
+            && prime.norm < self.resume_connect_norm
         {
             self.union_components(self.origin_slot, slot);
         }
@@ -311,6 +325,29 @@ impl BandProcessor {
             self.component_far_b[canonical_root],
             self.component_far_norm[canonical_root],
         )
+    }
+
+    /// Resume LB continuation: origin component already reaches at least `norm`.
+    /// Seeds a synthetic origin at (0,0) and auto-connects primes below the
+    /// resume boundary. Must be called BEFORE feeding any primes.
+    ///
+    /// The resume_farthest_norm is a *norm* value (a^2+b^2), not a distance.
+    /// All primes with norm < ceil_radius_sum_sq(resume_norm, k^2) are
+    /// auto-connected to origin, matching the overlap zone from the previous chunk.
+    pub fn set_resume_farthest_norm(&mut self, norm: u64) {
+        if norm == 0 || self.origin_slot != NO_SLOT {
+            return; // no-op if already initialized or norm is zero
+        }
+        // Seed synthetic origin (same as UB mode)
+        let (slot, gen) = self.push_node(0, 0, 0);
+        self.origin_slot = slot;
+        self.origin_gen = gen;
+        // Set farthest to the resume norm (we don't know the actual point,
+        // but we know the component reaches at least this far)
+        self.farthest_dist_sq = norm;
+        self.moat_threshold_norm = self.compute_moat_threshold(norm);
+        // Store the resume norm threshold for auto-connect in process_prime_ext
+        self.resume_connect_norm = ceil_radius_sum_sq(norm, self.k_squared);
     }
 
     pub fn stats(&self) -> BandStats {
@@ -406,7 +443,8 @@ impl BandProcessor {
         }
 
         let mut size = self.uf.size(origin_root);
-        if self.upper_bound && size > 0 {
+        // Subtract the synthetic origin node (present in UB mode and resume mode)
+        if (self.upper_bound || self.resume_connect_norm > 0) && size > 0 {
             size -= 1;
         }
         self.origin_component_size = size;
@@ -635,6 +673,69 @@ mod tests {
         let summary = processor.stats();
         assert_eq!(summary.origin_component_size, 10);
         assert_eq!(processor.primes_processed, 17);
+    }
+
+    /// Resume mode: set resume_farthest_norm to 50 (which exceeds all k²=2
+    /// prime norms < 50). All primes below that auto-connect to the synthetic
+    /// origin, then the chain continues as normal. Result should still reach
+    /// (11, 4) at norm 137.
+    #[test]
+    fn k2_2_resume_farthest_norm_50_reaches_farthest() {
+        let mut processor = BandProcessor::new(2);
+        processor.set_resume_farthest_norm(50);
+        let primes = gaussian_primes_up_to_norm(200);
+
+        let mut moat: Option<MoatResult> = None;
+        for prime in &primes {
+            if let Some(result) = processor.process_prime(prime) {
+                moat = Some(result);
+                break;
+            }
+        }
+
+        let moat = moat.expect("expected moat detection for k^2=2 resume mode by norm 200");
+        assert_eq!(
+            (moat.farthest_a, moat.farthest_b),
+            (11, 4),
+            "farthest point must be (11, 4) in resume mode"
+        );
+    }
+
+    /// Resume mode with two-chunk simulation: process primes in [0,100] first,
+    /// extract farthest_norm, then process [98,200] with resume. Final result
+    /// must reach (11, 4) at norm 137.
+    #[test]
+    fn k2_2_two_chunk_resume_reaches_farthest() {
+        let all_primes = gaussian_primes_up_to_norm(200);
+
+        // Chunk 1: primes with norm <= 100
+        let mut proc1 = BandProcessor::new(2);
+        for prime in all_primes.iter().filter(|p| p.norm <= 100) {
+            let _ = proc1.process_prime(prime);
+        }
+        let chunk1_farthest_norm =
+            (proc1.farthest_a() as u64) * (proc1.farthest_a() as u64)
+            + (proc1.farthest_b() as u64) * (proc1.farthest_b() as u64);
+        assert!(chunk1_farthest_norm > 0, "chunk1 must find origin component");
+
+        // Chunk 2: primes with norm in [98, 200] (overlap of 2 norms)
+        let mut proc2 = BandProcessor::new(2);
+        proc2.set_resume_farthest_norm(chunk1_farthest_norm);
+
+        let mut moat: Option<MoatResult> = None;
+        for prime in all_primes.iter().filter(|p| p.norm >= 98) {
+            if let Some(result) = proc2.process_prime(prime) {
+                moat = Some(result);
+                break;
+            }
+        }
+
+        let moat = moat.expect("expected moat detection in chunk 2");
+        assert_eq!(
+            (moat.farthest_a, moat.farthest_b),
+            (11, 4),
+            "two-chunk resume must reach (11, 4)"
+        );
     }
 
     #[test]

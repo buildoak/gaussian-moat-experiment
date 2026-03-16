@@ -25,6 +25,9 @@ pub struct AngularConfig {
     pub boundary_distance: u64,
     pub norm_bound: u64,
     pub prime_source: PrimeSource,
+    /// Resume LB continuation: origin component already reaches at least this norm.
+    /// Primes with norm <= resume_farthest_norm auto-connect to origin.
+    pub resume_farthest_norm: u64,
 }
 
 pub struct AngularResult {
@@ -35,6 +38,8 @@ pub struct AngularResult {
     pub primes_processed: u64,
     pub wedges_used: u32,
     pub elapsed: Duration,
+    /// True when the solver proved a moat (origin component stopped growing).
+    pub moat_found: bool,
 }
 
 pub fn run_angular(config: &AngularConfig) -> AngularResult {
@@ -99,9 +104,10 @@ fn stream_primes(
 
     // Initialize per-wedge BandProcessors and tracking state
     let initial_uf_cap = 500_000usize; // conservative; band eviction keeps live count bounded
+    let resume_norm = config.resume_farthest_norm;
     let mut bands: Vec<BandProcessor> = (0..num_wedges)
         .map(|_| {
-            if config.upper_bound {
+            let mut bp = if config.upper_bound {
                 BandProcessor::new_upper_bound_with_capacity(
                     config.k_squared,
                     config.boundary_distance,
@@ -109,7 +115,11 @@ fn stream_primes(
                 )
             } else {
                 BandProcessor::new_with_capacity(config.k_squared, initial_uf_cap)
+            };
+            if resume_norm > 0 && !config.upper_bound {
+                bp.set_resume_farthest_norm(resume_norm);
             }
+            bp
         })
         .collect();
 
@@ -119,6 +129,7 @@ fn stream_primes(
     let mut non_native_slots: Vec<Vec<u32>> = vec![Vec::new(); num_wedges];
 
     let mut primes_processed: u64 = 0;
+    let mut moat_found = false;
 
     for prime in iter {
         if apply_bound && prime.norm > norm_bound {
@@ -138,7 +149,10 @@ fn stream_primes(
         if single_wedge {
             // Fast path: single wedge — skip ALL theta/overlap/routing math
             let pr = bands[0].process_prime_ext(&prime);
-            let _ = pr;
+            if pr.moat.is_some() {
+                moat_found = true;
+                break;
+            }
         } else {
             // Route this prime to wedge(s) using angle-based routing
             let (ca, cb) = canonical(prime.a, prime.b);
@@ -221,6 +235,7 @@ fn stream_primes(
         primes_processed,
         wedges_used,
         elapsed: start.elapsed(),
+        moat_found,
     }
 }
 

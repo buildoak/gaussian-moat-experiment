@@ -30,6 +30,11 @@ struct Args {
     verbose: bool,
     #[arg(long, help = "Emit a structured profile block after the run")]
     profile: bool,
+    #[arg(
+        long = "resume-farthest-norm",
+        help = "Resume LB continuation: origin component already reaches this norm (chunked campaign)"
+    )]
+    resume_farthest_norm: Option<u64>,
 }
 
 fn main() {
@@ -56,15 +61,22 @@ fn main() {
             boundary_distance: args.start_distance.unwrap_or(0),
             norm_bound: args.norm_bound,
             prime_source,
+            resume_farthest_norm: args.resume_farthest_norm.unwrap_or(0),
         };
         let result = run_angular(&config);
+        let farthest_norm = (result.farthest_a as i64) * (result.farthest_a as i64)
+            + (result.farthest_b as i64) * (result.farthest_b as i64);
         println!("=== Angular Probe Result ===");
         println!("farthest point: ({}, {})", result.farthest_a, result.farthest_b);
         println!("farthest distance: {:.6}", result.farthest_distance);
+        println!("farthest_norm={}", farthest_norm);
         println!("origin component size: {}", result.component_size);
         println!("primes processed: {}", result.primes_processed);
         println!("wedges used: {}", result.wedges_used);
         println!("elapsed: {:.3}s", result.elapsed.as_secs_f64());
+        if result.moat_found {
+            println!("MOAT_FOUND");
+        }
         if args.profile {
             print_profile(result.elapsed.as_secs_f64(), result.primes_processed);
         }
@@ -125,12 +137,15 @@ fn print_profile(wall_seconds: f64, items_processed: u64) {
 }
 
 fn print_summary(result: &ProbeResult) {
+    let farthest_norm = (result.farthest_a as i64) * (result.farthest_a as i64)
+        + (result.farthest_b as i64) * (result.farthest_b as i64);
     println!("=== Probe Result ===");
     println!(
         "farthest point: ({}, {})",
         result.farthest_a, result.farthest_b
     );
     println!("farthest distance: {:.6}", result.farthest_distance);
+    println!("farthest_norm={}", farthest_norm);
     println!("origin component size: {}", result.component_size);
     println!("primes processed: {}", result.primes_processed);
     println!("elapsed: {:.3}s", result.elapsed.as_secs_f64());
