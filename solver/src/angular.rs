@@ -93,6 +93,9 @@ fn stream_primes(
     let apply_bound = norm_bound > 0 && norm_bound < u64::MAX;
     let num_wedges = wedges_used as usize;
     let wedge_width = FRAC_PI_4 / num_wedges as f64;
+    // P2: hoist k_sqrt out of the hot loop — was recomputed per-prime as (k_squared as f64).sqrt()
+    let k_sqrt = (config.k_squared as f64).sqrt();
+    let single_wedge = num_wedges == 1;
 
     // Initialize per-wedge BandProcessors and tracking state
     let initial_uf_cap = 500_000usize; // conservative; band eviction keeps live count bounded
@@ -132,19 +135,19 @@ fn stream_primes(
             );
         }
 
-        // Route this prime to wedge(s) using angle-based routing
-        let (ca, cb) = canonical(prime.a, prime.b);
-        let theta = (cb as f64).atan2(ca as f64);
-        let prime_norm = prime.norm.max(1) as f64;
-        let overlap_radians = (config.k_squared as f64).sqrt() / prime_norm.sqrt();
-
-        let primary = ((theta / wedge_width).floor() as i64).clamp(0, num_wedges as i64 - 1) as usize;
-
-        if num_wedges == 1 {
-            // Fast path: single wedge, no overlap logic needed
+        if single_wedge {
+            // Fast path: single wedge — skip ALL theta/overlap/routing math
             let pr = bands[0].process_prime_ext(&prime);
-            let _ = pr; // no stitching needed for single wedge
+            let _ = pr;
         } else {
+            // Route this prime to wedge(s) using angle-based routing
+            let (ca, cb) = canonical(prime.a, prime.b);
+            let theta = (cb as f64).atan2(ca as f64);
+            let prime_norm = prime.norm.max(1) as f64;
+            // P2: use hoisted k_sqrt instead of recomputing sqrt(k_squared) per-prime
+            let overlap_radians = k_sqrt / prime_norm.sqrt();
+
+            let primary = ((theta / wedge_width).floor() as i64).clamp(0, num_wedges as i64 - 1) as usize;
             // Multi-wedge: compute overlap range and feed each relevant wedge
             let lo_theta = (theta - overlap_radians).max(0.0);
             let hi_theta = (theta + overlap_radians).min(FRAC_PI_4);

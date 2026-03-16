@@ -261,6 +261,16 @@ static void run_sieve_mode(const Config& cfg,
     std::vector<GaussianPrime> host_batch_buf;
     uint64_t total_gp_primes = 0;
 
+    // Pre-generate sorted inert primes for interleaved streaming
+    std::vector<GaussianPrime> inert_primes_sorted;
+    size_t inert_cursor = 0;  // tracks how far we've emitted
+    if (cfg.use_stdout) {
+        generate_inert_primes(cfg.norm_lo, cfg.norm_hi, inert_primes_sorted);
+        // inert primes are already sorted by norm (generated in ascending p order, norm = p^2)
+        fprintf(stderr, "[sieve] Pre-generated %zu inert primes for interleaved streaming\n",
+                inert_primes_sorted.size());
+    }
+
     uint64_t total_sieve_primes = 0;
 
     while (current_lo < cfg.norm_hi) {
@@ -450,14 +460,37 @@ static void run_sieve_mode(const Config& cfg,
 
             if (gp_count > 0) {
                 if (cfg.use_stdout) {
-                    // Streaming: copy to temp buffer and write directly to stdout
+                    // Streaming: copy to temp buffer, SORT by norm, then merge-write with inert primes
                     host_batch_buf.resize(gp_count);
                     cudaMemcpy(host_batch_buf.data(), d_gp_out, gp_count * sizeof(GaussianPrime),
                                cudaMemcpyDeviceToHost);
-                    for (const auto& gp : host_batch_buf) {
+
+                    // Sort this batch by norm (GPU output is unordered due to atomicAdd)
+                    std::sort(host_batch_buf.begin(), host_batch_buf.end(),
+                              [](const GaussianPrime& x, const GaussianPrime& y) {
+                                  if (x.norm != y.norm) return x.norm < y.norm;
+                                  if (x.a != y.a) return x.a < y.a;
+                                  return x.b < y.b;
+                              });
+
+                    // Merge-write: emit inert primes up to each split prime's norm, then the split prime
+                    size_t split_idx = 0;
+                    while (split_idx < host_batch_buf.size()) {
+                        // Emit inert primes that come before this split prime
+                        while (inert_cursor < inert_primes_sorted.size() &&
+                               inert_primes_sorted[inert_cursor].norm <= host_batch_buf[split_idx].norm) {
+                            const auto& igp = inert_primes_sorted[inert_cursor];
+                            fwrite(&igp.a, sizeof(igp.a), 1, stdout);
+                            fwrite(&igp.b, sizeof(igp.b), 1, stdout);
+                            fwrite(&igp.norm, sizeof(igp.norm), 1, stdout);
+                            inert_cursor++;
+                        }
+                        // Emit the split prime
+                        const auto& gp = host_batch_buf[split_idx];
                         fwrite(&gp.a, sizeof(gp.a), 1, stdout);
                         fwrite(&gp.b, sizeof(gp.b), 1, stdout);
                         fwrite(&gp.norm, sizeof(gp.norm), 1, stdout);
+                        split_idx++;
                     }
                     fflush(stdout);
                 } else {
@@ -485,17 +518,18 @@ static void run_sieve_mode(const Config& cfg,
 
     // Add inert primes p == 3 (mod 4), norm = p^2, on CPU.
     if (cfg.use_stdout) {
-        // Stream inert primes directly to stdout
-        std::vector<GaussianPrime> inert_buf;
-        generate_inert_primes(cfg.norm_lo, cfg.norm_hi, inert_buf);
-        for (const auto& gp : inert_buf) {
+        // Flush remaining inert primes that come after the last split prime batch
+        size_t remaining_inerts = inert_primes_sorted.size() - inert_cursor;
+        for (; inert_cursor < inert_primes_sorted.size(); inert_cursor++) {
+            const auto& gp = inert_primes_sorted[inert_cursor];
             fwrite(&gp.a, sizeof(gp.a), 1, stdout);
             fwrite(&gp.b, sizeof(gp.b), 1, stdout);
             fwrite(&gp.norm, sizeof(gp.norm), 1, stdout);
         }
         fflush(stdout);
-        total_gp_primes += inert_buf.size();
-        fprintf(stderr, "[sieve] Streamed %lu inert primes\n", (unsigned long)inert_buf.size());
+        total_gp_primes += inert_primes_sorted.size();
+        fprintf(stderr, "[sieve] Interleaved %zu inert primes (%zu trailing)\n",
+                inert_primes_sorted.size(), remaining_inerts);
     } else {
         generate_inert_primes(cfg.norm_lo, cfg.norm_hi, all_primes);
     }

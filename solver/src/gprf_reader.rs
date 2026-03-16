@@ -8,6 +8,9 @@ use crate::sieve::GaussianPrime;
 const HEADER_SIZE: usize = 64;
 const RECORD_SIZE: usize = 16;
 const MAGIC: u32 = 0x47505246;
+/// Number of records to bulk-read at once in the streaming iterator.
+/// 4096 records = 64KB per chunk read, amortizes syscall overhead.
+const CHUNK_RECORDS: usize = 4096;
 
 /// On-disk record layout matching the C++ writer exactly.
 /// {i32 a, i32 b, u64 norm} = 16 bytes, no padding.
@@ -177,6 +180,10 @@ pub struct GprfStreamReader<R: Read> {
     pub norm_min: u64,
     pub norm_max: u64,
     pub header_count: u64,
+    /// Bulk-read buffer: CHUNK_RECORDS * RECORD_SIZE bytes
+    chunk_buf: Vec<u8>,
+    chunk_pos: usize,  // next record index within chunk_buf to return
+    chunk_len: usize,  // number of valid records in chunk_buf
 }
 
 impl GprfStreamReader<File> {
@@ -184,7 +191,7 @@ impl GprfStreamReader<File> {
     /// yields records one at a time via the Iterator impl.
     pub fn open_file(path: &str) -> io::Result<Self> {
         let file = File::open(path)?;
-        let mut reader = BufReader::with_capacity(64 * 1024, file);
+        let mut reader = BufReader::with_capacity(4 * 1024 * 1024, file);
 
         // Read the 64-byte header
         let mut hdr = [0u8; HEADER_SIZE];
@@ -216,6 +223,9 @@ impl GprfStreamReader<File> {
             norm_min,
             norm_max,
             header_count,
+            chunk_buf: vec![0u8; CHUNK_RECORDS * RECORD_SIZE],
+            chunk_pos: 0,
+            chunk_len: 0,
         })
     }
 }
@@ -225,11 +235,14 @@ impl<R: Read> GprfStreamReader<R> {
     /// Used for stdin pipe mode where the CUDA sieve writes records directly.
     pub fn from_raw(source: R) -> Self {
         Self {
-            reader: BufReader::with_capacity(64 * 1024, source),
+            reader: BufReader::with_capacity(4 * 1024 * 1024, source),
             records_read: 0,
             norm_min: 0,
             norm_max: 0,
             header_count: 0,
+            chunk_buf: vec![0u8; CHUNK_RECORDS * RECORD_SIZE],
+            chunk_pos: 0,
+            chunk_len: 0,
         }
     }
 
@@ -242,19 +255,48 @@ impl<R: Read> Iterator for GprfStreamReader<R> {
     type Item = GaussianPrime;
 
     fn next(&mut self) -> Option<GaussianPrime> {
-        let mut buf = [0u8; RECORD_SIZE];
-        match self.reader.read_exact(&mut buf) {
-            Ok(()) => {}
-            Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => return None,
-            Err(_) => return None,
+        // Fast path: return from pre-read chunk buffer
+        if self.chunk_pos < self.chunk_len {
+            let offset = self.chunk_pos * RECORD_SIZE;
+            let a = i32::from_le_bytes(
+                self.chunk_buf[offset..offset + 4].try_into().unwrap(),
+            );
+            let b = i32::from_le_bytes(
+                self.chunk_buf[offset + 4..offset + 8].try_into().unwrap(),
+            );
+            let norm = u64::from_le_bytes(
+                self.chunk_buf[offset + 8..offset + 16].try_into().unwrap(),
+            );
+            self.chunk_pos += 1;
+            self.records_read += 1;
+            return Some(GaussianPrime { a, b, norm });
         }
 
-        let a = i32::from_le_bytes(buf[0..4].try_into().unwrap());
-        let b = i32::from_le_bytes(buf[4..8].try_into().unwrap());
-        let norm = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+        // Refill chunk buffer: read up to CHUNK_RECORDS records at once
+        let buf_len = CHUNK_RECORDS * RECORD_SIZE;
+        let mut total_read = 0usize;
+        while total_read < buf_len {
+            match self.reader.read(&mut self.chunk_buf[total_read..buf_len]) {
+                Ok(0) => break,
+                Ok(n) => total_read += n,
+                Err(ref e) if e.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            }
+        }
+        // Align to record boundary (drop partial trailing record)
+        let full_records = total_read / RECORD_SIZE;
+        if full_records == 0 {
+            return None;
+        }
+        self.chunk_len = full_records;
+        self.chunk_pos = 0;
 
+        // Return first record from freshly filled buffer
+        let a = i32::from_le_bytes(self.chunk_buf[0..4].try_into().unwrap());
+        let b = i32::from_le_bytes(self.chunk_buf[4..8].try_into().unwrap());
+        let norm = u64::from_le_bytes(self.chunk_buf[8..16].try_into().unwrap());
+        self.chunk_pos = 1;
         self.records_read += 1;
-
         Some(GaussianPrime { a, b, norm })
     }
 }
