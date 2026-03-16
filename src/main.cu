@@ -63,15 +63,17 @@ struct Config {
     uint32_t batch_size = 5u * 1000u * 1000u;   // 5M candidates per batch (MR mode)
     int block_size      = 128;                   // threads per block (MR mode)
     uint64_t k_squared  = 0;                     // step parameter for GPRF header
+    bool use_stdout     = false;                 // write raw GPRF records to stdout
 };
 
 static void print_usage(const char* prog) {
     fprintf(stderr,
-        "Usage: %s --norm-lo N --norm-hi N --output FILE [--mode sieve|mr] [--batch-size N] [--block-size N] [--k-squared N]\n"
+        "Usage: %s --norm-lo N --norm-hi N (--output FILE | --stdout) [--mode sieve|mr] [--batch-size N] [--block-size N] [--k-squared N]\n"
         "\n"
         "  --norm-lo N      Lower bound of norm range (inclusive)\n"
         "  --norm-hi N      Upper bound of norm range (exclusive)\n"
-        "  --output FILE    Output file path (text: a b norm per line)\n"
+        "  --output FILE    Output file path (text or .gprf binary)\n"
+        "  --stdout         Write raw GPRF records (16-byte: a,b,norm LE) to stdout\n"
         "  --mode MODE      'sieve' (default, fast) or 'mr' (legacy Miller-Rabin)\n"
         "  --batch-size N   Candidates per GPU batch [MR mode] (default 5000000)\n"
         "  --block-size N   Threads per block [MR mode]: 128, 256, or 512 (default 128)\n"
@@ -96,14 +98,20 @@ static Config parse_args(int argc, char** argv) {
             cfg.block_size = (int)strtol(argv[++i], nullptr, 10);
         } else if (strcmp(argv[i], "--k-squared") == 0 && i + 1 < argc) {
             cfg.k_squared = strtoull(argv[++i], nullptr, 10);
+        } else if (strcmp(argv[i], "--stdout") == 0) {
+            cfg.use_stdout = true;
         } else {
             fprintf(stderr, "Unknown argument: %s\n", argv[i]);
             print_usage(argv[0]);
             exit(1);
         }
     }
-    if (cfg.norm_hi == 0 || cfg.output.empty()) {
+    if (cfg.norm_hi == 0 || (cfg.output.empty() && !cfg.use_stdout)) {
         print_usage(argv[0]);
+        exit(1);
+    }
+    if (cfg.use_stdout && !cfg.output.empty()) {
+        fprintf(stderr, "error: --stdout and --output are mutually exclusive\n");
         exit(1);
     }
     if (cfg.mode != "sieve" && cfg.mode != "mr") {
@@ -656,29 +664,40 @@ int main(int argc, char** argv) {
     double elapsed = std::chrono::duration<double>(t_end - t_start).count();
 
     // --- Write output ---
-    bool use_gprf = (cfg.output.size() >= 5 &&
-                     cfg.output.compare(cfg.output.size() - 5, 5, ".gprf") == 0);
-    if (use_gprf) {
-        PrimeFileWriter writer(cfg.output.c_str(), cfg.norm_hi, cfg.k_squared);
+    if (cfg.use_stdout) {
+        // Pipe mode: write raw 16-byte records (a:i32, b:i32, norm:u64, LE) to stdout.
+        // No GPRF header — the solver's stdin reader expects raw records.
         for (const auto& gp : all_primes) {
-            writer.write(gp.a, gp.b, gp.norm);
+            fwrite(&gp.a, sizeof(gp.a), 1, stdout);
+            fwrite(&gp.b, sizeof(gp.b), 1, stdout);
+            fwrite(&gp.norm, sizeof(gp.norm), 1, stdout);
         }
-        writer.finalize();
+        fflush(stdout);
     } else {
-        FILE* fout = nullptr;
-        if (cfg.output == "/dev/null") {
-            fout = fopen("/dev/null", "w");
+        bool use_gprf = (cfg.output.size() >= 5 &&
+                         cfg.output.compare(cfg.output.size() - 5, 5, ".gprf") == 0);
+        if (use_gprf) {
+            PrimeFileWriter writer(cfg.output.c_str(), cfg.norm_hi, cfg.k_squared);
+            for (const auto& gp : all_primes) {
+                writer.write(gp.a, gp.b, gp.norm);
+            }
+            writer.finalize();
         } else {
-            fout = fopen(cfg.output.c_str(), "w");
+            FILE* fout = nullptr;
+            if (cfg.output == "/dev/null") {
+                fout = fopen("/dev/null", "w");
+            } else {
+                fout = fopen(cfg.output.c_str(), "w");
+            }
+            if (!fout) {
+                fprintf(stderr, "FATAL: Cannot open output file: %s\n", cfg.output.c_str());
+                return 1;
+            }
+            for (const auto& gp : all_primes) {
+                fprintf(fout, "%d %d %lu\n", gp.a, gp.b, (unsigned long)gp.norm);
+            }
+            fclose(fout);
         }
-        if (!fout) {
-            fprintf(stderr, "FATAL: Cannot open output file: %s\n", cfg.output.c_str());
-            return 1;
-        }
-        for (const auto& gp : all_primes) {
-            fprintf(fout, "%d %d %lu\n", gp.a, gp.b, (unsigned long)gp.norm);
-        }
-        fclose(fout);
     }
 
     // --- Stats ---

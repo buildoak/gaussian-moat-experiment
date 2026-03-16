@@ -1,10 +1,12 @@
 use std::collections::HashMap;
+use std::io;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use rayon::prelude::*;
 
 use crate::band::BandProcessor;
+use crate::gprf_reader::GprfStreamReader;
 use crate::prime_router::{route_primes, WedgeBuffer};
 use crate::progress::ProgressSignal;
 use crate::sieve::{GaussianPrime, PrimeStream};
@@ -13,13 +15,20 @@ use crate::stitcher::{stitch, OverlapPrime, WedgeResult};
 const PROGRESS_INTERVAL: u64 = 1_000_000;
 const NO_SLOT: u32 = u32::MAX;
 
+/// Where primes come from: file, stdin pipe, or internal Rust sieve.
+pub enum PrimeSource {
+    File(String),
+    Stdin,
+    InternalSieve,
+}
+
 pub struct AngularConfig {
     pub k_squared: u64,
     pub num_wedges: u32,
     pub upper_bound: bool,
     pub boundary_distance: u64,
     pub norm_bound: u64,
-    pub prime_file: Option<String>,
+    pub prime_source: PrimeSource,
 }
 
 pub struct AngularResult {
@@ -42,49 +51,35 @@ pub fn run_angular(config: &AngularConfig) -> AngularResult {
         2
     };
 
-    // Phase 1: Collect all primes
-    let primes: Vec<GaussianPrime> = if let Some(ref path) = config.prime_file {
-        use crate::gprf_reader::PrimeFileReader;
-        let reader = PrimeFileReader::open(path).unwrap_or_else(|e| {
-            panic!("Failed to open prime file '{}': {}", path, e);
-        });
-        eprintln!(
-            "angular: loaded GPRF file '{}': {} primes, norm range [{}, {}]",
-            path,
-            reader.len(),
-            reader.norm_min,
-            reader.norm_max
-        );
-        // When a prime file is provided, trust the file's norm range.
-        // Do NOT apply the start_norm filter — the file already contains
-        // exactly the primes for this band. Applying start_norm would
-        // reject all primes when the file's norm range matches the
-        // computed start_norm (Bug: start_distance filter rejects all
-        // GPRF primes).
-        if norm_bound > 0 && norm_bound < u64::MAX {
-            reader.iter_norm_range(reader.norm_min, norm_bound).collect()
-        } else {
-            reader.iter().collect()
+    // Phase 1: Collect all primes (streaming from file, stdin, or internal sieve)
+    let primes: Vec<GaussianPrime> = match &config.prime_source {
+        PrimeSource::File(path) => {
+            let stream_reader = GprfStreamReader::open_file(path).unwrap_or_else(|e| {
+                panic!("Failed to open prime file '{}': {}", path, e);
+            });
+            eprintln!(
+                "angular: streaming GPRF file '{}': header_count={}, norm range [{}, {}]",
+                path,
+                stream_reader.header_count,
+                stream_reader.norm_min,
+                stream_reader.norm_max
+            );
+            collect_with_progress(stream_reader, norm_bound, wedges_used, &start)
         }
-    } else {
-        let mut stream = if config.upper_bound {
-            PrimeStream::new_with_start(start_norm, norm_bound)
-        } else {
-            PrimeStream::new(norm_bound)
-        };
-        let mut v: Vec<GaussianPrime> = Vec::new();
-        for prime in stream.by_ref() {
-            v.push(prime);
-            if (v.len() as u64) % PROGRESS_INTERVAL == 0 {
-                eprintln!(
-                    "angular progress: phase=collect primes={} wedges={} elapsed={:.2}s",
-                    v.len(),
-                    wedges_used,
-                    start.elapsed().as_secs_f64()
-                );
-            }
+        PrimeSource::Stdin => {
+            let stdin = io::stdin().lock();
+            let stream_reader = GprfStreamReader::from_raw(stdin);
+            eprintln!("angular: streaming from stdin (pipe mode)");
+            collect_with_progress(stream_reader, norm_bound, wedges_used, &start)
         }
-        v
+        PrimeSource::InternalSieve => {
+            let stream = if config.upper_bound {
+                PrimeStream::new_with_start(start_norm, norm_bound)
+            } else {
+                PrimeStream::new(norm_bound)
+            };
+            collect_with_progress(stream, norm_bound, wedges_used, &start)
+        }
     };
     let primes_processed = primes.len() as u64;
 
@@ -128,6 +123,33 @@ pub fn run_angular(config: &AngularConfig) -> AngularResult {
         wedges_used,
         elapsed: start.elapsed(),
     }
+}
+
+/// Collect primes from any iterator into a Vec, with progress reporting.
+/// Applies norm_bound filtering when non-zero.
+fn collect_with_progress(
+    iter: impl Iterator<Item = GaussianPrime>,
+    norm_bound: u64,
+    wedges_used: u32,
+    start: &Instant,
+) -> Vec<GaussianPrime> {
+    let apply_bound = norm_bound > 0 && norm_bound < u64::MAX;
+    let mut v: Vec<GaussianPrime> = Vec::new();
+    for prime in iter {
+        if apply_bound && prime.norm > norm_bound {
+            continue;
+        }
+        v.push(prime);
+        if (v.len() as u64) % PROGRESS_INTERVAL == 0 {
+            eprintln!(
+                "angular progress: phase=collect primes={} wedges={} elapsed={:.2}s",
+                v.len(),
+                wedges_used,
+                start.elapsed().as_secs_f64()
+            );
+        }
+    }
+    v
 }
 
 #[allow(clippy::too_many_arguments)]

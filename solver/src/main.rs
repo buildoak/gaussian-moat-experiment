@@ -1,5 +1,5 @@
 use clap::Parser;
-use gaussian_moat_solver::angular::{run_angular, AngularConfig};
+use gaussian_moat_solver::angular::{run_angular, AngularConfig, PrimeSource};
 use gaussian_moat_solver::runner::{lower_bound_probe, upper_bound_probe, ProbeResult};
 
 #[derive(Debug, Parser)]
@@ -21,6 +21,11 @@ struct Args {
         help = "Path to GPRF binary prime file (skips internal sieve)"
     )]
     prime_file: Option<String>,
+    #[arg(
+        long = "stdin",
+        help = "Read raw GPRF records from stdin (pipe mode, mutually exclusive with --prime-file)"
+    )]
+    use_stdin: bool,
     #[arg(long)]
     verbose: bool,
     #[arg(long, help = "Emit a structured profile block after the run")]
@@ -30,6 +35,19 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
+    if args.use_stdin && args.prime_file.is_some() {
+        eprintln!("error: --stdin and --prime-file are mutually exclusive");
+        std::process::exit(1);
+    }
+
+    let prime_source = if args.use_stdin {
+        PrimeSource::Stdin
+    } else if let Some(ref path) = args.prime_file {
+        PrimeSource::File(path.clone())
+    } else {
+        PrimeSource::InternalSieve
+    };
+
     if let Some(wedges) = args.angular {
         let config = AngularConfig {
             k_squared: args.k_squared,
@@ -37,7 +55,7 @@ fn main() {
             upper_bound: args.start_distance.is_some(),
             boundary_distance: args.start_distance.unwrap_or(0),
             norm_bound: args.norm_bound,
-            prime_file: args.prime_file.clone(),
+            prime_source,
         };
         let result = run_angular(&config);
         println!("=== Angular Probe Result ===");

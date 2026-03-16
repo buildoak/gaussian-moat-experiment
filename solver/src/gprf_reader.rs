@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io;
+use std::io::{self, BufReader, Read};
 
 use memmap2::Mmap;
 
@@ -162,3 +162,99 @@ impl<'a> Iterator for PrimeRangeIter<'a> {
 }
 
 impl<'a> ExactSizeIterator for PrimeRangeIter<'a> {}
+
+// ---------------------------------------------------------------------------
+// Streaming GPRF reader — works with File, Stdin, or any Read source.
+// Reads 16-byte records one at a time through a BufReader.
+// For stdin (pipe mode): skips header validation since the CUDA sieve
+// writes raw records without a GPRF header in --stdout mode.
+// For files: reads and validates the 64-byte GPRF header first.
+// ---------------------------------------------------------------------------
+
+pub struct GprfStreamReader<R: Read> {
+    reader: BufReader<R>,
+    records_read: u64,
+    pub norm_min: u64,
+    pub norm_max: u64,
+    pub header_count: u64,
+}
+
+impl GprfStreamReader<File> {
+    /// Open a GPRF file for streaming. Reads the 64-byte header, then
+    /// yields records one at a time via the Iterator impl.
+    pub fn open_file(path: &str) -> io::Result<Self> {
+        let file = File::open(path)?;
+        let mut reader = BufReader::with_capacity(64 * 1024, file);
+
+        // Read the 64-byte header
+        let mut hdr = [0u8; HEADER_SIZE];
+        reader.read_exact(&mut hdr)?;
+
+        let magic = u32::from_le_bytes(hdr[0..4].try_into().unwrap());
+        if magic != MAGIC {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Bad GPRF magic: 0x{:08X}, expected 0x{:08X}", magic, MAGIC),
+            ));
+        }
+
+        let version = u16::from_le_bytes(hdr[4..6].try_into().unwrap());
+        if version != 1 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Unsupported GPRF version: {}", version),
+            ));
+        }
+
+        let header_count = u64::from_le_bytes(hdr[8..16].try_into().unwrap());
+        let norm_min = u64::from_le_bytes(hdr[16..24].try_into().unwrap());
+        let norm_max = u64::from_le_bytes(hdr[24..32].try_into().unwrap());
+
+        Ok(Self {
+            reader,
+            records_read: 0,
+            norm_min,
+            norm_max,
+            header_count,
+        })
+    }
+}
+
+impl<R: Read> GprfStreamReader<R> {
+    /// Wrap any Read source for headerless streaming (raw 16-byte records).
+    /// Used for stdin pipe mode where the CUDA sieve writes records directly.
+    pub fn from_raw(source: R) -> Self {
+        Self {
+            reader: BufReader::with_capacity(64 * 1024, source),
+            records_read: 0,
+            norm_min: 0,
+            norm_max: 0,
+            header_count: 0,
+        }
+    }
+
+    pub fn records_read(&self) -> u64 {
+        self.records_read
+    }
+}
+
+impl<R: Read> Iterator for GprfStreamReader<R> {
+    type Item = GaussianPrime;
+
+    fn next(&mut self) -> Option<GaussianPrime> {
+        let mut buf = [0u8; RECORD_SIZE];
+        match self.reader.read_exact(&mut buf) {
+            Ok(()) => {}
+            Err(ref e) if e.kind() == io::ErrorKind::UnexpectedEof => return None,
+            Err(_) => return None,
+        }
+
+        let a = i32::from_le_bytes(buf[0..4].try_into().unwrap());
+        let b = i32::from_le_bytes(buf[4..8].try_into().unwrap());
+        let norm = u64::from_le_bytes(buf[8..16].try_into().unwrap());
+
+        self.records_read += 1;
+
+        Some(GaussianPrime { a, b, norm })
+    }
+}
