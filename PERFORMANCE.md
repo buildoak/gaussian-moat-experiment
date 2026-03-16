@@ -1,5 +1,7 @@
 # Performance Measurements
 
+> **See [README.md](README.md) for the narrative.** This file contains raw benchmark data, bottleneck analysis, and historical measurements retained as an appendix.
+
 All numbers are Gaussian primes/second unless noted otherwise.
 Measured February-March 2026.
 
