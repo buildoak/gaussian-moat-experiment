@@ -89,8 +89,7 @@ pub fn run_angular(config: &AngularConfig) -> AngularResult {
     let primes_processed = primes.len() as u64;
 
     // Phase 2: Route primes into per-wedge buffers
-    let overlap_start_norm = start_norm.max(1);
-    let buffers = route_primes(&primes, wedges_used, config.k_squared, overlap_start_norm);
+    let buffers = route_primes(&primes, wedges_used, config.k_squared);
     let progress = ProgressSignal::new(wedges_used);
     let uf_capacity = estimate_uf_capacity(primes_processed, wedges_used);
 

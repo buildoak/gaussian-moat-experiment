@@ -25,11 +25,9 @@ pub fn route_primes(
     primes: &[GaussianPrime],
     num_wedges: u32,
     k_squared: u64,
-    start_norm: u64,
 ) -> Vec<WedgeBuffer> {
     let wedges = num_wedges.max(1) as usize;
     let wedge_width = FRAC_PI_4 / wedges as f64;
-    let overlap_radians = (k_squared as f64).sqrt() / (start_norm as f64).sqrt().max(1.0);
 
     let mut buffers: Vec<WedgeBuffer> = (0..wedges)
         .map(|w| {
@@ -62,6 +60,8 @@ pub fn route_primes(
     for prime in primes {
         let (a, b) = canonical(prime.a, prime.b);
         let theta = (b as f64).atan2(a as f64);
+        let prime_norm = prime.norm.max(1) as f64;
+        let overlap_radians = (k_squared as f64).sqrt() / prime_norm.sqrt();
 
         let primary = ((theta / wedge_width).floor() as i64).clamp(0, wedges as i64 - 1) as usize;
 
