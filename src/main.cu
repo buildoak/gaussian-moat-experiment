@@ -258,7 +258,9 @@ static void run_sieve_mode(const Config& cfg,
         uint64_t* d_bucket_hits = nullptr;
         uint64_t* d_bucket_offsets = nullptr;
 
-        // Build large-prime buckets for this batch: O(large-primes + hits), consumed as O(hits/segment).
+        // Build large-prime buckets for this batch.
+        // Two-pass: count hits per segment, then fill bit positions.
+        // Cache 'first' values across batches to avoid repeated modular reductions.
         if (small_count < base_primes.size() && num_segs > 0u) {
             std::vector<uint32_t> seg_hit_counts(num_segs, 0u);
             const uint64_t start_odd = aligned_lo + 1u;
