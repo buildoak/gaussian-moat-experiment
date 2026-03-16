@@ -363,11 +363,11 @@ Five bugs found and fixed during the project. Documented here for future session
 
 ### Current Limitations
 
-**GPU occupancy at ~50%.** On A100, the sieve uses 32KB shared memory per block at 64 registers per thread, capping occupancy at roughly 50%. Halving the shared memory footprint (16KB per block) would allow more concurrent blocks per SM.
+**GPU occupancy at ~50%.** On A100 (SM 8.0), 256 threads/block at 64 regs/thread = 16,384 regs/block. With 65,536 regs/SM, the register limit caps at 4 blocks (1024 threads out of 2048 max) = 50% occupancy. On 4090 (SM 8.9), 32KB shared/block against 100KB/SM caps at 3 blocks (768 threads out of 1536 max) = 50%. Halving shared memory to 16KB helps on 4090 (100KB/16KB = 6 blocks, registers still cap at 4 -> 1024/1536 = ~67%) but **not** on A100 (164KB/16KB = 10 blocks, but registers still cap at 4 -> 1024/2048 = 50%). Improving past 50% on A100 requires reducing register pressure below 64/thread.
 
 **Zero CPU-GPU pipeline overlap.** Within the sieve, there is no overlap between batch processing stages. The CPU prepares base primes and bucket data, then the GPU runs, then the CPU copies results. CUDA stream double-buffering could overlap kernel execution with output D2H transfer and next-batch CPU preparation.
 
-**Sieve throughput degrades at scale.** At higher norms, prime density decreases (fewer primes per candidate) and base-prime generation takes longer. The 10^9 -> 10^15 -> 10^18 progression shows 6.67M -> 1.45M -> 1.33M primes/sec on the same hardware class.
+**Sieve throughput degrades at scale.** At higher norms, prime density decreases (fewer primes per candidate) and base-prime generation takes longer. On A100, the 10^9 -> 10^15 -> 10^18 progression shows 20.7M -> 4.0M -> 1.33M primes/sec. (Jetson numbers at 10^9 and 10^15 are 6.67M and 1.45M respectively -- do not mix hardware series.)
 
 **Cross-band boundary stitching not implemented.** The campaign script processes each band independently. Moat detection across band boundaries requires stitching -- the architecture supports it (upper-bound mode with start-distance) but the automation is not wired up.
 
@@ -377,7 +377,7 @@ Five bugs found and fixed during the project. Documented here for future session
 
 1. **CUDA stream double-buffering** (1.5-2x sieve throughput). Overlap kernel execution with output transfer and next-batch CPU prep. Currently zero batch overlap.
 
-2. **Halve shared memory per block** (~50% to ~80% GPU occupancy). Reduce from 32KB to 16KB, allowing more concurrent blocks per SM on A100/4090.
+2. **Halve shared memory per block** (50% to ~67% on 4090, no change on A100). Reduces 4090 binding constraint from shared memory (3 blocks) to registers (4 blocks). On A100, registers are already the bottleneck at 4 blocks -- smaller segments alone don't help. Pair with register reduction for A100 gains.
 
 3. **GPU-accelerated neighbor search** (potential 100-1000x connector speedup). A prototype in `gaussian-moat-solver-hybrid/` showed 924-1430x speedup on neighbor pair generation at k^2=8 using GPU spatial hash + CPU union-find. Not yet integrated.
 
@@ -399,20 +399,66 @@ The test infrastructure exists (CUDA unit tests, Rust integration tests, the k^2
 
 ## sqrt(36) Campaign Feasibility
 
-With the cab53c3 connector fix, the pipeline is balanced. Updated arithmetic:
+The campaign uses **upper-bound (UB) probing** -- Tsuchimura's trick. Instead of growing the connected component from the origin across the entire norm range [0, 6.4e15), we seed a synthetic origin at the boundary distance and verify that nothing escapes outward. This reduces the problem from scanning ~6.4 million bands to processing a single narrow shell.
+
+### Upper-Bound Probe Mechanics
+
+A UB probe at `--start-distance X` with k^2=36 (k=6):
+
+1. **Start norm:** `upper_bound_start_norm(36, X)` = `(X - 6)^2` (from `angular.rs`)
+2. **Boundary plus k:** `ceil_radius_sum_sq(X^2, 36)` = `(X + 6)^2` -- all primes below this norm are auto-connected to the synthetic origin
+3. **Moat threshold:** `ceil_radius_sum_sq(farthest_norm, 36)` -- when processing passes this norm without extending the component, moat is detected
+4. **Effective shell width:** From `(X-6)^2` to `(X+6)^2` ≈ 24X norms. The BandProcessor's eviction window means only this sliding shell is in memory at any time.
+
+### Known-Boundary Campaign (sqrt(36), Tsuchimura boundary ≈ 80,015,782)
+
+**Shell parameters at X = 80,015,782:**
+
+- Shell width: 24 * 80,015,782 ≈ 1.92e9 norms
+- Prime density at norm ~6.4e15: 1 / (2 * ln(6.4e15)) ≈ 1/72.8 primes per norm
+- Primes in shell: ~26.4M primes
+
+**Single UB probe time on RTX 4090:**
+
+- Sieve: 26.4M primes at 4.84M primes/sec ≈ **5.5s**
+- Connector: 26.4M primes at 3.9M primes/sec ≈ **6.8s**
+- **Total: ~12s** for a single probe confirming the moat
+
+**Single UB probe on Jetson Orin Nano:**
+
+- Sieve: 26.4M primes at 1.45M primes/sec ≈ 18.2s
+- Connector: 26.4M primes at 1.7M primes/sec ≈ 15.5s
+- **Total: ~34s**
+
+### Blind Search (boundary unknown)
+
+If we don't know the boundary distance, use progressive UB probes at geometrically increasing distances (1000, 2000, 4000, ..., 80M):
+
+- Doublings to reach 80M from 1000: log2(80,000) ≈ 17 probes
+- Each probe i at distance D_i has shell width 24 * D_i. Total primes across all probes is dominated by the final probe (geometric series sums to ~2x the largest term).
+- **Total time: ~25s on single 4090** (~2x the final probe)
+- If boundary were at 200M: ~18 probes, ~30s total
+
+### Why UB vs LB
+
+The lower-bound (LB) approach processes ALL primes in [0, 6.4e15) -- approximately 139 billion Gaussian primes across 6.4 million bands. The upper-bound approach processes only the ~26M primes in the boundary shell. The ratio is approximately **5,000x less work**.
+
+### LB Estimates (for reference -- theoretical lower-bound cost)
+
+If the campaign were run in lower-bound mode (grow from origin, process entire norm range):
 
 - **Total norm range:** [0, 6.4e15), at 10^9 norms/band = 6.4 million bands
-- **Per band at 10^15 scale:** ~14.5M primes, ~3.6s sieve
-- **Connector per band:** ~8.6s on Jetson (1.7M/sec), ~3.7s on 4090 (3.9M/sec)
+- **Per band at 10^15 scale:** ~14.5M primes, sieve ~3.0s, connector ~3.7s on 4090
+- **RTX 4090:** ~6.7s/band, ~43M seconds total (~1.4 years). Unfeasible single-GPU.
+- **10x 4090s with 10x connector speedup:** ~30 days at ~$3K cloud cost.
 
-**Estimated campaign time:**
+### Critical Path
 
-- **Jetson Orin Nano:** ~12.2s/band, ~78M seconds total (~2.5 years). Unfeasible as sole compute.
-- **RTX 4090:** ~7.3s/band, ~47M seconds total (~1.5 years). Unfeasible single-GPU.
-- **Single 4090 with 10x connector speedup:** ~4.0s/band, ~25.6M seconds (~297 days). Approaching feasibility.
-- **10x 4090s with 10x connector speedup:** ~30 days. Feasible at ~$3K cloud cost.
+With UB probing, the campaign is **already feasible on a single 4090 in under a minute.** The critical remaining work is:
 
-**Critical path:** The connector must get 10-100x faster to make the campaign practical. The GPU spatial hash prototype (Option C hybrid) showed 924-1430x speedup on neighbor pair generation -- integrating this is the highest-leverage optimization. Once the connector can process a band in ~0.4s instead of ~3.7s, a single 4090 completes sqrt(36) in ~1 month for ~$300.
+1. **Automation:** Wire up the UB probe into the campaign script with progressive distance doubling
+2. **Validation:** Cross-check the UB result against a partial LB run (e.g., first 10^12 norms) to confirm the boundary distance
+3. **Correctness gate:** Verify the moat location matches Tsuchimura's published result (distance ≈ 80,015,782)
 
 ---
 
