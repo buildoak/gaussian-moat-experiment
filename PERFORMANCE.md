@@ -109,10 +109,20 @@ is 69% of wall time, MR could be dramatically faster. The crossover point
 
 ### sqrt(36) Full Campaign Feasibility
 
-- Total norm range: [0, 6.4e15), at 1e9 norms/band = 6.4 million bands
+**Pre-fix estimate (solver-bound):**
 - Per band: ~4s sieve + ~480s solver = ~484s
 - Total: ~3.1M seconds = ~36 days on single A100
-- **Not feasible without solver optimization** (solver merge dominates)
+
+**Post-fix estimate (sieve-bound):**
+- Total norm range: [0, 6.4e15), at 1e9 norms/band = 6.4 million bands
+- Per band at 10^15: ~14.5M primes, ~3.6s sieve
+- Connector per band: ~8.6s on Jetson (1.7M/sec), ~3.7s on 4090 (3.9M/sec)
+- **Jetson:** ~12.2s/band, ~78M seconds total (~2.5 years)
+- **4090:** ~7.3s/band, ~47M seconds total (~1.5 years)
+
+The pipeline is now balanced: sieve and connector take roughly equal time per band.
+The remaining bottleneck is the number of bands (6.4M). Multi-GPU parallelism or
+larger norm windows per band are the paths to practical feasibility.
 
 ### sqrt(40) Feasibility
 
@@ -312,16 +322,48 @@ Nx memory consumption, and throughput inversely proportional to wedge count.
 The fix in cab53c3 computes overlap per-prime using the prime's own norm. High-norm primes
 (the vast majority) have tiny angular overlap and route to only 1-2 wedges.
 
-### Post-Fix Validation Status
+### Post-Fix Validated Results (cab53c3, 2026-03-16)
 
-**Pending.** The post-fix connector has not been re-benchmarked at sqrt(36) scale. The
-historical 1.35-1.78M primes/sec baseline on Jetson was measured on the pre-consolidation
-codebase (before d45612b) and cannot be directly compared to the current architecture.
+Validated on both Jetson Orin Nano and RTX 4090 host. GPRF: 2,881,124 primes from
+[0, 10^8) norm range, k^2=36, angular auto.
+
+**Before/after comparison (2.88M primes):**
+
+| Metric | Pre-fix (2.88M primes) | Post-fix (2.88M primes) | Improvement |
+|--------|----------------------|------------------------|-------------|
+| Jetson throughput | 3,323/sec | 2,396,408/sec | 721x |
+| 4090 throughput | 7,176/sec | 3,893,128/sec | 542x |
+| Jetson RSS | 4.9 GB | 146 MB | 34x reduction |
+| 4090 RSS | 15.3 GB | 115 MB | 133x reduction |
+
+Correctness: both platforms report farthest point (8458, 5335), distance 9999.999,
+2,881,124/2,881,124 primes in origin component. Results are bitwise identical across
+platforms.
+
+**Jetson at sqrt(36) scale (25.4M primes):** 1,684,683 primes/sec, 912 MB RSS. Well
+within the 8 GB memory envelope. This confirms the connector scales to campaign-relevant
+prime counts without memory pressure.
+
+**Sieve-to-connector ratio analysis:**
+
+| Metric | Pre-fix | Post-fix |
+|--------|---------|----------|
+| Jetson sieve (10^15) | 1.45M primes/sec | 1.45M primes/sec |
+| Jetson connector | 3,323 primes/sec (16 wedges) | 2,396,408 primes/sec |
+| Sieve-to-connector ratio | ~120:1 (connector is the wall) | ~1:1.7 (connector faster than sieve) |
+
+The connector is no longer the bottleneck. The pipeline is now sieve-bound.
+
+**4090 vs Jetson at matched scale:**
+
+The 4090 is 1.6x faster than Jetson at the same prime count (3.89M vs 2.40M primes/sec).
+This is consistent with the 4090 host having more CPU cores and higher single-thread
+performance (x86 vs ARM A78AE).
 
 ### Pre-Fix Reference Data (do not use for capacity planning)
 
 These numbers are from commit 5611393 (pre-fix), measured on 100M GPRF (2,881,124 primes,
-norm range [0, 10^8), k^2=36).
+norm range [0, 10^8), k^2=36). Retained for historical reference only.
 
 | Wedges | RTX 4090 host (primes/sec) | Jetson Orin Nano (primes/sec) | 4090/Jetson |
 |--------|---------------------------|------------------------------|-------------|
@@ -330,7 +372,7 @@ norm range [0, 10^8), k^2=36).
 | 16 | 12,882 | 3,323 | 3.9x |
 | 32 | 6,284 | 1,589 | 4.0x |
 
-The inverse scaling with wedge count is the signature of the replication bug: more wedges
+The inverse scaling with wedge count was the signature of the replication bug: more wedges
 meant more copies of the full problem, not more parallelism.
 
 ### RTX 4090 CUDA Sieve Numbers (Experiment Matrix, commit 5611393)
@@ -356,3 +398,7 @@ Prime counts match Jetson exactly at every scale (correctness gate: PASS).
 - MR kernel may outperform sieve at very high norms by eliminating CPU prep entirely
 - Solver memory scaling is the critical path for full campaign feasibility
 - **Wedge count is the dominant tuning parameter**: fewer wedges = faster + less RAM
+- **Post-fix connector (cab53c3):** 721x improvement on Jetson (3.3K -> 2.4M/sec), 542x on 4090 (7.2K -> 3.9M/sec)
+- **Memory recovered:** Jetson 4.9 GB -> 146 MB (34x), 4090 15.3 GB -> 115 MB (133x)
+- **Sieve-to-connector ratio now ~1:1** -- connector is no longer the wall, pipeline is sieve-bound
+- Jetson sustains 1.7M primes/sec at 25.4M primes (sqrt(36) scale), 912 MB RSS

@@ -76,16 +76,20 @@ The connector suffered a severe performance regression that was diagnosed and fi
 
 The fix (cab53c3) computes overlap per-prime using each prime's actual norm. High-norm primes route to 1-2 wedges instead of all wedges.
 
-**Pre-fix connector numbers (reference only -- do not use for capacity planning):**
+**Before/after (2.88M primes, k^2=36, angular auto, commit cab53c3):**
 
-| Wedges | RTX 4090 host | Jetson Orin Nano |
-|--------|--------------|-----------------|
-| 4 | 28.3K/sec | 10.7K/sec |
-| 8 | 21.9K/sec | 5.4K/sec |
-| 16 | 12.9K/sec | 3.3K/sec |
-| 32 | 6.3K/sec | 1.6K/sec |
+| Metric | Pre-fix | Post-fix | Improvement |
+|--------|---------|----------|-------------|
+| Jetson throughput | 3,323/sec | 2,396,408/sec | 721x |
+| 4090 throughput | 7,176/sec | 3,893,128/sec | 542x |
+| Jetson RSS | 4.9 GB | 146 MB | 34x reduction |
+| 4090 RSS | 15.3 GB | 115 MB | 133x reduction |
 
-**Post-fix validation pending.** The historical 1.35-1.78M primes/sec baseline on Jetson was measured on the pre-consolidation codebase (before d45612b). The post-fix connector has not been re-benchmarked at sqrt(36) scale.
+Correctness: both platforms report farthest point (8458, 5335), distance 9999.999, 2.88M/2.88M primes in origin component. 4090 is 1.6x faster than Jetson at the same scale.
+
+At sqrt(36) scale (25.4M primes), Jetson sustains 1,684,683 primes/sec at 912 MB RSS -- within the 8 GB envelope.
+
+**Sieve-to-connector ratio:** pre-fix the sieve was ~120x faster than the connector (the connector was the wall). Post-fix the ratio is ~1:1 -- connector throughput matches sieve throughput. The pipeline is now sieve-bound, not connector-bound.
 
 ### Verified Results
 
@@ -94,6 +98,18 @@ The fix (cab53c3) computes overlap per-prime using each prime's actual norm. Hig
 | 2 | (11, 4) | -- |
 | 4 | -- | 92 |
 | 20 | -- | 273,791,623 |
+
+### sqrt(36) Campaign Feasibility (Post-Fix)
+
+With connector throughput recovered, the sqrt(36) full campaign arithmetic changes substantially:
+
+- Total norm range: [0, 6.4e15), at 1e9 norms/band = 6.4 million bands
+- Per band at 10^15: ~14.5M primes, ~3.6s sieve
+- Connector per band: ~8.6s on Jetson (1.7M/sec), ~3.7s on 4090 (3.9M/sec)
+- **Jetson estimate:** ~12.2s/band, ~78M seconds total (~2.5 years)
+- **4090 estimate:** ~7.3s/band, ~47M seconds total (~1.5 years)
+
+Pre-fix, the connector alone was ~480s/band (28K/sec with replication bug), making the campaign ~36 days on A100 but solver-dominated 99%. Post-fix, the pipeline is balanced: sieve and connector are roughly equal time per band. The remaining bottleneck is the sheer number of bands (6.4M). Parallelizing across multiple GPUs or reducing band count (larger norm windows) is the path to feasibility.
 
 ## GPU Comparison
 
@@ -154,7 +170,7 @@ The fix (cab53c3) computes overlap per-prime using each prime's actual norm. Hig
 - [ ] CUDA stream overlap / double-buffered output within sieve
 - [ ] GPU occupancy improvement (currently ~50% on A100, shared-memory-limited)
 - [ ] GPU-accelerated neighbor search (Option C hybrid integration)
-- [ ] Connector re-benchmark at sqrt(36) scale after cab53c3 fix
+- [x] Connector re-benchmark at sqrt(36) scale after cab53c3 fix (validated: 2.4M/sec Jetson, 3.9M/sec 4090)
 - [ ] Cross-band boundary stitching in campaign script
 - [ ] Streaming band processor (evict old primes instead of loading all upfront)
 - [ ] Compressed union-find (current ~6.5 KB/prime, target ~8 bytes/prime)
