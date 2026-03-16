@@ -1,10 +1,14 @@
 use std::collections::HashMap;
 use std::f64::consts::FRAC_PI_4;
 use std::io;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
+
+use rayon::prelude::*;
 
 use crate::band::BandProcessor;
 use crate::gprf_reader::GprfStreamReader;
+use crate::prime_router::{route_primes, WedgeBuffer};
 use crate::sieve::{GaussianPrime, PrimeStream};
 use crate::stitcher::{stitch, OverlapPrime, WedgeResult};
 
@@ -47,28 +51,36 @@ pub fn run_angular(config: &AngularConfig) -> AngularResult {
     let wedges_used = effective_wedge_count(config.num_wedges);
     let norm_bound = effective_norm_bound(config.norm_bound, config.k_squared);
 
-    // Streaming architecture: route each prime to wedge BandProcessors on arrival.
-    // No bulk collection phase — primes flow through routing into processors immediately.
-    // Memory stays bounded by the band eviction window (~500K live primes per wedge).
+    // Parallel path: collect all primes into memory, route to per-wedge buffers,
+    // process wedges in parallel via rayon. Used for File and InternalSieve sources
+    // when num_wedges > 1. Stdin stays sequential (streaming + parallel needs channels).
     match &config.prime_source {
+        PrimeSource::Stdin => {
+            // Stdin: streaming-only (can't rewind or collect efficiently)
+            let stdin = io::stdin().lock();
+            let stream_reader = GprfStreamReader::from_raw(stdin);
+            eprintln!("angular: streaming from stdin (pipe mode, sequential)");
+            stream_primes(stream_reader, config, wedges_used, norm_bound, &start)
+        }
         PrimeSource::File(path) => {
             let stream_reader = GprfStreamReader::open_file(path).unwrap_or_else(|e| {
                 panic!("Failed to open prime file '{}': {}", path, e);
             });
             eprintln!(
-                "angular: streaming GPRF file '{}': header_count={}, norm range [{}, {}]",
+                "angular: GPRF file '{}': header_count={}, norm range [{}, {}]",
                 path,
                 stream_reader.header_count,
                 stream_reader.norm_min,
                 stream_reader.norm_max
             );
-            stream_primes(stream_reader, config, wedges_used, norm_bound, &start)
-        }
-        PrimeSource::Stdin => {
-            let stdin = io::stdin().lock();
-            let stream_reader = GprfStreamReader::from_raw(stdin);
-            eprintln!("angular: streaming from stdin (pipe mode)");
-            stream_primes(stream_reader, config, wedges_used, norm_bound, &start)
+            if wedges_used <= 1 {
+                eprintln!("angular: single wedge — streaming path");
+                stream_primes(stream_reader, config, wedges_used, norm_bound, &start)
+            } else {
+                // Collect all primes, then parallel wedge processing
+                let primes = collect_primes(stream_reader, norm_bound, &start);
+                parallel_wedges(primes, config, wedges_used, norm_bound, &start)
+            }
         }
         PrimeSource::InternalSieve => {
             let start_norm = if config.upper_bound {
@@ -81,10 +93,223 @@ pub fn run_angular(config: &AngularConfig) -> AngularResult {
             } else {
                 PrimeStream::new(norm_bound)
             };
-            stream_primes(stream, config, wedges_used, norm_bound, &start)
+            if wedges_used <= 1 {
+                eprintln!("angular: single wedge — streaming path");
+                stream_primes(stream, config, wedges_used, norm_bound, &start)
+            } else {
+                let primes = collect_primes(stream, norm_bound, &start);
+                parallel_wedges(primes, config, wedges_used, norm_bound, &start)
+            }
         }
     }
 }
+
+/// Collect all primes from an iterator into a Vec, applying norm_bound filter.
+fn collect_primes(
+    iter: impl Iterator<Item = GaussianPrime>,
+    norm_bound: u64,
+    start: &Instant,
+) -> Vec<GaussianPrime> {
+    let apply_bound = norm_bound > 0 && norm_bound < u64::MAX;
+    let mut primes = Vec::new();
+    for prime in iter {
+        if apply_bound && prime.norm > norm_bound {
+            continue;
+        }
+        primes.push(prime);
+        if primes.len() % (PROGRESS_INTERVAL as usize) == 0 {
+            eprintln!(
+                "angular progress: phase=collect primes={} elapsed={:.2}s",
+                primes.len(),
+                start.elapsed().as_secs_f64()
+            );
+        }
+    }
+    eprintln!(
+        "angular: collected {} primes in {:.2}s",
+        primes.len(),
+        start.elapsed().as_secs_f64()
+    );
+    primes
+}
+
+/// Parallel wedge processing: route primes to per-wedge buffers, then process
+/// each wedge independently in parallel using rayon. This is the production path
+/// for file/sieve sources with multiple wedges.
+fn parallel_wedges(
+    primes: Vec<GaussianPrime>,
+    config: &AngularConfig,
+    wedges_used: u32,
+    _norm_bound: u64,
+    start: &Instant,
+) -> AngularResult {
+    let primes_processed = primes.len() as u64;
+
+    // Phase 1: Route primes into per-wedge buffers (single-threaded, fast)
+    let buffers = route_primes(&primes, wedges_used, config.k_squared);
+    drop(primes); // free the original Vec — buffers own their copies now
+
+    let route_elapsed = start.elapsed().as_secs_f64();
+    eprintln!(
+        "angular: routed to {} wedges in {:.2}s",
+        wedges_used, route_elapsed
+    );
+
+    // Estimate per-wedge UF capacity from prime distribution
+    let uf_capacity = estimate_uf_capacity(primes_processed, wedges_used);
+
+    // Parallel progress tracking
+    let parallel_processed = AtomicU64::new(0);
+    let next_report = AtomicU64::new(PROGRESS_INTERVAL);
+
+    // Phase 2: Process wedges in parallel
+    let mut wedge_results: Vec<WedgeResult> = buffers
+        .into_par_iter()
+        .enumerate()
+        .map(|(wedge_id, buffer)| {
+            process_wedge_parallel(
+                wedge_id as u32,
+                wedges_used,
+                buffer,
+                config,
+                uf_capacity,
+                &parallel_processed,
+                &next_report,
+                start,
+            )
+        })
+        .collect();
+    wedge_results.sort_unstable_by_key(|wr| wr.wedge_id);
+
+    let process_elapsed = start.elapsed().as_secs_f64();
+    eprintln!(
+        "angular: parallel processing complete — {} primes across {} wedges in {:.2}s ({:.0} primes/s)",
+        primes_processed,
+        wedges_used,
+        process_elapsed,
+        primes_processed as f64 / process_elapsed.max(0.001)
+    );
+
+    // Phase 3: Stitch boundaries
+    let stitched = stitch(&wedge_results, wedges_used);
+
+    AngularResult {
+        farthest_a: stitched.farthest_a,
+        farthest_b: stitched.farthest_b,
+        farthest_distance: stitched.farthest_distance,
+        component_size: stitched.total_component_size,
+        primes_processed,
+        wedges_used,
+        elapsed: start.elapsed(),
+        moat_found: false, // parallel path does not do early moat detection per-wedge
+    }
+}
+
+/// Process a single wedge's primes within its own BandProcessor.
+/// Called from rayon par_iter — each invocation runs on its own thread.
+#[allow(clippy::too_many_arguments)]
+fn process_wedge_parallel(
+    wedge_id: u32,
+    num_wedges: u32,
+    buffer: WedgeBuffer,
+    config: &AngularConfig,
+    uf_capacity: usize,
+    parallel_processed: &AtomicU64,
+    next_report: &AtomicU64,
+    start: &Instant,
+) -> WedgeResult {
+    let resume_norm = config.resume_farthest_norm;
+    let mut band = if config.upper_bound {
+        BandProcessor::new_upper_bound_with_capacity(
+            config.k_squared,
+            config.boundary_distance,
+            uf_capacity,
+        )
+    } else {
+        BandProcessor::new_with_capacity(config.k_squared, uf_capacity)
+    };
+    if resume_norm > 0 && !config.upper_bound {
+        band.set_resume_farthest_norm(resume_norm);
+    }
+
+    // Track shared primes for stitching
+    let mut left_slots: Vec<(i32, i32, u64, u32)> = Vec::new();
+    let mut right_slots: Vec<(i32, i32, u64, u32)> = Vec::new();
+    let mut non_native_slots: Vec<u32> = Vec::new();
+
+    for (idx, prime) in buffer.primes.iter().enumerate() {
+        let processed = parallel_processed.fetch_add(1, Ordering::Relaxed) + 1;
+        report_parallel_progress(processed, next_report, num_wedges, start);
+
+        let pr = band.process_prime_ext(prime);
+
+        let is_shared_left = buffer.shared_with_left[idx];
+        let is_shared_right = buffer.shared_with_right[idx];
+
+        if is_shared_left || is_shared_right {
+            band.pin_slot(pr.slot, pr.gen);
+        }
+        if is_shared_left {
+            left_slots.push((prime.a, prime.b, prime.norm, pr.slot));
+        }
+        if is_shared_right {
+            right_slots.push((prime.a, prime.b, prime.norm, pr.slot));
+        }
+
+        if !buffer.is_native[idx] {
+            non_native_slots.push(pr.slot);
+        }
+    }
+
+    build_wedge_result(
+        wedge_id,
+        num_wedges,
+        &mut band,
+        &left_slots,
+        &right_slots,
+        &non_native_slots,
+        config,
+    )
+}
+
+fn report_parallel_progress(
+    processed: u64,
+    next_report: &AtomicU64,
+    num_wedges: u32,
+    start: &Instant,
+) {
+    let mut target = next_report.load(Ordering::Relaxed);
+    while processed >= target {
+        match next_report.compare_exchange(
+            target,
+            target.saturating_add(PROGRESS_INTERVAL),
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        ) {
+            Ok(_) => {
+                eprintln!(
+                    "angular progress: phase=parallel wedge_primes={} wedges={} elapsed={:.2}s",
+                    processed,
+                    num_wedges,
+                    start.elapsed().as_secs_f64()
+                );
+                break;
+            }
+            Err(observed) => target = observed,
+        }
+    }
+}
+
+fn estimate_uf_capacity(primes_processed: u64, num_wedges: u32) -> usize {
+    let wedges = num_wedges.max(1) as usize;
+    let per_wedge = (primes_processed as usize).saturating_div(wedges).max(1);
+    // 2x headroom for overlap primes that appear in multiple wedges
+    (per_wedge * 2).clamp(8_192, 16_000_000)
+}
+
+// ---------------------------------------------------------------------------
+// Sequential streaming path (stdin + single-wedge fallback)
+// ---------------------------------------------------------------------------
 
 /// Core streaming loop: read primes one at a time, route to wedge(s), feed BandProcessors.
 /// No bulk Vec<GaussianPrime> collection. Memory is bounded by the sliding band window.
@@ -98,12 +323,10 @@ fn stream_primes(
     let apply_bound = norm_bound > 0 && norm_bound < u64::MAX;
     let num_wedges = wedges_used as usize;
     let wedge_width = FRAC_PI_4 / num_wedges as f64;
-    // P2: hoist k_sqrt out of the hot loop — was recomputed per-prime as (k_squared as f64).sqrt()
     let k_sqrt = (config.k_squared as f64).sqrt();
     let single_wedge = num_wedges == 1;
 
-    // Initialize per-wedge BandProcessors and tracking state
-    let initial_uf_cap = 500_000usize; // conservative; band eviction keeps live count bounded
+    let initial_uf_cap = 500_000usize;
     let resume_norm = config.resume_farthest_norm;
     let mut bands: Vec<BandProcessor> = (0..num_wedges)
         .map(|_| {
@@ -123,7 +346,6 @@ fn stream_primes(
         })
         .collect();
 
-    // Per-wedge overlap tracking for stitching
     let mut left_slots: Vec<Vec<(i32, i32, u64, u32)>> = vec![Vec::new(); num_wedges];
     let mut right_slots: Vec<Vec<(i32, i32, u64, u32)>> = vec![Vec::new(); num_wedges];
     let mut non_native_slots: Vec<Vec<u32>> = vec![Vec::new(); num_wedges];
@@ -147,22 +369,18 @@ fn stream_primes(
         }
 
         if single_wedge {
-            // Fast path: single wedge — skip ALL theta/overlap/routing math
             let pr = bands[0].process_prime_ext(&prime);
             if pr.moat.is_some() {
                 moat_found = true;
                 break;
             }
         } else {
-            // Route this prime to wedge(s) using angle-based routing
             let (ca, cb) = canonical(prime.a, prime.b);
             let theta = (cb as f64).atan2(ca as f64);
             let prime_norm = prime.norm.max(1) as f64;
-            // P2: use hoisted k_sqrt instead of recomputing sqrt(k_squared) per-prime
             let overlap_radians = k_sqrt / prime_norm.sqrt();
 
             let primary = ((theta / wedge_width).floor() as i64).clamp(0, num_wedges as i64 - 1) as usize;
-            // Multi-wedge: compute overlap range and feed each relevant wedge
             let lo_theta = (theta - overlap_radians).max(0.0);
             let hi_theta = (theta + overlap_radians).min(FRAC_PI_4);
             let lo_wedge = ((lo_theta / wedge_width).floor() as i64).clamp(0, num_wedges as i64 - 1) as usize;
@@ -182,7 +400,6 @@ fn stream_primes(
 
                 let pr = bands[w].process_prime_ext(&prime);
 
-                // Pin shared primes so they survive eviction (needed for stitching)
                 if shared_left || shared_right {
                     bands[w].pin_slot(pr.slot, pr.gen);
                 }
@@ -193,7 +410,6 @@ fn stream_primes(
                     right_slots[w].push((prime.a, prime.b, prime.norm, pr.slot));
                 }
 
-                // Track non-native primes for origin size correction
                 if !is_native {
                     non_native_slots[w].push(pr.slot);
                 }
@@ -208,7 +424,6 @@ fn stream_primes(
         primes_processed as f64 / start.elapsed().as_secs_f64().max(0.001)
     );
 
-    // Build wedge results for stitching
     let mut wedge_results: Vec<WedgeResult> = (0..num_wedges)
         .map(|wedge_id| {
             build_wedge_result(
@@ -224,7 +439,6 @@ fn stream_primes(
         .collect();
     wedge_results.sort_unstable_by_key(|wr| wr.wedge_id);
 
-    // Stitch boundaries
     let stitched = stitch(&wedge_results, wedges_used);
 
     AngularResult {
@@ -239,6 +453,10 @@ fn stream_primes(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
 /// Build a WedgeResult from a completed BandProcessor and its overlap tracking data.
 fn build_wedge_result(
     wedge_id: u32,
@@ -249,7 +467,6 @@ fn build_wedge_result(
     non_native_slot_data: &[u32],
     config: &AngularConfig,
 ) -> WedgeResult {
-    // Determine origin presence
     let origin_root = {
         let root = band.origin_find_root();
         if root == NO_SLOT { None } else { Some(root) }
@@ -260,7 +477,6 @@ fn build_wedge_result(
         wedge_id + 1 == num_wedges && origin_root.is_some()
     };
 
-    // Compute native origin size
     let native_origin_size = if has_origin {
         let total_origin = band.origin_component_size();
         if let Some(o_root) = origin_root {
@@ -279,14 +495,12 @@ fn build_wedge_result(
         0
     };
 
-    // Build a count of non-native primes per component root
     let mut non_native_per_root: HashMap<u32, u64> = HashMap::new();
     for &slot in non_native_slot_data {
         let root = band.find_root(slot);
         *non_native_per_root.entry(root).or_insert(0) += 1;
     }
 
-    // Build overlap component info with correct native sizes
     let mut overlap_component_info: HashMap<u32, (u64, i32, i32, u64)> = HashMap::new();
 
     let overlap_left = build_overlap_primes(
@@ -336,12 +550,9 @@ fn build_overlap_primes(
         let root = band.find_root(slot);
 
         if !overlap_component_info.contains_key(&root) {
-            // Compute native size: total UF size minus non-native primes in this component.
             let total_size = band.component_size(root);
             let non_native = non_native_per_root.get(&root).copied().unwrap_or(0);
             let mut native_size = total_size.saturating_sub(non_native);
-            // In UB mode, the origin component includes the synthetic origin (0,0)
-            // which is not a real prime. Subtract it.
             if upper_bound && has_origin && origin_root.map(|r| band.find_root(r)) == Some(root) {
                 native_size = native_size.saturating_sub(1);
             }
@@ -372,12 +583,6 @@ fn effective_wedge_count(requested: u32) -> u32 {
     }
     let cores = num_cpus::get();
     // 1 wedge per core: good parallelism without memory explosion.
-    // Each wedge allocates its own BandProcessor with grid hash map,
-    // node vectors, and union-find — overhead is ~O(primes/wedges) per
-    // wedge but with significant constant factors. At >32 wedges the
-    // per-wedge allocation overhead dominates: 124 wedges on A100 used
-    // 82.6 GB RSS for 13.7M primes (~6KB/prime vs expected ~16B).
-    // Cap at 32 to keep memory sane while still saturating cores.
     let base = cores;
     let ceiling = 32usize;
     base.max(4).min(ceiling) as u32
