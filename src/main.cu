@@ -224,8 +224,8 @@ static void run_sieve_mode(const Config& cfg,
     // Use actual norm position for density estimate, not just batch span
     double ln_norm = log((double)(cfg.norm_lo > 10 ? cfg.norm_lo + effective_span : effective_span));
     uint64_t est_primes = (uint64_t)((double)effective_span / ln_norm * 0.8) + 65536;
-    // A100 has 40GB VRAM; allow up to 120M entries (~2.9GB total for sieve+GP buffers)
-    if (est_primes > 120000000ULL) est_primes = 120000000ULL;
+    // Buffer cap: 160M entries (~3.8GB total for sieve+GP buffers). Safe for 24GB+ VRAM.
+    if (est_primes > 160000000ULL) est_primes = 160000000ULL;
     uint32_t max_sieve_output = (uint32_t)est_primes;
 
     uint64_t* d_sieve_out = nullptr;
@@ -256,6 +256,10 @@ static void run_sieve_mode(const Config& cfg,
     uint64_t current_lo = cfg.norm_lo;
     // Even-align
     if (current_lo % 2 != 0 && current_lo > 0) current_lo--;
+
+    // For streaming stdout mode: temp host buffer + running total
+    std::vector<GaussianPrime> host_batch_buf;
+    uint64_t total_gp_primes = 0;
 
     uint64_t total_sieve_primes = 0;
 
@@ -445,17 +449,31 @@ static void run_sieve_mode(const Config& cfg,
             }
 
             if (gp_count > 0) {
-                size_t prev = all_primes.size();
-                all_primes.resize(prev + gp_count);
-                cudaMemcpy(&all_primes[prev], d_gp_out, gp_count * sizeof(GaussianPrime),
-                           cudaMemcpyDeviceToHost);
+                if (cfg.use_stdout) {
+                    // Streaming: copy to temp buffer and write directly to stdout
+                    host_batch_buf.resize(gp_count);
+                    cudaMemcpy(host_batch_buf.data(), d_gp_out, gp_count * sizeof(GaussianPrime),
+                               cudaMemcpyDeviceToHost);
+                    for (const auto& gp : host_batch_buf) {
+                        fwrite(&gp.a, sizeof(gp.a), 1, stdout);
+                        fwrite(&gp.b, sizeof(gp.b), 1, stdout);
+                        fwrite(&gp.norm, sizeof(gp.norm), 1, stdout);
+                    }
+                    fflush(stdout);
+                } else {
+                    size_t prev = all_primes.size();
+                    all_primes.resize(prev + gp_count);
+                    cudaMemcpy(&all_primes[prev], d_gp_out, gp_count * sizeof(GaussianPrime),
+                               cudaMemcpyDeviceToHost);
+                }
+                total_gp_primes += gp_count;
             }
 
             total_sieve_primes += sieve_count;
 
-            fprintf(stderr, "  batch [%lu, %lu): sieve=%u, gp=%u, total=%zu\n",
+            fprintf(stderr, "  batch [%lu, %lu): sieve=%u, gp=%u, total=%lu\n",
                     (unsigned long)current_lo, (unsigned long)current_hi,
-                    sieve_count, gp_count, all_primes.size());
+                    sieve_count, gp_count, (unsigned long)total_gp_primes);
         }
 
         current_lo = current_hi;
@@ -466,7 +484,21 @@ static void run_sieve_mode(const Config& cfg,
             (unsigned long)total_sieve_primes);
 
     // Add inert primes p == 3 (mod 4), norm = p^2, on CPU.
-    generate_inert_primes(cfg.norm_lo, cfg.norm_hi, all_primes);
+    if (cfg.use_stdout) {
+        // Stream inert primes directly to stdout
+        std::vector<GaussianPrime> inert_buf;
+        generate_inert_primes(cfg.norm_lo, cfg.norm_hi, inert_buf);
+        for (const auto& gp : inert_buf) {
+            fwrite(&gp.a, sizeof(gp.a), 1, stdout);
+            fwrite(&gp.b, sizeof(gp.b), 1, stdout);
+            fwrite(&gp.norm, sizeof(gp.norm), 1, stdout);
+        }
+        fflush(stdout);
+        total_gp_primes += inert_buf.size();
+        fprintf(stderr, "[sieve] Streamed %lu inert primes\n", (unsigned long)inert_buf.size());
+    } else {
+        generate_inert_primes(cfg.norm_lo, cfg.norm_hi, all_primes);
+    }
 
     // Cleanup
     cudaFree(d_base_primes);
@@ -605,6 +637,12 @@ int main(int argc, char** argv) {
         gp.a = 1;
         gp.b = 1;
         gp.norm = 2;
+        if (cfg.use_stdout) {
+            fwrite(&gp.a, sizeof(gp.a), 1, stdout);
+            fwrite(&gp.b, sizeof(gp.b), 1, stdout);
+            fwrite(&gp.norm, sizeof(gp.norm), 1, stdout);
+            fflush(stdout);
+        }
         all_primes.push_back(gp);
     }
 
@@ -616,6 +654,8 @@ int main(int argc, char** argv) {
     }
 
     // --- Sort by (norm, a, b) on GPU ---
+    // Skip sort in stdout mode — primes were already streamed per-batch.
+    if (!cfg.use_stdout)
     {
         size_t n = all_primes.size();
         bool sort_ok = false;
@@ -665,14 +705,8 @@ int main(int argc, char** argv) {
 
     // --- Write output ---
     if (cfg.use_stdout) {
-        // Pipe mode: write raw 16-byte records (a:i32, b:i32, norm:u64, LE) to stdout.
-        // No GPRF header — the solver's stdin reader expects raw records.
-        for (const auto& gp : all_primes) {
-            fwrite(&gp.a, sizeof(gp.a), 1, stdout);
-            fwrite(&gp.b, sizeof(gp.b), 1, stdout);
-            fwrite(&gp.norm, sizeof(gp.norm), 1, stdout);
-        }
-        fflush(stdout);
+        // Already streamed per-batch in run_sieve_mode / run_mr_mode.
+        // Nothing to write here.
     } else {
         bool use_gprf = (cfg.output.size() >= 5 &&
                          cfg.output.compare(cfg.output.size() - 5, 5, ".gprf") == 0);
