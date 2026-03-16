@@ -28,15 +28,15 @@ The **step parameter k^2** determines which primes are neighbors. Two Gaussian p
 
 ### Why sqrt(36)?
 
-Tsuchimura (2005) proved computationally that for k^2 = 36, the walk from the origin gets stuck. The origin's connected component is finite, bounded at distance ~80 million from the origin. This required processing approximately 139 billion Gaussian primes. It is the current computational record.
+Tsuchimura (2004) proved computationally that for k^2 = 36, the walk from the origin gets stuck. The origin's connected component is finite. An upper bound of ~80,015,782 on the farthest reachable distance was established; the true farthest point may be smaller. It is the current computational record. (Note: the 139 billion prime figure belongs to the sqrt(32) lower-bound computation, not sqrt(36).)
 
 ### Why sqrt(40)?
 
-At k^2 = 36, the step vectors p(k) = 16 (the number of lattice points within the step circle). At k^2 = 40, p(k) jumps to 18. This transition changes the connectivity structure and is the next scientifically meaningful threshold. The norm range extends to 10^18, roughly 150x the computational work of sqrt(36).
+At k^2 = 36, the step vectors p(k) ≈ 14 (the number of lattice points within the step circle; Tsuchimura reports p(√36)=14). At k^2 = 40, p(k) jumps to 18. This transition changes the connectivity structure and is the next scientifically meaningful threshold. The norm range extends to 10^18, roughly 150x the computational work of sqrt(36).
 
 ### Upper-Bound vs Lower-Bound Probing
 
-Tsuchimura's key insight: you do not need to grow the connected component from the origin all the way out. Instead, start from a known boundary distance (the "start distance") and verify that no path escapes outward. This is the **upper-bound probe** -- seed a synthetic origin at the boundary and check that its connected component remains bounded. If it does, the true origin component cannot extend past that boundary either.
+Tsuchimura's key insight: you do not need to grow the connected component from the origin all the way out. The **upper-bound probe** works as follows: choose a distant Gaussian prime y; fictitiously assume ALL primes with |z| ≤ |y| are already connected to the origin (this only enlarges the component); then run the same sequential subgraph construction forward from |y|. If the algorithm terminates (the origin component root exits the processing band without finding further connections), then |y| is an upper bound on the farthest reachable distance. Because the assumption only enlarges the component, termination still proves the bound.
 
 This project implements both modes:
 - **Lower-bound:** grow from the origin, find the farthest reachable prime.
@@ -72,8 +72,8 @@ shared memory (32KB A100/4090,     + Parallel angular wedge decomp
     bucket-based, global mem
                                    Supports lower-bound (origin grow)
   Output: warp-level scan +        and upper-bound probe (Tsuchimura's
-  Cornacchia decomposition         trick: synthetic origin at boundary).
-  --> GPRF binary file
+  Cornacchia decomposition         trick: assume all primes ≤|y| connected,
+  --> GPRF binary file              prove termination from |y| = UB).
 ```
 
 ### GPRF Format
@@ -109,7 +109,7 @@ The Rust solver decomposes the first octant (0 to pi/4 radians) into angular wed
 
 3. **Boundary stitching** (`stitcher.rs`): After all wedges complete, shared primes in overlap zones are used to merge components across wedge boundaries. The stitcher maps component roots from adjacent wedges via the overlap primes and merges origin components.
 
-4. **Upper-bound mode:** Seeds a synthetic origin at (0, 0) and automatically connects all primes with norm < boundary_plus_k to it. The farthest reachable point from this synthetic origin determines the moat boundary.
+4. **Upper-bound mode:** Fictitiously assumes all primes with norm ≤ boundary_plus_k are already connected to the origin (this only enlarges the component). The algorithm then runs forward from that boundary; if the origin component root exits the processing band without finding further connections, the start distance is confirmed as an upper bound on the farthest reachable distance.
 
 ---
 
@@ -399,14 +399,14 @@ The test infrastructure exists (CUDA unit tests, Rust integration tests, the k^2
 
 ## sqrt(36) Campaign Feasibility
 
-The campaign uses **upper-bound (UB) probing** -- Tsuchimura's trick. Instead of growing the connected component from the origin across the entire norm range [0, 6.4e15), we seed a synthetic origin at the boundary distance and verify that nothing escapes outward. This reduces the problem from scanning ~6.4 million bands to processing a single narrow shell.
+The campaign uses **upper-bound (UB) probing** -- Tsuchimura's trick. Instead of growing the connected component from the origin across the entire norm range [0, 6.4e15), we choose a candidate distance X, fictitiously assume all primes with |z| ≤ X are connected to the origin, and run the algorithm forward from X. If the algorithm terminates without the component extending further, X is confirmed as an upper bound on the farthest reachable distance. This reduces the problem from scanning ~6.4 million bands to processing a single narrow shell.
 
 ### Upper-Bound Probe Mechanics
 
 A UB probe at `--start-distance X` with k^2=36 (k=6):
 
 1. **Start norm:** `upper_bound_start_norm(36, X)` = `(X - 6)^2` (from `angular.rs`)
-2. **Boundary plus k:** `ceil_radius_sum_sq(X^2, 36)` = `(X + 6)^2` -- all primes below this norm are auto-connected to the synthetic origin
+2. **Boundary plus k:** `ceil_radius_sum_sq(X^2, 36)` = `(X + 6)^2` -- all primes below this norm are fictitiously assumed connected to the origin (the UB assumption)
 3. **Moat threshold:** `ceil_radius_sum_sq(farthest_norm, 36)` -- when processing passes this norm without extending the component, moat is detected
 4. **Effective shell width:** From `(X-6)^2` to `(X+6)^2` ≈ 24X norms. The BandProcessor's eviction window means only this sliding shell is in memory at any time.
 
@@ -441,7 +441,7 @@ If we don't know the boundary distance, use progressive UB probes at geometrical
 
 ### Why UB vs LB
 
-The lower-bound (LB) approach processes ALL primes in [0, 6.4e15) -- approximately 139 billion Gaussian primes across 6.4 million bands. The upper-bound approach processes only the ~26M primes in the boundary shell. The ratio is approximately **5,000x less work**.
+The lower-bound (LB) approach processes ALL primes in [0, 6.4e15) -- on the order of hundreds of billions of Gaussian primes across 6.4 million bands (for context: Tsuchimura's sqrt(32) LB run generated ~139 billion primes; sqrt(36) would be larger). The upper-bound approach processes only the ~26M primes in the boundary shell. The ratio is approximately **5,000x less work**.
 
 ### LB Estimates (for reference -- theoretical lower-bound cost)
 
@@ -458,7 +458,7 @@ With UB probing, the campaign is **already feasible on a single 4090 in under a 
 
 1. **Automation:** Wire up the UB probe into the campaign script with progressive distance doubling
 2. **Validation:** Cross-check the UB result against a partial LB run (e.g., first 10^12 norms) to confirm the boundary distance
-3. **Correctness gate:** Verify the moat location matches Tsuchimura's published result (distance ≈ 80,015,782)
+3. **Correctness gate:** Verify the upper bound on farthest reachable distance matches Tsuchimura's published result (UB ≈ 80,015,782; the true farthest point is ≤ this value)
 
 ---
 
@@ -506,7 +506,7 @@ gaussian-moat-cuda/
 
 ## References
 
-- Tsuchimura, H. (2005). "Computational results for Gaussian moat problem." *Science and Technology*, Nihon University. Established the sqrt(36) computational record.
+- Tsuchimura, H. (2004). "Computational results for Gaussian moat problem." Technical Report METR 2004-13, Nihon University. Established the sqrt(36) upper bound (≤ 80,015,782) and sqrt(32) lower bound as the current computational records. (A journal version may have appeared in 2005.)
 - Gethner, Wagon, & Wick (1998). "A stroll through the Gaussian primes." *American Mathematical Monthly*. Introduced the Gaussian moat problem.
 - GPRF format: custom binary format defined in `src/gprf_writer.cuh` and `solver/src/gprf_reader.rs`. 64-byte header + 16 bytes per record (a: i32, b: i32, norm: u64).
 
