@@ -88,3 +88,57 @@ pub fn route_primes(
 
     buffers
 }
+
+/// Route a batch of primes into per-wedge vectors for streaming parallel processing.
+/// Vecs are cleared and refilled each call (no reallocation thanks to capacity reuse).
+/// Returns nothing — results are written into the mutable slice arguments.
+pub fn route_batch(
+    batch: &[GaussianPrime],
+    num_wedges: u32,
+    k_squared: u64,
+    wedge_assignments: &mut Vec<Vec<(usize, bool, bool, bool)>>,
+) {
+    let wedges = num_wedges.max(1) as usize;
+    let wedge_width = FRAC_PI_4 / wedges as f64;
+
+    for assignments in wedge_assignments.iter_mut() {
+        assignments.clear();
+    }
+
+    if wedges == 1 {
+        for (idx, _) in batch.iter().enumerate() {
+            wedge_assignments[0].push((idx, true, false, false));
+        }
+        return;
+    }
+
+    let k_sqrt = (k_squared as f64).sqrt();
+    for (idx, prime) in batch.iter().enumerate() {
+        let (a, b) = canonical(prime.a, prime.b);
+        let theta = (b as f64).atan2(a as f64);
+        let prime_norm = prime.norm.max(1) as f64;
+        let overlap_radians = k_sqrt / prime_norm.sqrt();
+
+        let primary = ((theta / wedge_width).floor() as i64).clamp(0, wedges as i64 - 1) as usize;
+
+        let lo_theta = (theta - overlap_radians).max(0.0);
+        let hi_theta = (theta + overlap_radians).min(FRAC_PI_4);
+        let lo_wedge = ((lo_theta / wedge_width).floor() as i64).clamp(0, wedges as i64 - 1) as usize;
+        let hi_wedge = if hi_theta >= FRAC_PI_4 {
+            wedges - 1
+        } else {
+            ((hi_theta / wedge_width).floor() as i64).clamp(0, wedges as i64 - 1) as usize
+        };
+
+        let start = lo_wedge.min(primary);
+        let end = hi_wedge.max(primary);
+        for w in start..=end {
+            wedge_assignments[w].push((
+                idx,
+                w == primary,
+                w > 0 && w - 1 >= start,
+                w + 1 < wedges && w + 1 <= end,
+            ));
+        }
+    }
+}

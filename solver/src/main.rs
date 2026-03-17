@@ -12,6 +12,17 @@ struct Args {
     #[arg(long = "norm-bound", default_value_t = 0)]
     norm_bound: u64,
     #[arg(
+        long = "batch-size",
+        default_value_t = 500_000,
+        help = "Batch size for streaming multi-wedge processing"
+    )]
+    batch_size: usize,
+    #[arg(
+        long,
+        help = "Force bulk-load path (loads all primes into memory before processing)"
+    )]
+    bulk: bool,
+    #[arg(
         long,
         help = "Number of angular wedges (0 = auto-detect from core count, omit for norm-stream mode)"
     )]
@@ -35,6 +46,16 @@ struct Args {
         help = "Resume LB continuation: origin component already reaches this norm (chunked campaign)"
     )]
     resume_farthest_norm: Option<u64>,
+    #[arg(
+        long = "resume-farthest-a",
+        help = "Resume LB: a-coordinate of the farthest point (required with --resume-farthest-norm)"
+    )]
+    resume_farthest_a: Option<i32>,
+    #[arg(
+        long = "resume-farthest-b",
+        help = "Resume LB: b-coordinate of the farthest point (required with --resume-farthest-norm)"
+    )]
+    resume_farthest_b: Option<i32>,
 }
 
 fn main() {
@@ -42,6 +63,15 @@ fn main() {
 
     if args.use_stdin && args.prime_file.is_some() {
         eprintln!("error: --stdin and --prime-file are mutually exclusive");
+        std::process::exit(1);
+    }
+
+    // Validate resume args: if norm is provided, coordinates must also be provided
+    let resume_norm = args.resume_farthest_norm.unwrap_or(0);
+    let resume_a = args.resume_farthest_a.unwrap_or(0);
+    let resume_b = args.resume_farthest_b.unwrap_or(0);
+    if resume_norm > 0 && (args.resume_farthest_a.is_none() || args.resume_farthest_b.is_none()) {
+        eprintln!("error: --resume-farthest-norm requires --resume-farthest-a and --resume-farthest-b");
         std::process::exit(1);
     }
 
@@ -60,8 +90,12 @@ fn main() {
             upper_bound: args.start_distance.is_some(),
             boundary_distance: args.start_distance.unwrap_or(0),
             norm_bound: args.norm_bound,
+            batch_size: args.batch_size,
+            bulk: args.bulk,
             prime_source,
-            resume_farthest_norm: args.resume_farthest_norm.unwrap_or(0),
+            resume_farthest_norm: resume_norm,
+            resume_farthest_a: resume_a,
+            resume_farthest_b: resume_b,
         };
         let result = run_angular(&config);
         let farthest_norm = (result.farthest_a as i64) * (result.farthest_a as i64)

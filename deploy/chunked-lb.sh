@@ -133,6 +133,8 @@ fi
 # ---------------------------------------------------------------------------
 CURRENT_NORM=$NORM_START
 FARTHEST_NORM=0
+FARTHEST_A=0
+FARTHEST_B=0
 CHUNK_NUM=0
 
 if [[ -n "${RESUME_FARTHEST_OVERRIDE:-}" ]] && [[ "$RESUME_FARTHEST_OVERRIDE" -gt 0 ]]; then
@@ -200,7 +202,7 @@ while (( CURRENT_NORM < NORM_MAX )); do
     # --- SOLVER PHASE ---
     SOLVER_ARGS="--k-squared $K_SQUARED --angular $WEDGES --prime-file $CHUNK_FILE --profile"
     if (( FARTHEST_NORM > 0 )); then
-        SOLVER_ARGS="$SOLVER_ARGS --resume-farthest-norm $FARTHEST_NORM"
+        SOLVER_ARGS="$SOLVER_ARGS --resume-farthest-norm $FARTHEST_NORM --resume-farthest-a $FARTHEST_A --resume-farthest-b $FARTHEST_B"
     fi
 
     SOLVE_START=$(date +%s%N)
@@ -229,9 +231,15 @@ while (( CURRENT_NORM < NORM_MAX )); do
 
     TOTAL_PRIMES=$((TOTAL_PRIMES + PRIMES_PROCESSED))
 
-    # Update farthest norm for next chunk
+    # Parse farthest point coordinates from RESULT line
+    NEW_FARTHEST_A=$(echo "$FARTHEST_POINT" | grep -oP '^\(\K[0-9-]+' || echo "0")
+    NEW_FARTHEST_B=$(echo "$FARTHEST_POINT" | grep -oP ',\K[0-9-]+' || echo "0")
+
+    # Update farthest norm and coordinates for next chunk
     if [[ "$NEW_FARTHEST" -gt "$FARTHEST_NORM" ]] 2>/dev/null; then
         FARTHEST_NORM=$NEW_FARTHEST
+        FARTHEST_A=$NEW_FARTHEST_A
+        FARTHEST_B=$NEW_FARTHEST_B
     fi
 
     log "  Solver: ${SOLVE_MS}ms, farthest_norm=${NEW_FARTHEST}, dist=${FARTHEST_DIST}, component=${COMPONENT_SIZE}, throughput=${PRIMES_PER_SEC}/s"
@@ -244,6 +252,8 @@ while (( CURRENT_NORM < NORM_MAX )); do
     cat > "$CHECKPOINT_FILE.tmp" <<CKPT
 CURRENT_NORM=$CHUNK_HI
 FARTHEST_NORM=$FARTHEST_NORM
+FARTHEST_A=$FARTHEST_A
+FARTHEST_B=$FARTHEST_B
 CHUNK_NUM=$((CHUNK_NUM + 1))
 CKPT
     mv "$CHECKPOINT_FILE.tmp" "$CHECKPOINT_FILE"

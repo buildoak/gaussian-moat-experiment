@@ -31,9 +31,12 @@ pub struct AngularConfig {
     pub batch_size: usize,
     pub bulk: bool,
     pub prime_source: PrimeSource,
-    /// Resume LB continuation: origin component already reaches at least this norm.
-    /// Primes with norm <= resume_farthest_norm auto-connect to origin.
+    /// Resume LB continuation: origin component's farthest point.
+    /// (norm, a, b) — seeds the origin at (a,b) for organic neighbor discovery.
+    /// When norm > 0, resume mode is active.
     pub resume_farthest_norm: u64,
+    pub resume_farthest_a: i32,
+    pub resume_farthest_b: i32,
 }
 
 pub struct AngularResult {
@@ -258,7 +261,7 @@ fn process_wedge_parallel(
         BandProcessor::new_with_capacity(config.k_squared, uf_capacity)
     };
     if resume_norm > 0 && !config.upper_bound {
-        band.set_resume_farthest_norm(resume_norm);
+        band.set_resume_farthest_norm(resume_norm, config.resume_farthest_a, config.resume_farthest_b);
     }
 
     // Track shared primes for stitching
@@ -357,6 +360,8 @@ fn stream_primes(
 
     let initial_uf_cap = 500_000usize;
     let resume_norm = config.resume_farthest_norm;
+    let resume_a = config.resume_farthest_a;
+    let resume_b = config.resume_farthest_b;
     let mut bands: Vec<BandProcessor> = (0..num_wedges)
         .map(|_| {
             let mut bp = if config.upper_bound {
@@ -369,7 +374,7 @@ fn stream_primes(
                 BandProcessor::new_with_capacity(config.k_squared, initial_uf_cap)
             };
             if resume_norm > 0 && !config.upper_bound {
-                bp.set_resume_farthest_norm(resume_norm);
+                bp.set_resume_farthest_norm(resume_norm, resume_a, resume_b);
             }
             bp
         })
@@ -494,6 +499,8 @@ fn stream_primes_parallel(
     let num_wedges = wedges_used as usize;
     let initial_uf_cap = 500_000usize;
     let resume_norm = config.resume_farthest_norm;
+    let resume_a = config.resume_farthest_a;
+    let resume_b = config.resume_farthest_b;
 
     // Per-wedge BandProcessors — persist across all batches
     let mut bands: Vec<BandProcessor> = (0..num_wedges)
@@ -508,7 +515,7 @@ fn stream_primes_parallel(
                 BandProcessor::new_with_capacity(config.k_squared, initial_uf_cap)
             };
             if resume_norm > 0 && !config.upper_bound {
-                bp.set_resume_farthest_norm(resume_norm);
+                bp.set_resume_farthest_norm(resume_norm, resume_a, resume_b);
             }
             bp
         })

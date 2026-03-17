@@ -16,3 +16,5 @@ tmp/
 .vscode/
 .idea/
 solver/target/
+__pycache__/
+data/
