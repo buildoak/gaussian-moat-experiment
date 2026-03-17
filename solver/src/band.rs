@@ -346,8 +346,16 @@ impl BandProcessor {
         // but we know the component reaches at least this far)
         self.farthest_dist_sq = norm;
         self.moat_threshold_norm = self.compute_moat_threshold(norm);
-        // Store the resume norm threshold for auto-connect in process_prime_ext
-        self.resume_connect_norm = ceil_radius_sum_sq(norm, self.k_squared);
+        // Store the resume norm threshold for auto-connect in process_prime_ext.
+        // The overlap zone is exactly the band width: primes within
+        // [norm - band_width, norm + band_width] could have been in the sliding
+        // band at the end of the previous chunk. Primes beyond that were never
+        // reachable. Using ceil_radius_sum_sq(norm, k²) here was wrong — it
+        // auto-connected primes ~32M norms beyond the resume point at k²=32,
+        // bridging over any moat smaller than that gap.
+        let band_width = ceil_radius_sum_sq(norm, self.k_squared)
+            .saturating_sub(floor_radius_diff_sq(norm, self.k_squared));
+        self.resume_connect_norm = norm.saturating_add(band_width);
     }
 
     pub fn stats(&self) -> BandStats {
