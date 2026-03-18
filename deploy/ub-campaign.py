@@ -58,6 +58,7 @@ class UBCampaign:
         self.k_squared = int(args.k_squared)
         self.k_float = math.sqrt(self.k_squared)
         self.k_int = math.ceil(self.k_float)
+        self.start_time = time.monotonic()
 
         self.work_dir = pathlib.Path(args.work_dir)
         self.work_dir.mkdir(parents=True, exist_ok=True)
@@ -69,6 +70,17 @@ class UBCampaign:
         self.total_solve_ms = 0
         self.global_iteration = 0
 
+    def _time_remaining_s(self) -> float:
+        """Return seconds remaining in the runtime budget, or float('inf') if no limit."""
+        limit = getattr(self.args, 'max_runtime_minutes', None)
+        if limit is None:
+            return float('inf')
+        elapsed = time.monotonic() - self.start_time
+        return max(0.0, limit * 60.0 - elapsed)
+
+    def _time_budget_exceeded(self) -> bool:
+        return self._time_remaining_s() <= 0.0
+
     def log(self, message: str, *, always: bool = False) -> None:
         if always or self.args.verbose:
             ts = datetime.datetime.now(datetime.timezone.utc).strftime("%H:%M:%S")
@@ -77,6 +89,13 @@ class UBCampaign:
     def _next_iteration(self) -> int:
         self.global_iteration += 1
         return self.global_iteration
+
+    def _time_remaining_s(self) -> float | None:
+        if self.args.max_runtime_minutes is None:
+            return None
+        limit_s = float(self.args.max_runtime_minutes) * 60.0
+        elapsed_s = time.monotonic() - self.start_time
+        return limit_s - elapsed_s
 
     def _append_record(self, record: Dict[str, object]) -> None:
         with self.results_jsonl.open("a", encoding="utf-8") as fh:
@@ -536,23 +555,211 @@ class UBCampaign:
             always=True,
         )
 
+        chunk_plan: List[Dict[str, object]] = []
+        for i, (chunk_start_dist, chunk_end_dist) in enumerate(chunks, start=1):
+            chunk_norm_lo = max(0, (chunk_start_dist - self.k_int) ** 2)
+            extra_margin = self.k_int if chunk_end_dist >= end else 0
+            chunk_norm_hi = (chunk_end_dist + self.k_int + extra_margin) ** 2
+            timeout_s = self._estimate_probe_timeout_s(chunk_norm_lo, chunk_norm_hi)
+            slot = "A" if (i % 2 == 1) else "B"
+            gprf_file = self.work_dir / f"ub_{safe_tag(self.args.tag)}_chunk{slot}.gprf"
+            chunk_plan.append(
+                {
+                    "index": i,
+                    "chunk_start_dist": chunk_start_dist,
+                    "chunk_end_dist": chunk_end_dist,
+                    "chunk_norm_lo": chunk_norm_lo,
+                    "chunk_norm_hi": chunk_norm_hi,
+                    "timeout_s": timeout_s,
+                    "gprf_file": gprf_file,
+                }
+            )
+
         farthest_norm = 0
         farthest_a = 0
         farthest_b = 0
+        previous_chunk_farthest_distance: float | None = None
         total_sieve_ms = 0
         total_solve_ms = 0
         total_generated = 0
         total_processed = 0
         best_farthest_distance = float(start)
 
-        for i, (chunk_start_dist, chunk_end_dist) in enumerate(chunks, start=1):
-            iteration = self._next_iteration()
-            chunk_norm_lo = max(0, (chunk_start_dist - self.k_int) ** 2)
-            extra_margin = self.k_int if chunk_end_dist >= end else 0
-            chunk_norm_hi = (chunk_end_dist + self.k_int + extra_margin) ** 2
+        prefetched_sieve: Dict[int, Tuple[int, int]] = {}
 
-            timeout_s = self._estimate_probe_timeout_s(chunk_norm_lo, chunk_norm_hi)
-            gprf_file = self.work_dir / f"ub_{safe_tag(self.args.tag)}_chunk{i}.gprf"
+        def _unlink_file(path: pathlib.Path) -> None:
+            if path.exists():
+                try:
+                    path.unlink()
+                except OSError:
+                    pass
+
+        def _build_sieve_cmd(chunk: Dict[str, object]) -> List[str]:
+            return [
+                self.args.sieve_bin,
+                "--norm-lo",
+                str(chunk["chunk_norm_lo"]),
+                "--norm-hi",
+                str(chunk["chunk_norm_hi"]),
+                "--output",
+                str(chunk["gprf_file"]),
+                "--mode",
+                "sieve",
+                "--k-squared",
+                str(self.k_squared),
+            ]
+
+        def _build_solver_cmd(chunk: Dict[str, object]) -> List[str]:
+            solver_cmd = [
+                self.args.solver_bin,
+                "--k-squared",
+                str(self.k_squared),
+                "--start-distance",
+                str(chunk["chunk_start_dist"]),
+                "--angular",
+                str(self.args.wedges),
+                "--prime-file",
+                str(chunk["gprf_file"]),
+                "--batch-size",
+                str(self.args.batch_size),
+                "--norm-bound",
+                str(chunk["chunk_norm_hi"]),
+                "--profile",
+            ]
+            # Resume args are active in UB mode and carry farthest progress across chunks.
+            if int(chunk["index"]) > 1 and farthest_norm > 0:
+                solver_cmd += [
+                    "--resume-farthest-norm",
+                    str(farthest_norm),
+                    "--resume-farthest-a",
+                    str(farthest_a),
+                    "--resume-farthest-b",
+                    str(farthest_b),
+                ]
+            return solver_cmd
+
+        def _start_sieve_async(chunk: Dict[str, object]) -> Dict[str, object]:
+            gprf = pathlib.Path(chunk["gprf_file"])
+            _unlink_file(gprf)
+            sieve_cmd = _build_sieve_cmd(chunk)
+            timeout_s = int(chunk["timeout_s"])
+            cmd_text = " ".join(sieve_cmd)
+            if self.args.verbose or self.args.dry_run:
+                self.log(f"CMD (timeout={timeout_s}s): {cmd_text}")
+            proc = subprocess.Popen(
+                sieve_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            return {
+                "chunk": chunk,
+                "proc": proc,
+                "cmd": sieve_cmd,
+                "start_t": time.monotonic(),
+                "timeout_s": timeout_s,
+            }
+
+        def _wait_sieve(handle: Dict[str, object]) -> Tuple[int, int]:
+            proc = handle["proc"]
+            timeout_s = max(1, int(handle["timeout_s"]))
+            cmd = handle["cmd"]
+            cmd_text = " ".join(cmd)
+            try:
+                out, err = proc.communicate(timeout=timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                proc.kill()
+                out, err = proc.communicate()
+                tail = ((out or "") + "\n" + (err or "")).strip()
+                if len(tail) > 4000:
+                    tail = tail[-4000:]
+                raise RuntimeError(f"timeout after {timeout_s}s: {cmd_text}\n{tail}") from exc
+
+            if proc.returncode != 0:
+                tail = ((out or "") + "\n" + (err or "")).strip()
+                if len(tail) > 4000:
+                    tail = tail[-4000:]
+                raise RuntimeError(f"command failed (exit {proc.returncode}): {cmd_text}\n{tail}")
+
+            sieve_ms = int((time.monotonic() - float(handle["start_t"])) * 1000)
+            chunk = handle["chunk"]
+            prime_count = self._count_primes(pathlib.Path(chunk["gprf_file"]))
+            return sieve_ms, prime_count
+
+        def _terminate_sieve(handle: Dict[str, object] | None) -> None:
+            if handle is None:
+                return
+            proc = handle["proc"]
+            if proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.communicate(timeout=5)
+                except Exception:
+                    pass
+            chunk = handle["chunk"]
+            _unlink_file(pathlib.Path(chunk["gprf_file"]))
+
+        for idx, chunk in enumerate(chunk_plan):
+            chunk_index = int(chunk["index"])
+            chunk_start_dist = int(chunk["chunk_start_dist"])
+            chunk_end_dist = int(chunk["chunk_end_dist"])
+            chunk_norm_lo = int(chunk["chunk_norm_lo"])
+            chunk_norm_hi = int(chunk["chunk_norm_hi"])
+            timeout_s = int(chunk["timeout_s"])
+            gprf_file = pathlib.Path(chunk["gprf_file"])
+
+            remaining_s = self._time_remaining_s()
+            if remaining_s <= 0:
+                iteration = self._next_iteration()
+                self.log(
+                    f"[chunked_sweep_{chunk_index}] it={iteration} max runtime reached; stopping cleanly",
+                    always=True,
+                )
+                _unlink_file(gprf_file)
+                record: Dict[str, object] = {
+                    "timestamp": iso_utc_now(),
+                    "phase": f"chunked_sweep_{chunk_index}",
+                    "iteration": iteration,
+                    "start_distance": int(chunk_start_dist),
+                    "shell_width": int(self.args.shell_width),
+                    "norm_lo": int(chunk_norm_lo),
+                    "norm_hi": int(chunk_norm_hi),
+                    "num_primes": 0,
+                    "farthest_point": "(0,0)",
+                    "farthest_a": 0,
+                    "farthest_b": 0,
+                    "farthest_norm": int(farthest_norm),
+                    "farthest_distance": float(best_farthest_distance),
+                    "component_size": 0,
+                    "sieve_ms": 0,
+                    "solve_ms": 0,
+                    "status": "time_limit",
+                    "tag": self.args.tag,
+                    "k_squared": self.k_squared,
+                    "wedges": int(self.args.wedges),
+                    "band_width": int(max(0, chunk_norm_hi - chunk_norm_lo)),
+                    "primes_generated": 0,
+                    "action": "stop_time_limit",
+                    "next_start_distance": int(chunk_start_dist),
+                    "next_shell_width": int(self.args.shell_width),
+                }
+                self._append_record(record)
+                self._print_sweep_summary(
+                    total_sieve_ms,
+                    total_solve_ms,
+                    total_generated,
+                    total_processed,
+                    False,
+                    best_farthest_distance,
+                )
+                return {"result": "time_limit", "boundary": int(best_farthest_distance)}
+
+            iteration = self._next_iteration()
+            self.log(
+                f"[chunked_sweep_{chunk_index}] it={iteration} dist=[{chunk_start_dist},{chunk_end_dist}] "
+                f"norm=[{chunk_norm_lo},{chunk_norm_hi}] timeout={timeout_s}s",
+                always=True,
+            )
 
             sieve_ms = 0
             solve_ms = 0
@@ -570,92 +777,67 @@ class UBCampaign:
             status = "inconclusive_edge"
             error_text = ""
 
-            sieve_cmd = [
-                self.args.sieve_bin,
-                "--norm-lo",
-                str(chunk_norm_lo),
-                "--norm-hi",
-                str(chunk_norm_hi),
-                "--output",
-                str(gprf_file),
-                "--mode",
-                "sieve",
-                "--k-squared",
-                str(self.k_squared),
-            ]
-
-            solver_cmd = [
-                self.args.solver_bin,
-                "--k-squared",
-                str(self.k_squared),
-                "--start-distance",
-                str(chunk_start_dist),
-                "--angular",
-                str(self.args.wedges),
-                "--prime-file",
-                str(gprf_file),
-                "--batch-size",
-                str(self.args.batch_size),
-                "--norm-bound",
-                str(chunk_norm_hi),
-                "--profile",
-            ]
-            # Note: resume args are only effective in LB mode. In UB mode
-            # (always active here since --start-distance is provided), the
-            # solver ignores them. Each UB chunk independently auto-connects
-            # primes below its start_distance and sweeps from there. A moat
-            # within any chunk's range will be detected without cross-chunk
-            # state transfer.
-            # Resume args left here for potential future LB chunked sweep support.
-            if i > 1 and farthest_norm > 0:
-                solver_cmd += [
-                    "--resume-farthest-norm",
-                    str(farthest_norm),
-                    "--resume-farthest-a",
-                    str(farthest_a),
-                    "--resume-farthest-b",
-                    str(farthest_b),
-                ]
-
-            self.log(
-                f"[chunked_sweep_{i}] it={iteration} dist=[{chunk_start_dist},{chunk_end_dist}] "
-                f"norm=[{chunk_norm_lo},{chunk_norm_hi}] timeout={timeout_s}s",
-                always=True,
-            )
-
-            if self.args.dry_run:
-                self._run_cmd(sieve_cmd, timeout_s)
-                self._run_cmd(solver_cmd, timeout_s)
-                parsed["component_size"] = 1
-                status = "inconclusive_edge"
+            if chunk_index in prefetched_sieve:
+                sieve_ms, file_prime_count = prefetched_sieve.pop(chunk_index)
+            elif self.args.dry_run:
+                self._run_cmd(_build_sieve_cmd(chunk), timeout_s)
             else:
                 try:
-                    t0 = time.monotonic()
-                    self._run_cmd(sieve_cmd, timeout_s)
-                    sieve_ms = int((time.monotonic() - t0) * 1000)
-
-                    file_prime_count = self._count_primes(gprf_file)
-
-                    t1 = time.monotonic()
-                    solver_output = self._run_cmd(solver_cmd, timeout_s)
-                    solve_ms = int((time.monotonic() - t1) * 1000)
-
-                    parsed = self._parse_solver_output(solver_output)
-                    status = self._classify_moat(parsed, chunk_norm_hi)
+                    sieve_handle = _start_sieve_async(chunk)
+                    sieve_ms, file_prime_count = _wait_sieve(sieve_handle)
                 except Exception as exc:
                     status = "error"
                     error_text = str(exc)
-                    self.log(f"[chunked_sweep_{i}] it={iteration} ERROR: {error_text}", always=True)
-                finally:
-                    if gprf_file.exists():
-                        try:
-                            gprf_file.unlink()
-                        except OSError:
-                            pass
+                    self.log(f"[chunked_sweep_{chunk_index}] it={iteration} ERROR: {error_text}", always=True)
+
+            next_sieve_handle: Dict[str, object] | None = None
+            next_chunk: Dict[str, object] | None = None
+            overlap = not getattr(self.args, 'no_overlap', False)
+            if overlap and status != "error" and idx + 1 < len(chunk_plan) and not self.args.dry_run:
+                next_chunk = chunk_plan[idx + 1]
+                try:
+                    next_sieve_handle = _start_sieve_async(next_chunk)
+                except Exception as exc:
+                    status = "error"
+                    error_text = str(exc)
+                    self.log(f"[chunked_sweep_{chunk_index}] it={iteration} ERROR: {error_text}", always=True)
+
+            solver_cmd = _build_solver_cmd(chunk)
+            if status != "error":
+                if self.args.dry_run:
+                    self._run_cmd(solver_cmd, timeout_s)
+                    parsed["component_size"] = 1
+                    status = "inconclusive_edge"
+                else:
+                    try:
+                        t1 = time.monotonic()
+                        solver_output = self._run_cmd(solver_cmd, timeout_s)
+                        solve_ms = int((time.monotonic() - t1) * 1000)
+                        parsed = self._parse_solver_output(solver_output)
+                        status = self._classify_moat(parsed, chunk_norm_hi)
+                    except Exception as exc:
+                        status = "error"
+                        error_text = str(exc)
+                        self.log(f"[chunked_sweep_{chunk_index}] it={iteration} ERROR: {error_text}", always=True)
+
+            _unlink_file(gprf_file)
 
             num_primes = int(parsed.get("primes_processed", 0))
             if num_primes <= 0:
                 num_primes = int(file_prime_count)
+
+            farthest_distance = float(parsed.get("farthest_distance", 0.0))
+            if status != "error" and previous_chunk_farthest_distance is not None:
+                if farthest_distance <= (previous_chunk_farthest_distance + self.k_float):
+                    self.log(
+                        f"[chunked_sweep_{chunk_index}] stalled farthest distance "
+                        f"{farthest_distance:.3f} <= prev {previous_chunk_farthest_distance:.3f} + k={self.k_float:.3f}; "
+                        "declaring moat",
+                        always=True,
+                    )
+                    status = "moat_confirmed"
+            if status != "error":
+                previous_chunk_farthest_distance = farthest_distance
 
             parsed_norm = int(parsed.get("farthest_norm", 0))
             if parsed_norm > farthest_norm:
@@ -663,9 +845,7 @@ class UBCampaign:
                 farthest_a = int(parsed.get("farthest_a", 0))
                 farthest_b = int(parsed.get("farthest_b", 0))
 
-            farthest_distance = float(parsed.get("farthest_distance", 0.0))
             best_farthest_distance = max(best_farthest_distance, farthest_distance)
-
             total_sieve_ms += int(sieve_ms)
             total_solve_ms += int(solve_ms)
             total_generated += int(file_prime_count)
@@ -673,7 +853,7 @@ class UBCampaign:
 
             record: Dict[str, object] = {
                 "timestamp": iso_utc_now(),
-                "phase": f"chunked_sweep_{i}",
+                "phase": f"chunked_sweep_{chunk_index}",
                 "iteration": iteration,
                 "start_distance": int(chunk_start_dist),
                 "shell_width": int(self.args.shell_width),
@@ -707,6 +887,7 @@ class UBCampaign:
             self._append_record(record)
 
             if status == "error":
+                _terminate_sieve(next_sieve_handle)
                 self._print_sweep_summary(
                     total_sieve_ms,
                     total_solve_ms,
@@ -718,6 +899,7 @@ class UBCampaign:
                 return {"result": "error", "boundary": int(chunk_start_dist)}
 
             if status == "moat_confirmed":
+                _terminate_sieve(next_sieve_handle)
                 self._print_sweep_summary(
                     total_sieve_ms,
                     total_solve_ms,
@@ -727,6 +909,59 @@ class UBCampaign:
                     farthest_distance,
                 )
                 return {"result": "moat_found", "boundary": int(farthest_distance)}
+
+            if next_sieve_handle is not None and next_chunk is not None:
+                try:
+                    next_sieve_ms, next_file_prime_count = _wait_sieve(next_sieve_handle)
+                    prefetched_sieve[int(next_chunk["index"])] = (next_sieve_ms, next_file_prime_count)
+                except Exception as exc:
+                    _terminate_sieve(next_sieve_handle)
+                    next_index = int(next_chunk["index"])
+                    next_start_dist = int(next_chunk["chunk_start_dist"])
+                    next_end_dist = int(next_chunk["chunk_end_dist"])
+                    next_norm_lo = int(next_chunk["chunk_norm_lo"])
+                    next_norm_hi = int(next_chunk["chunk_norm_hi"])
+                    next_iteration = self._next_iteration()
+                    error_text = str(exc)
+                    self.log(f"[chunked_sweep_{next_index}] it={next_iteration} ERROR: {error_text}", always=True)
+                    error_record: Dict[str, object] = {
+                        "timestamp": iso_utc_now(),
+                        "phase": f"chunked_sweep_{next_index}",
+                        "iteration": next_iteration,
+                        "start_distance": int(next_start_dist),
+                        "shell_width": int(self.args.shell_width),
+                        "norm_lo": int(next_norm_lo),
+                        "norm_hi": int(next_norm_hi),
+                        "num_primes": 0,
+                        "farthest_point": "(0,0)",
+                        "farthest_a": 0,
+                        "farthest_b": 0,
+                        "farthest_norm": 0,
+                        "farthest_distance": float(next_start_dist),
+                        "component_size": 0,
+                        "sieve_ms": 0,
+                        "solve_ms": 0,
+                        "status": "error",
+                        "tag": self.args.tag,
+                        "k_squared": self.k_squared,
+                        "wedges": int(self.args.wedges),
+                        "band_width": int(max(0, next_norm_hi - next_norm_lo)),
+                        "primes_generated": 0,
+                        "action": "stop_error",
+                        "next_start_distance": int(next_end_dist),
+                        "next_shell_width": int(self.args.shell_width),
+                        "error": error_text,
+                    }
+                    self._append_record(error_record)
+                    self._print_sweep_summary(
+                        total_sieve_ms,
+                        total_solve_ms,
+                        total_generated,
+                        total_processed,
+                        False,
+                        best_farthest_distance,
+                    )
+                    return {"result": "error", "boundary": int(next_start_dist)}
 
         self._print_sweep_summary(
             total_sieve_ms,
@@ -1042,6 +1277,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--sweep-mode", choices=["per-probe", "sweep"], default="per-probe")
     parser.add_argument("--wedges", type=int, default=None)
     parser.add_argument("--max-iterations", type=int, default=200)
+    parser.add_argument(
+        "--max-runtime-minutes",
+        type=float,
+        default=None,
+        help="Stop cleanly after this many minutes of runtime (default: no limit)",
+    )
     parser.add_argument("--bisect-tolerance", type=int, default=1_000_000)
     parser.add_argument(
         "--bisect-sweep-shell",
@@ -1049,6 +1290,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Sweep bisect shell control (50 => locate/verify 10x, refine 5x)",
     )
+    parser.add_argument("--no-overlap", action="store_true",
+                        help="Disable async sieve overlap (saves memory on constrained devices)")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
 
@@ -1093,6 +1336,8 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--wedges must be > 0")
     if args.max_iterations <= 0:
         parser.error("--max-iterations must be > 0")
+    if args.max_runtime_minutes is not None and args.max_runtime_minutes <= 0:
+        parser.error("--max-runtime-minutes must be > 0")
     if args.bisect_sweep_shell <= 0:
         parser.error("--bisect-sweep-shell must be > 0")
     if args.batch_size <= 0:

@@ -260,7 +260,7 @@ fn process_wedge_parallel(
     } else {
         BandProcessor::new_with_capacity(config.k_squared, uf_capacity)
     };
-    if resume_norm > 0 && !config.upper_bound {
+    if resume_norm > 0 {
         band.set_resume_farthest_norm(resume_norm, config.resume_farthest_a, config.resume_farthest_b);
     }
 
@@ -373,7 +373,7 @@ fn stream_primes(
             } else {
                 BandProcessor::new_with_capacity(config.k_squared, initial_uf_cap)
             };
-            if resume_norm > 0 && !config.upper_bound {
+            if resume_norm > 0 {
                 bp.set_resume_farthest_norm(resume_norm, resume_a, resume_b);
             }
             bp
@@ -514,7 +514,7 @@ fn stream_primes_parallel(
             } else {
                 BandProcessor::new_with_capacity(config.k_squared, initial_uf_cap)
             };
-            if resume_norm > 0 && !config.upper_bound {
+            if resume_norm > 0 {
                 bp.set_resume_farthest_norm(resume_norm, resume_a, resume_b);
             }
             bp
