@@ -13,7 +13,7 @@ import re
 import subprocess
 import sys
 import time
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 PLATFORM_PROFILES: Dict[str, Dict[str, object]] = {
     "jetson": {
@@ -100,6 +100,8 @@ class UBCampaign:
         parsed: Dict[str, object] = {
             "moat_found": "MOAT_FOUND" in text,
             "farthest_point": "(0,0)",
+            "farthest_a": 0,
+            "farthest_b": 0,
             "farthest_distance": 0.0,
             "farthest_norm": 0,
             "component_size": 0,
@@ -109,6 +111,8 @@ class UBCampaign:
         m = re.search(r"farthest point:\s*\((-?\d+)\s*,\s*(-?\d+)\)", text)
         if m:
             parsed["farthest_point"] = f"({m.group(1)},{m.group(2)})"
+            parsed["farthest_a"] = int(m.group(1))
+            parsed["farthest_b"] = int(m.group(2))
 
         m = re.search(r"farthest distance:\s*([0-9]+(?:\.[0-9]+)?)", text)
         if m:
@@ -134,6 +138,8 @@ class UBCampaign:
         if m:
             parsed["farthest_norm"] = int(m.group(1))
             parsed["farthest_point"] = f"({m.group(2)},{m.group(3)})"
+            parsed["farthest_a"] = int(m.group(2))
+            parsed["farthest_b"] = int(m.group(3))
             parsed["component_size"] = int(m.group(4))
             parsed["primes_processed"] = int(m.group(5))
 
@@ -151,8 +157,23 @@ class UBCampaign:
             return "moat_confirmed"
 
         if component_size > 0 and component_size < primes_processed:
+            farthest_norm = int(parsed.get("farthest_norm", 0))
             farthest_dist_int = int(float(parsed.get("farthest_distance", 0.0)))
             file_edge_dist = int(math.sqrt(norm_hi))
+
+            # Primary check: farthest_norm well below file edge.
+            # The component stopped growing while primes continued.
+            # The multi-wedge solver does not emit MOAT_FOUND, so we infer
+            # moat from the gap between farthest_norm and norm_hi.
+            if farthest_norm > 0 and farthest_norm < norm_hi:
+                # Gap = norms between farthest and file edge.
+                # If the gap is at least 1% of the file span, the component
+                # genuinely stopped — not just barely at the edge.
+                gap_fraction = (norm_hi - farthest_norm) / max(1, norm_hi)
+                if gap_fraction > 0.01:
+                    return "moat_confirmed"
+
+            # Fallback: distance-based check (original heuristic for narrow bands)
             if farthest_dist_int < 0.9 * file_edge_dist:
                 return "moat_confirmed"
 
@@ -211,6 +232,29 @@ class UBCampaign:
         # 500K primes/sec conservative estimate, 2x safety margin
         estimate_s = (num_primes_estimate / 500_000.0) * 2.0
         return int(math.ceil(max(300.0, min(3600.0, estimate_s))))
+
+    @staticmethod
+    def _print_sweep_summary(
+        sieve_ms: int,
+        solve_ms: int,
+        primes_generated: int,
+        primes_processed: int,
+        moat_found: bool,
+        farthest_distance: float,
+    ) -> None:
+        total_ms = int(sieve_ms) + int(solve_ms)
+        total_s = total_ms / 1000.0
+        throughput = 0.0 if total_s <= 0 else (float(primes_processed) / total_s)
+        moat_label = "MOAT_FOUND" if moat_found else "NO_MOAT_IN_RANGE"
+
+        print("=== SWEEP SUMMARY ===")
+        print(f"sieve time (s): {sieve_ms / 1000.0:.3f}")
+        print(f"solve time (s): {solve_ms / 1000.0:.3f}")
+        print(f"total time (s): {total_s:.3f}")
+        print(f"primes generated: {int(primes_generated)}")
+        print(f"primes processed: {int(primes_processed)}")
+        print(f"effective throughput (primes/sec): {throughput:.1f}")
+        print(f"moat result: {moat_label} distance={float(farthest_distance):.3f}")
 
     def _run_cmd(self, cmd: list[str], timeout_s: int) -> str:
         cmd_text = " ".join(cmd)
@@ -442,7 +486,425 @@ class UBCampaign:
             "iterations": max_iters,
         }
 
+    def _compute_chunks(self, start: int, end: int, max_primes: int) -> List[Tuple[int, int]]:
+        chunks: List[Tuple[int, int]] = []
+        current = int(start)
+
+        while current <= end:
+            chunk_norm_lo = max(0, (current - self.k_int) ** 2)
+            lo = current
+            hi = int(end)
+            best = current
+            found_fit = False
+
+            while lo <= hi:
+                mid = (lo + hi) // 2
+                extra_margin = self.k_int if mid >= end else 0
+                chunk_norm_hi = (mid + self.k_int + extra_margin) ** 2
+                est = self._estimate_prime_count(chunk_norm_lo, chunk_norm_hi)
+
+                if est <= max_primes:
+                    best = mid
+                    found_fit = True
+                    lo = mid + 1
+                else:
+                    hi = mid - 1
+
+            if not found_fit:
+                best = current
+
+            chunks.append((current, best))
+            if best >= end:
+                break
+
+            next_start = max(start, best - self.k_int)
+            if next_start <= current:
+                next_start = current + 1
+            current = next_start
+
+        return chunks
+
+    def _chunked_sweep(self, start: int, end: int, full_norm_lo: int, full_norm_hi: int) -> Dict[str, object]:
+        """Sweep in chunks when a full-range sweep exceeds the prime cap."""
+        max_primes = 150_000_000
+        chunks = self._compute_chunks(start, end, max_primes)
+        if not chunks:
+            return {"result": "no_moat_in_range", "boundary": int(end)}
+
+        self.log(
+            f"sweep exceeds cap, using {len(chunks)} chunks for norm=[{full_norm_lo},{full_norm_hi}]",
+            always=True,
+        )
+
+        farthest_norm = 0
+        farthest_a = 0
+        farthest_b = 0
+        total_sieve_ms = 0
+        total_solve_ms = 0
+        total_generated = 0
+        total_processed = 0
+        best_farthest_distance = float(start)
+
+        for i, (chunk_start_dist, chunk_end_dist) in enumerate(chunks, start=1):
+            iteration = self._next_iteration()
+            chunk_norm_lo = max(0, (chunk_start_dist - self.k_int) ** 2)
+            extra_margin = self.k_int if chunk_end_dist >= end else 0
+            chunk_norm_hi = (chunk_end_dist + self.k_int + extra_margin) ** 2
+
+            timeout_s = self._estimate_probe_timeout_s(chunk_norm_lo, chunk_norm_hi)
+            gprf_file = self.work_dir / f"ub_{safe_tag(self.args.tag)}_chunk{i}.gprf"
+
+            sieve_ms = 0
+            solve_ms = 0
+            file_prime_count = 0
+            parsed: Dict[str, object] = {
+                "moat_found": False,
+                "farthest_point": "(0,0)",
+                "farthest_a": 0,
+                "farthest_b": 0,
+                "farthest_distance": float(chunk_start_dist),
+                "farthest_norm": 0,
+                "component_size": 0,
+                "primes_processed": 0,
+            }
+            status = "inconclusive_edge"
+            error_text = ""
+
+            sieve_cmd = [
+                self.args.sieve_bin,
+                "--norm-lo",
+                str(chunk_norm_lo),
+                "--norm-hi",
+                str(chunk_norm_hi),
+                "--output",
+                str(gprf_file),
+                "--mode",
+                "sieve",
+                "--k-squared",
+                str(self.k_squared),
+            ]
+
+            solver_cmd = [
+                self.args.solver_bin,
+                "--k-squared",
+                str(self.k_squared),
+                "--start-distance",
+                str(chunk_start_dist),
+                "--angular",
+                str(self.args.wedges),
+                "--prime-file",
+                str(gprf_file),
+                "--batch-size",
+                str(self.args.batch_size),
+                "--norm-bound",
+                str(chunk_norm_hi),
+                "--profile",
+            ]
+            # Note: resume args are only effective in LB mode. In UB mode
+            # (always active here since --start-distance is provided), the
+            # solver ignores them. Each UB chunk independently auto-connects
+            # primes below its start_distance and sweeps from there. A moat
+            # within any chunk's range will be detected without cross-chunk
+            # state transfer.
+            # Resume args left here for potential future LB chunked sweep support.
+            if i > 1 and farthest_norm > 0:
+                solver_cmd += [
+                    "--resume-farthest-norm",
+                    str(farthest_norm),
+                    "--resume-farthest-a",
+                    str(farthest_a),
+                    "--resume-farthest-b",
+                    str(farthest_b),
+                ]
+
+            self.log(
+                f"[chunked_sweep_{i}] it={iteration} dist=[{chunk_start_dist},{chunk_end_dist}] "
+                f"norm=[{chunk_norm_lo},{chunk_norm_hi}] timeout={timeout_s}s",
+                always=True,
+            )
+
+            if self.args.dry_run:
+                self._run_cmd(sieve_cmd, timeout_s)
+                self._run_cmd(solver_cmd, timeout_s)
+                parsed["component_size"] = 1
+                status = "inconclusive_edge"
+            else:
+                try:
+                    t0 = time.monotonic()
+                    self._run_cmd(sieve_cmd, timeout_s)
+                    sieve_ms = int((time.monotonic() - t0) * 1000)
+
+                    file_prime_count = self._count_primes(gprf_file)
+
+                    t1 = time.monotonic()
+                    solver_output = self._run_cmd(solver_cmd, timeout_s)
+                    solve_ms = int((time.monotonic() - t1) * 1000)
+
+                    parsed = self._parse_solver_output(solver_output)
+                    status = self._classify_moat(parsed, chunk_norm_hi)
+                except Exception as exc:
+                    status = "error"
+                    error_text = str(exc)
+                    self.log(f"[chunked_sweep_{i}] it={iteration} ERROR: {error_text}", always=True)
+                finally:
+                    if gprf_file.exists():
+                        try:
+                            gprf_file.unlink()
+                        except OSError:
+                            pass
+
+            num_primes = int(parsed.get("primes_processed", 0))
+            if num_primes <= 0:
+                num_primes = int(file_prime_count)
+
+            parsed_norm = int(parsed.get("farthest_norm", 0))
+            if parsed_norm > farthest_norm:
+                farthest_norm = parsed_norm
+                farthest_a = int(parsed.get("farthest_a", 0))
+                farthest_b = int(parsed.get("farthest_b", 0))
+
+            farthest_distance = float(parsed.get("farthest_distance", 0.0))
+            best_farthest_distance = max(best_farthest_distance, farthest_distance)
+
+            total_sieve_ms += int(sieve_ms)
+            total_solve_ms += int(solve_ms)
+            total_generated += int(file_prime_count)
+            total_processed += int(num_primes)
+
+            record: Dict[str, object] = {
+                "timestamp": iso_utc_now(),
+                "phase": f"chunked_sweep_{i}",
+                "iteration": iteration,
+                "start_distance": int(chunk_start_dist),
+                "shell_width": int(self.args.shell_width),
+                "norm_lo": int(chunk_norm_lo),
+                "norm_hi": int(chunk_norm_hi),
+                "num_primes": int(num_primes),
+                "farthest_point": str(parsed.get("farthest_point", "(0,0)")),
+                "farthest_a": int(parsed.get("farthest_a", 0)),
+                "farthest_b": int(parsed.get("farthest_b", 0)),
+                "farthest_norm": int(parsed.get("farthest_norm", 0)),
+                "farthest_distance": farthest_distance,
+                "component_size": int(parsed.get("component_size", 0)),
+                "sieve_ms": int(sieve_ms),
+                "solve_ms": int(solve_ms),
+                "status": status,
+                "tag": self.args.tag,
+                "k_squared": self.k_squared,
+                "wedges": int(self.args.wedges),
+                "band_width": int(max(0, chunk_norm_hi - chunk_norm_lo)),
+                "primes_generated": int(file_prime_count),
+                "action": "continue_chunked_sweep",
+                "next_start_distance": int(chunk_end_dist),
+                "next_shell_width": int(self.args.shell_width),
+            }
+            if status == "moat_confirmed":
+                record["action"] = "stop_moat"
+            elif status == "error":
+                record["action"] = "stop_error"
+            if error_text:
+                record["error"] = error_text
+            self._append_record(record)
+
+            if status == "error":
+                self._print_sweep_summary(
+                    total_sieve_ms,
+                    total_solve_ms,
+                    total_generated,
+                    total_processed,
+                    False,
+                    best_farthest_distance,
+                )
+                return {"result": "error", "boundary": int(chunk_start_dist)}
+
+            if status == "moat_confirmed":
+                self._print_sweep_summary(
+                    total_sieve_ms,
+                    total_solve_ms,
+                    total_generated,
+                    total_processed,
+                    True,
+                    farthest_distance,
+                )
+                return {"result": "moat_found", "boundary": int(farthest_distance)}
+
+        self._print_sweep_summary(
+            total_sieve_ms,
+            total_solve_ms,
+            total_generated,
+            total_processed,
+            False,
+            best_farthest_distance,
+        )
+        return {"result": "no_moat_in_range", "boundary": int(end)}
+
+    def run_progressive_sweep(self) -> Dict[str, object]:
+        """Wide-band progressive: one sieve + one solver for the full range."""
+        start = int(self.args.start_distance)
+        end = int(self.args.ceiling)
+
+        norm_lo = max(0, (start - self.k_int) ** 2)
+        norm_hi = (end + self.k_int + self.k_int) ** 2
+        est_primes = self._estimate_prime_count(norm_lo, norm_hi)
+        if est_primes > 150_000_000:
+            self.log(
+                f"[sweep] estimated primes {est_primes/1e6:.1f}M exceed 150.0M cap; switching to chunked sweep",
+                always=True,
+            )
+            return self._chunked_sweep(start, end, norm_lo, norm_hi)
+
+        iteration = self._next_iteration()
+        gprf_file = self.work_dir / f"ub_{safe_tag(self.args.tag)}_sweep.gprf"
+        timeout_s = self._estimate_probe_timeout_s(norm_lo, norm_hi)
+
+        sieve_ms = 0
+        solve_ms = 0
+        file_prime_count = 0
+        parsed: Dict[str, object] = {
+            "moat_found": False,
+            "farthest_point": "(0,0)",
+            "farthest_a": 0,
+            "farthest_b": 0,
+            "farthest_distance": float(start),
+            "farthest_norm": 0,
+            "component_size": 0,
+            "primes_processed": 0,
+        }
+        status = "inconclusive_edge"
+        error_text = ""
+
+        sieve_cmd = [
+            self.args.sieve_bin,
+            "--norm-lo",
+            str(norm_lo),
+            "--norm-hi",
+            str(norm_hi),
+            "--output",
+            str(gprf_file),
+            "--mode",
+            "sieve",
+            "--k-squared",
+            str(self.k_squared),
+        ]
+
+        solver_cmd = [
+            self.args.solver_bin,
+            "--k-squared",
+            str(self.k_squared),
+            "--start-distance",
+            str(start),
+            "--angular",
+            str(self.args.wedges),
+            "--prime-file",
+            str(gprf_file),
+            "--batch-size",
+            str(self.args.batch_size),
+            "--norm-bound",
+            str(norm_hi),
+            "--profile",
+        ]
+
+        self.log(
+            f"[sweep] it={iteration} start={start} end={end} norm=[{norm_lo},{norm_hi}] timeout={timeout_s}s",
+            always=True,
+        )
+
+        if self.args.dry_run:
+            self._run_cmd(sieve_cmd, timeout_s)
+            self._run_cmd(solver_cmd, timeout_s)
+            parsed["component_size"] = 1
+            status = "inconclusive_edge"
+        else:
+            try:
+                t0 = time.monotonic()
+                self._run_cmd(sieve_cmd, timeout_s)
+                sieve_ms = int((time.monotonic() - t0) * 1000)
+
+                file_prime_count = self._count_primes(gprf_file)
+
+                t1 = time.monotonic()
+                solver_output = self._run_cmd(solver_cmd, timeout_s)
+                solve_ms = int((time.monotonic() - t1) * 1000)
+
+                parsed = self._parse_solver_output(solver_output)
+                status = self._classify_moat(parsed, norm_hi)
+                self.log(
+                    f"  sweep sieve={sieve_ms}ms solve={solve_ms}ms primes={file_prime_count} "
+                    f"farthest={parsed.get('farthest_distance', 0):.1f} "
+                    f"comp={parsed.get('component_size', 0)}/{parsed.get('primes_processed', 0)} "
+                    f"status={status}",
+                    always=True,
+                )
+            except Exception as exc:
+                status = "error"
+                error_text = str(exc)
+                self.log(f"[sweep] it={iteration} ERROR: {error_text}", always=True)
+            finally:
+                if gprf_file.exists():
+                    try:
+                        gprf_file.unlink()
+                    except OSError:
+                        pass
+
+        num_primes = int(parsed.get("primes_processed", 0))
+        if num_primes <= 0:
+            num_primes = int(file_prime_count)
+
+        farthest_distance = float(parsed.get("farthest_distance", 0.0))
+        record: Dict[str, object] = {
+            "timestamp": iso_utc_now(),
+            "phase": "sweep",
+            "iteration": iteration,
+            "start_distance": int(start),
+            "shell_width": int(self.args.shell_width),
+            "norm_lo": int(norm_lo),
+            "norm_hi": int(norm_hi),
+            "num_primes": int(num_primes),
+            "farthest_point": str(parsed.get("farthest_point", "(0,0)")),
+            "farthest_a": int(parsed.get("farthest_a", 0)),
+            "farthest_b": int(parsed.get("farthest_b", 0)),
+            "farthest_norm": int(parsed.get("farthest_norm", 0)),
+            "farthest_distance": farthest_distance,
+            "component_size": int(parsed.get("component_size", 0)),
+            "sieve_ms": int(sieve_ms),
+            "solve_ms": int(solve_ms),
+            "status": status,
+            "tag": self.args.tag,
+            "k_squared": self.k_squared,
+            "wedges": int(self.args.wedges),
+            "band_width": int(max(0, norm_hi - norm_lo)),
+            "primes_generated": int(file_prime_count),
+            "action": "sweep_complete",
+            "next_start_distance": int(start),
+            "next_shell_width": int(self.args.shell_width),
+        }
+        if status == "moat_confirmed":
+            record["action"] = "stop_moat"
+        elif status == "error":
+            record["action"] = "stop_error"
+        if error_text:
+            record["error"] = error_text
+        self._append_record(record)
+
+        self._print_sweep_summary(
+            sieve_ms,
+            solve_ms,
+            int(file_prime_count),
+            int(num_primes),
+            status == "moat_confirmed",
+            farthest_distance,
+        )
+
+        if status == "error":
+            return {"result": "error", "boundary": int(start)}
+        if status == "moat_confirmed":
+            return {"result": "moat_found", "boundary": int(farthest_distance)}
+        return {"result": "no_moat_in_range", "boundary": int(end)}
+
     def run_progressive(self) -> Dict[str, object]:
+        if self.args.sweep_mode == "sweep":
+            return self.run_progressive_sweep()
+
         result = self._forward_walk(
             "progressive",
             int(self.args.start_distance),
@@ -455,62 +917,83 @@ class UBCampaign:
     def run_bisect(self) -> Dict[str, object]:
         shell = int(self.args.shell_width)
         walk_iters = int(self.args.max_iterations)
+        saved_shell = int(self.args.shell_width)
+
+        if self.args.sweep_mode == "sweep":
+            # Default bisect_sweep_shell=50 gives 10x (locate/verify) and 5x (refine).
+            locate_mult = max(1, int(self.args.bisect_sweep_shell) // 5)
+            refine_mult = max(1, locate_mult // 2)
+            verify_mult = locate_mult
+            locate_shell = shell * locate_mult
+            refine_shell = shell * refine_mult
+            verify_shell = shell * verify_mult
+            self.log(
+                f"bisect sweep shells: locate={locate_shell} refine={refine_shell} verify={verify_shell}",
+                always=True,
+            )
+        else:
+            locate_shell = shell
+            refine_shell = shell
+            verify_shell = shell * 3
 
         lo = None
         hi = None
         prev = int(self.args.start_distance)
         dist = prev
 
-        # Phase 1: LOCATE -- geometric doubling
-        self.log("--- Phase 1: LOCATE (geometric doubling) ---", always=True)
-        while dist <= self.args.ceiling:
-            self.log(f"LOCATE: trying D={dist}", always=True)
-            result = self._forward_walk("locate", dist, walk_iters)
+        try:
+            # Phase 1: LOCATE -- geometric doubling
+            self.args.shell_width = locate_shell
+            self.log("--- Phase 1: LOCATE (geometric doubling) ---", always=True)
+            while dist <= self.args.ceiling:
+                self.log(f"LOCATE: trying D={dist}", always=True)
+                result = self._forward_walk("locate", dist, walk_iters)
 
-            if result["moat_found"]:
-                hi = dist
-                lo = prev if prev < dist else max(1, dist // 2)
-                self.log(f"LOCATE: bracket found [{lo}, {hi}]", always=True)
-                break
+                if result["moat_found"]:
+                    hi = dist
+                    lo = prev if prev < dist else max(1, dist // 2)
+                    self.log(f"LOCATE: bracket found [{lo}, {hi}]", always=True)
+                    break
 
-            prev = dist
-            lo = dist
-            dist *= 2
+                prev = dist
+                lo = dist
+                dist *= 2
 
-        if hi is None or lo is None:
-            return {
-                "result": "no_moat_in_range",
-                "boundary": int(min(dist, self.args.ceiling)),
-            }
+            if hi is None or lo is None:
+                return {
+                    "result": "no_moat_in_range",
+                    "boundary": int(min(dist, self.args.ceiling)),
+                }
 
-        # Phase 2: REFINE -- binary search
-        self.log(f"--- Phase 2: REFINE [{lo}, {hi}] ---", always=True)
-        refine_steps = 0
-        while (hi - lo) > int(self.args.bisect_tolerance) and refine_steps < walk_iters:
-            mid = (lo + hi) // 2
-            self.log(f"REFINE: trying D={mid} range=[{lo},{hi}]", always=True)
-            result = self._forward_walk("refine", mid, walk_iters)
+            # Phase 2: REFINE -- binary search
+            self.args.shell_width = refine_shell
+            self.log(f"--- Phase 2: REFINE [{lo}, {hi}] ---", always=True)
+            refine_steps = 0
+            while (hi - lo) > int(self.args.bisect_tolerance) and refine_steps < walk_iters:
+                mid = (lo + hi) // 2
+                self.log(f"REFINE: trying D={mid} range=[{lo},{hi}]", always=True)
+                result = self._forward_walk("refine", mid, walk_iters)
 
-            if result["moat_found"]:
-                hi = mid
-            else:
-                lo = mid
-            refine_steps += 1
+                if result["moat_found"]:
+                    hi = mid
+                else:
+                    lo = mid
+                refine_steps += 1
 
-        boundary = int(hi)
-        self.log(f"REFINE: converged to boundary={boundary}", always=True)
+            boundary = int(hi)
+            self.log(f"REFINE: converged to boundary={boundary}", always=True)
 
-        # Phase 3: VERIFY -- wide shell probe
-        verify_shell_saved = self.args.shell_width
-        self.args.shell_width = shell * 3
-        self.log(f"--- Phase 3: VERIFY at D={boundary} shell={self.args.shell_width} ---", always=True)
-        verify = self._forward_walk("verify", boundary, walk_iters)
-        self.args.shell_width = verify_shell_saved
+            # Phase 3: VERIFY -- wide shell probe
+            self.args.shell_width = verify_shell
+            self.log(f"--- Phase 3: VERIFY at D={boundary} shell={self.args.shell_width} ---", always=True)
+            verify = self._forward_walk("verify", boundary, walk_iters)
 
-        if verify["moat_found"]:
-            return {"result": "boundary_found", "boundary": boundary}
+            if verify["moat_found"]:
+                return {"result": "boundary_found", "boundary": boundary}
 
-        return {"result": "boundary_inconclusive", "boundary": boundary}
+            return {"result": "boundary_inconclusive", "boundary": boundary}
+        finally:
+            self.args.shell_width = saved_shell
 
     def run(self) -> Dict[str, object]:
         if not self.args.dry_run:
@@ -519,7 +1002,11 @@ class UBCampaign:
                 if not (path.exists() and os.access(path, os.X_OK)):
                     raise RuntimeError(f"binary not executable: {exe}")
 
-        self.log(f"=== UB Campaign: k^2={self.k_squared} tag={self.args.tag} mode={self.args.mode} ===", always=True)
+        self.log(
+            f"=== UB Campaign: k^2={self.k_squared} tag={self.args.tag} "
+            f"mode={self.args.mode} sweep_mode={self.args.sweep_mode} ===",
+            always=True,
+        )
         self.log(f"  platform={self.args.platform} sieve={self.args.sieve_bin} solver={self.args.solver_bin}", always=True)
         self.log(f"  start={self.args.start_distance} ceiling={self.args.ceiling} shell={self.args.shell_width} wedges={self.args.wedges}", always=True)
         self.log(f"  results={self.results_jsonl}", always=True)
@@ -552,9 +1039,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--shell-width", type=int, default=5)
     parser.add_argument("--work-dir", default="/tmp/gm-ub")
     parser.add_argument("--mode", choices=["progressive", "bisect"], default="progressive")
+    parser.add_argument("--sweep-mode", choices=["per-probe", "sweep"], default="per-probe")
     parser.add_argument("--wedges", type=int, default=None)
     parser.add_argument("--max-iterations", type=int, default=200)
     parser.add_argument("--bisect-tolerance", type=int, default=1_000_000)
+    parser.add_argument(
+        "--bisect-sweep-shell",
+        type=int,
+        default=50,
+        help="Sweep bisect shell control (50 => locate/verify 10x, refine 5x)",
+    )
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--verbose", action="store_true")
 
@@ -599,6 +1093,8 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--wedges must be > 0")
     if args.max_iterations <= 0:
         parser.error("--max-iterations must be > 0")
+    if args.bisect_sweep_shell <= 0:
+        parser.error("--bisect-sweep-shell must be > 0")
     if args.batch_size <= 0:
         parser.error("--batch-size must be > 0")
 
