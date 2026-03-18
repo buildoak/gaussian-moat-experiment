@@ -242,6 +242,15 @@ impl BandProcessor {
             self.moat_threshold_norm = self.compute_moat_threshold(prime.norm);
         }
 
+        // UB seed phase: fictitiously connect all primes at or below
+        // the probe boundary to the origin component.
+        if self.upper_bound && self.origin_slot != NO_SLOT && prime.norm <= self.boundary_norm {
+            let origin_gen_ok = self.origin_gen == self.uf.generation(self.origin_slot);
+            if origin_gen_ok {
+                self.union_components(slot, self.origin_slot);
+            }
+        }
+
         // Resume mode: organic connections only. The origin is seeded at the
         // farthest point from the previous chunk and inserted into the grid.
         // connect_neighbors (called above) handles the distance check.
@@ -1010,5 +1019,103 @@ mod tests {
 
         // Moat should be detected -- component terminates
         assert!(moat.is_some(), "moat should be detected at the moat distance");
+    }
+
+    #[test]
+    fn test_ub_seed_phase_connects_band() {
+        let mut processor = BandProcessor::new_upper_bound(2, 8);
+        let primes = gaussian_primes_up_to_norm(64);
+
+        let mut processed = Vec::new();
+        for prime in primes.iter().filter(|p| p.norm <= 64) {
+            let result = processor.process_prime_ext(prime);
+            processor.pin_slot(result.slot, result.gen);
+            processed.push((result.slot, result.gen));
+        }
+
+        let origin_root = processor.origin_find_root();
+        assert_ne!(origin_root, u32::MAX, "origin must be initialized in UB mode");
+        for (slot, gen) in processed {
+            assert_eq!(
+                processor.uf.generation(slot),
+                gen,
+                "slot should stay live for root verification"
+            );
+            assert_eq!(
+                processor.find_root(slot),
+                origin_root,
+                "all seed-phase primes must be in the origin component"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ub_sweep_phase_organic_only() {
+        let mut processor = BandProcessor::new_upper_bound(2, 8);
+
+        let seed = GaussianPrime {
+            a: 1,
+            b: 1,
+            norm: 2,
+        };
+        let seed_res = processor.process_prime_ext(&seed);
+        processor.pin_slot(seed_res.slot, seed_res.gen);
+
+        let sweep = GaussianPrime {
+            a: 9,
+            b: 0,
+            norm: 81,
+        };
+        let sweep_res = processor.process_prime_ext(&sweep);
+        processor.pin_slot(sweep_res.slot, sweep_res.gen);
+
+        let origin_root = processor.origin_find_root();
+        let sweep_root = processor.find_root(sweep_res.slot);
+        assert_ne!(
+            sweep_root, origin_root,
+            "sweep-phase prime above boundary_norm must not auto-connect"
+        );
+    }
+
+    #[test]
+    fn test_ub_moat_detection() {
+        let mut processor = BandProcessor::new_upper_bound(2, 11);
+        let primes = gaussian_primes_up_to_norm(300);
+        let band_start_norm = floor_radius_diff_sq(11 * 11, 2);
+
+        let mut moat: Option<MoatResult> = None;
+        for prime in primes.iter().filter(|p| p.norm >= band_start_norm) {
+            if let Some(result) = processor.process_prime(prime) {
+                moat = Some(result);
+                break;
+            }
+        }
+
+        assert!(
+            moat.is_some(),
+            "k^2=2 moat near distance sqrt(137) should be detected in UB mode"
+        );
+    }
+
+    #[test]
+    fn test_lb_unchanged() {
+        let mut processor = BandProcessor::new(2);
+        let primes = gaussian_primes_up_to_norm(200);
+
+        let mut moat: Option<MoatResult> = None;
+        for prime in &primes {
+            if let Some(result) = processor.process_prime(prime) {
+                moat = Some(result);
+                break;
+            }
+        }
+
+        let moat = moat.expect("expected moat detection for k^2=2 lower-bound by norm 200");
+        assert_eq!(
+            (moat.farthest_a, moat.farthest_b),
+            (11, 4),
+            "LB mode farthest point should remain unchanged"
+        );
+        assert_eq!(moat.component_size, 14, "LB origin component size should remain 14");
     }
 }
