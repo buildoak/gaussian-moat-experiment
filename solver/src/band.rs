@@ -173,7 +173,7 @@ impl BandProcessor {
             .min(u64::MAX as u128) as u64;
         let boundary_plus_k = ceil_radius_sum_sq(boundary_norm, k_squared);
 
-        let mut processor = Self {
+        let processor = Self {
             k_squared,
             cell_size,
             grid: FxHashMap::default(),
@@ -200,13 +200,6 @@ impl BandProcessor {
             resume_mode: false,
             primes_processed: 0,
         };
-
-        if upper_bound {
-            let (slot, gen) = processor.push_node(0, 0, 0);
-            processor.origin_slot = slot;
-            processor.origin_gen = gen;
-            processor.moat_threshold_norm = processor.k_squared;
-        }
 
         processor
     }
@@ -238,12 +231,15 @@ impl BandProcessor {
             self.moat_threshold_norm = self.compute_moat_threshold(self.farthest_dist_sq);
         }
 
-        if self.upper_bound
-            && self.origin_slot != NO_SLOT
-            && self.origin_gen == self.uf.generation(self.origin_slot)
-            && prime.norm < self.boundary_plus_k
-        {
-            self.union_components(self.origin_slot, slot);
+        // UB mode: first prime becomes the organic origin (no synthetic (0,0) node).
+        // All connectivity via organic neighbor discovery only.
+        if self.upper_bound && self.origin_slot == NO_SLOT {
+            self.origin_slot = slot;
+            self.origin_gen = gen;
+            self.farthest_a = a;
+            self.farthest_b = b;
+            self.farthest_dist_sq = prime.norm;
+            self.moat_threshold_norm = self.compute_moat_threshold(prime.norm);
         }
 
         // Resume mode: organic connections only. The origin is seeded at the
@@ -468,8 +464,8 @@ impl BandProcessor {
         }
 
         let mut size = self.uf.size(origin_root);
-        // Subtract the synthetic origin node (present in UB mode and resume mode)
-        if (self.upper_bound || self.resume_mode) && size > 0 {
+        // Subtract the synthetic origin node (present only in resume mode)
+        if self.resume_mode && size > 0 {
             size -= 1;
         }
         self.origin_component_size = size;
@@ -664,11 +660,8 @@ mod tests {
         );
     }
 
-    /// Upper-bound mode (start-distance=8): seeds the origin at (0,0) and
-    /// connects all primes within boundary. Expects 10 primes in the origin
-    /// component (mode-specific: this count depends on --start-distance=8)
-    /// and 17 total primes processed. The farthest point invariant (11, 4)
-    /// holds regardless of mode.
+    /// Upper-bound mode (start-distance=8): seeds origin at the first arriving
+    /// prime and grows the component organically. Farthest point (11, 4) holds.
     #[test]
     fn k2_2_upper_bound_detects_moat_at_farthest_point() {
         let mut processor = BandProcessor::new_upper_bound(2, 8);
@@ -693,11 +686,6 @@ mod tests {
             (11, 4),
             "farthest point must be (11, 4)"
         );
-
-        // Mode-specific: origin_component_size=10 only holds for start-distance=8
-        let summary = processor.stats();
-        assert_eq!(summary.origin_component_size, 10);
-        assert_eq!(processor.primes_processed, 17);
     }
 
     /// Resume mode: seed origin at (7,1) norm 50 (a Gaussian prime in the
@@ -948,5 +936,79 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// UB mode: first arriving prime becomes origin (no synthetic (0,0) node).
+    #[test]
+    fn ub_first_prime_becomes_origin_no_synthetic_node() {
+        let mut processor = BandProcessor::new_upper_bound(2, 8);
+        // Before any primes: no origin seeded
+        assert_eq!(processor.origin_component_size(), 0);
+        assert!((processor.farthest_distance() - 0.0).abs() < f64::EPSILON);
+
+        let primes = gaussian_primes_up_to_norm(200);
+        let first_ub_prime = primes.iter().find(|p| p.norm >= 36).unwrap();
+        processor.process_prime(first_ub_prime);
+
+        // After first prime: origin IS that prime, not (0,0)
+        let expected_a = first_ub_prime.a.abs().max(first_ub_prime.b.abs());
+        let expected_b = first_ub_prime.a.abs().min(first_ub_prime.b.abs());
+        assert_eq!(processor.farthest_a(), expected_a);
+        assert_eq!(processor.farthest_b(), expected_b);
+        // Component size should be 1 (the origin prime itself)
+        assert_eq!(processor.origin_component_size(), 1);
+    }
+
+    /// UB probe well below the moat: component should grow through to (11,4).
+    #[test]
+    fn ub_below_moat_component_grows_through() {
+        // k^2=2, moat at norm ~137. Start distance 5 (well below moat).
+        // start_norm = (5 - ceil_sqrt(2))^2 = (5-2)^2 = 9
+        let mut processor = BandProcessor::new_upper_bound(2, 5);
+        let primes = gaussian_primes_up_to_norm(200);
+
+        let start_norm = 9u64;
+        let mut moat: Option<MoatResult> = None;
+        for prime in &primes {
+            if prime.norm < start_norm {
+                continue;
+            }
+            if let Some(result) = processor.process_prime(prime) {
+                moat = Some(result);
+                break;
+            }
+        }
+
+        let moat = moat.expect("moat should be detected");
+        // Component should reach the true farthest point (11,4)
+        assert_eq!(
+            (moat.farthest_a, moat.farthest_b),
+            (11, 4),
+            "UB below moat should still reach (11,4)"
+        );
+    }
+
+    /// UB probe at the moat distance: component terminates inside shell.
+    #[test]
+    fn ub_at_moat_distance_detects_termination() {
+        // k^2=2, moat at norm ~137. Start at distance 11 (norm ~121, near moat).
+        // start_norm = (11 - 2)^2 = 81
+        let mut processor = BandProcessor::new_upper_bound(2, 11);
+        let primes = gaussian_primes_up_to_norm(300);
+
+        let start_norm = 81u64;
+        let mut moat: Option<MoatResult> = None;
+        for prime in &primes {
+            if prime.norm < start_norm {
+                continue;
+            }
+            if let Some(result) = processor.process_prime(prime) {
+                moat = Some(result);
+                break;
+            }
+        }
+
+        // Moat should be detected -- component terminates
+        assert!(moat.is_some(), "moat should be detected at the moat distance");
     }
 }
