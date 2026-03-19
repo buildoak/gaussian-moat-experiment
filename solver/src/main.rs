@@ -96,6 +96,7 @@ fn main() {
             resume_farthest_norm: resume_norm,
             resume_farthest_a: resume_a,
             resume_farthest_b: resume_b,
+            verbose: args.verbose,
         };
         let result = run_angular(&config);
         let farthest_norm = (result.farthest_a as i64) * (result.farthest_a as i64)

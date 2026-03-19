@@ -37,6 +37,8 @@ pub struct AngularConfig {
     pub resume_farthest_norm: u64,
     pub resume_farthest_a: i32,
     pub resume_farthest_b: i32,
+    /// Verbose diagnostic logging for stitch/wedge debugging.
+    pub verbose: bool,
 }
 
 pub struct AngularResult {
@@ -223,7 +225,7 @@ fn parallel_wedges(
     );
 
     // Phase 3: Stitch boundaries
-    let stitched = stitch(&wedge_results, wedges_used);
+    let stitched = stitch(&wedge_results, wedges_used, config.verbose);
 
     AngularResult {
         farthest_a: stitched.farthest_a,
@@ -301,6 +303,7 @@ fn process_wedge_parallel(
         &right_slots,
         &non_native_slots,
         config,
+        config.verbose,
     )
 }
 
@@ -468,12 +471,13 @@ fn stream_primes(
                 &right_slots[wedge_id],
                 &non_native_slots[wedge_id],
                 config,
+                config.verbose,
             )
         })
         .collect();
     wedge_results.sort_unstable_by_key(|wr| wr.wedge_id);
 
-    let stitched = stitch(&wedge_results, wedges_used);
+    let stitched = stitch(&wedge_results, wedges_used, config.verbose);
 
     AngularResult {
         farthest_a: stitched.farthest_a,
@@ -623,12 +627,13 @@ fn stream_primes_parallel(
                 &right_slots[wedge_id],
                 &non_native_slots[wedge_id],
                 config,
+                config.verbose,
             )
         })
         .collect();
     wedge_results.sort_unstable_by_key(|wr| wr.wedge_id);
 
-    let stitched = stitch(&wedge_results, wedges_used);
+    let stitched = stitch(&wedge_results, wedges_used, config.verbose);
 
     AngularResult {
         farthest_a: stitched.farthest_a,
@@ -655,6 +660,7 @@ fn build_wedge_result(
     right_slot_data: &[(i32, i32, u64, u32)],
     non_native_slot_data: &[u32],
     config: &AngularConfig,
+    verbose: bool,
 ) -> WedgeResult {
     let origin_root = {
         let root = band.origin_find_root();
@@ -669,20 +675,21 @@ fn build_wedge_result(
         wedge_id + 1 == num_wedges && origin_root.is_some()
     };
 
-    let native_origin_size = if has_origin {
+    // Compute native_origin_size for EVERY wedge that has an origin component,
+    // not just the canonical origin wedge (has_origin=true). The stitcher needs
+    // native sizes from all wedges to correctly aggregate the global origin
+    // component. Without this, non-origin wedges report native_origin_size=0
+    // and their interior primes are silently dropped during stitching.
+    let native_origin_size = if let Some(o_root) = origin_root {
         let total_origin = band.origin_component_size();
-        if let Some(o_root) = origin_root {
-            let origin_canonical = band.find_root(o_root);
-            let mut non_native_in_origin = 0u64;
-            for &slot in non_native_slot_data {
-                if band.find_root(slot) == origin_canonical {
-                    non_native_in_origin += 1;
-                }
+        let origin_canonical = band.find_root(o_root);
+        let mut non_native_in_origin = 0u64;
+        for &slot in non_native_slot_data {
+            if band.find_root(slot) == origin_canonical {
+                non_native_in_origin += 1;
             }
-            total_origin.saturating_sub(non_native_in_origin)
-        } else {
-            total_origin
         }
+        total_origin.saturating_sub(non_native_in_origin)
     } else {
         0
     };
@@ -704,7 +711,9 @@ fn build_wedge_result(
         right_slot_data, &non_native_per_root, config.upper_bound, has_origin, origin_root,
     );
 
-    let (farthest_a, farthest_b, farthest_norm) = if has_origin {
+    // Report farthest point for every wedge with an origin component, not just
+    // has_origin wedges. The stitcher needs this to track the global farthest point.
+    let (farthest_a, farthest_b, farthest_norm) = if origin_root.is_some() {
         let a = band.farthest_a();
         let b = band.farthest_b();
         let norm = ((a as i64) * (a as i64) + (b as i64) * (b as i64)) as u64;
@@ -712,6 +721,23 @@ fn build_wedge_result(
     } else {
         (0, 0, 0)
     };
+
+    if verbose {
+        let origin_root_in_overlap = origin_root
+            .map(|r| overlap_component_info.contains_key(&r))
+            .unwrap_or(false);
+        eprintln!(
+            "build_wedge_result: wedge={} has_origin={} origin_root={:?} \
+             native_origin_size={} overlap_info_entries={} \
+             origin_root_in_overlap_info={} farthest=({},{}) farthest_norm={} \
+             left_overlap={} right_overlap={} non_native={}",
+            wedge_id, has_origin, origin_root,
+            native_origin_size, overlap_component_info.len(),
+            origin_root_in_overlap,
+            farthest_a, farthest_b, farthest_norm,
+            left_slot_data.len(), right_slot_data.len(), non_native_slot_data.len(),
+        );
+    }
 
     WedgeResult {
         wedge_id,
