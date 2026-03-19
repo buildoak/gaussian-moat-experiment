@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime
+import hashlib
 import json
 import math
 import os
@@ -70,14 +71,6 @@ class UBCampaign:
         self.total_solve_ms = 0
         self.global_iteration = 0
 
-    def _time_remaining_s(self) -> float:
-        """Return seconds remaining in the runtime budget, or float('inf') if no limit."""
-        limit = getattr(self.args, 'max_runtime_minutes', None)
-        if limit is None:
-            return float('inf')
-        elapsed = time.monotonic() - self.start_time
-        return max(0.0, limit * 60.0 - elapsed)
-
     def _time_budget_exceeded(self) -> bool:
         return self._time_remaining_s() <= 0.0
 
@@ -90,12 +83,47 @@ class UBCampaign:
         self.global_iteration += 1
         return self.global_iteration
 
-    def _time_remaining_s(self) -> float | None:
+    def _time_remaining_s(self) -> float:
+        """Return seconds remaining in the runtime budget, or float('inf') if no limit."""
         if self.args.max_runtime_minutes is None:
-            return None
+            return float('inf')
         limit_s = float(self.args.max_runtime_minutes) * 60.0
         elapsed_s = time.monotonic() - self.start_time
         return limit_s - elapsed_s
+
+    def _write_session_header(self) -> None:
+        """Write paper-quality session metadata as first JSONL record."""
+        header: Dict[str, object] = {
+            "record_type": "session_header",
+            "timestamp": iso_utc_now(),
+            "argv": sys.argv,
+            "k_squared": self.k_squared,
+            "platform": self.args.platform,
+        }
+        # Binary checksums
+        for label, path in [("sieve_bin", self.args.sieve_bin), ("solver_bin", self.args.solver_bin)]:
+            try:
+                h = hashlib.sha256(open(path, "rb").read()).hexdigest()
+                header[f"{label}_sha256"] = h
+            except Exception:
+                header[f"{label}_sha256"] = "unavailable"
+        # GPU info
+        try:
+            gpu = subprocess.check_output(
+                ["nvidia-smi", "--query-gpu=name,driver_version,memory.total", "--format=csv,noheader"],
+                timeout=5,
+            ).decode().strip()
+            header["gpu_info"] = gpu
+        except Exception:
+            header["gpu_info"] = "unavailable"
+        # CUDA version
+        try:
+            cuda = subprocess.check_output(["nvcc", "--version"], timeout=5).decode().strip().split("\n")[-1]
+            header["cuda_version"] = cuda
+        except Exception:
+            header["cuda_version"] = "unavailable"
+        with self.results_jsonl.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(header, separators=(",", ":")) + "\n")
 
     def _append_record(self, record: Dict[str, object]) -> None:
         with self.results_jsonl.open("a", encoding="utf-8") as fh:
@@ -360,6 +388,8 @@ class UBCampaign:
             always=True,
         )
 
+        probe_start_utc = iso_utc_now()
+        gpu_mem_after_sieve = ""
         if self.args.dry_run:
             self._run_cmd(sieve_cmd, timeout_s)
             self._run_cmd(solver_cmd, timeout_s)
@@ -372,6 +402,15 @@ class UBCampaign:
                 sieve_ms = int((time.monotonic() - t0) * 1000)
 
                 file_prime_count = self._count_primes(gprf_file)
+
+                # GPU memory after sieve
+                try:
+                    gpu_mem_after_sieve = subprocess.check_output(
+                        ["nvidia-smi", "--query-gpu=memory.used,memory.free", "--format=csv,noheader"],
+                        timeout=5,
+                    ).decode().strip()
+                except Exception:
+                    gpu_mem_after_sieve = "unavailable"
 
                 t1 = time.monotonic()
                 solver_output = self._run_cmd(solver_cmd, timeout_s)
@@ -403,8 +442,11 @@ class UBCampaign:
         if num_primes <= 0:
             num_primes = int(file_prime_count)
 
+        probe_end_utc = iso_utc_now()
         record: Dict[str, object] = {
             "timestamp": iso_utc_now(),
+            "probe_start_utc": probe_start_utc,
+            "probe_end_utc": probe_end_utc,
             "phase": phase,
             "iteration": iteration,
             "start_distance": int(start_distance),
@@ -423,6 +465,7 @@ class UBCampaign:
             "k_squared": self.k_squared,
             "wedges": int(self.args.wedges),
             "band_width": int(band_width),
+            "gpu_mem_after_sieve": gpu_mem_after_sieve,
             "action": "",
             "next_start_distance": int(start_distance),
             "next_shell_width": int(shell_width),
@@ -975,6 +1018,7 @@ class UBCampaign:
 
     def run_progressive_sweep(self) -> Dict[str, object]:
         """Wide-band progressive: one sieve + one solver for the full range."""
+        self._write_session_header()
         start = int(self.args.start_distance)
         end = int(self.args.ceiling)
 
@@ -1137,6 +1181,7 @@ class UBCampaign:
         return {"result": "no_moat_in_range", "boundary": int(end)}
 
     def run_progressive(self) -> Dict[str, object]:
+        self._write_session_header()
         if self.args.sweep_mode == "sweep":
             return self.run_progressive_sweep()
 
