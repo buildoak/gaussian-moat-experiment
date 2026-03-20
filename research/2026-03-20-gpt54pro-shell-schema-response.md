@@ -241,3 +241,46 @@ The hard caveat is prime generation. R=10B means norms up to 10^20, which is abo
 - One sampled strip of width 128: ~5–12 hours on a 3090, assuming competent 128-bit local patch generator.
 - One sampled strip of width 256: ~10–20 hours.
 - Real science campaign: 16–64 strips at sparse anchor radii, not continuous full-annulus propagation. Use RG/block operator to infer conductance trend.
+
+## Addendum: Concrete Shell Pipeline (GPT 5.4 Pro walkthrough)
+
+The per-shell pipeline has 5 concrete steps:
+
+1. **GENERATE** — Enumerate all Gaussian primes in the rectangle. Test each lattice point: is a²+b² a rational prime?
+
+2. **CONNECT** — For each prime, check ~128 nearby offsets with d² ≤ 40. If neighbor is also prime → union them. This is the existing spatial hash + union-find. Already built.
+
+3. **EXTRACT** — Which connected components touch the inner edge? Which touch the outer edge? Which touch BOTH? Output: ~25 inner-face primes and ~25 outer-face primes, grouped by component. This is the "tile operator" — colored dots on boundary edges with a coloring that says "these 3 inner primes connect to those 4 outer primes through this shell."
+
+4. **COMPOSE** — Shell N's outer edge IS shell N+1's inner edge. Take groupings from both shells, merge at the seam: if outer-prime-7 of shell N and inner-prime-3 of shell N+1 are within step √40 → their groups merge. Result: which primes from shell N's INNER edge reach shell N+2's INNER edge. Drop the seam, carry forward.
+
+5. **REPEAT** — 4,600 times for the full campaign.
+
+Detection: If at any point zero inner-face groups connect to the outer face → transport is dead → moat candidate location identified.
+
+Decay signal: If transport keeps surviving but gets thinner (fewer crossing groups, 1-2 threads instead of 15) → Lyapunov decay. Can extrapolate when it hits zero.
+
+### EMST: Not needed for v1
+
+For a first version, the existing cell-list + union-find does step 2 perfectly at the fixed threshold √40.
+
+EMST gives something extra: it stores connectivity at ALL thresholds at once. The EMST of primes in a tile is a tree where the heaviest edge on any path equals the minimum step needed between those two primes. Cut all edges > √40 → same connected components. Cut all edges > √30 → connectivity at smaller step. Cut > √50 → larger step.
+
+Useful later for bottleneck margin analysis ("how close is this tile to failing? Would connectivity survive at √38?"). But for the first build, union-find at threshold √40 is the right tool.
+
+## Pipeline Split: CUDA vs Rust
+
+The solver splits cleanly into two domains:
+
+| Domain | Engine | Why |
+|--------|--------|-----|
+| Prime generation (sieve / primality testing in rectangles) | **CUDA** | Embarrassingly parallel — test each lattice point independently. On A100: ~1ms per tile of 100K primes |
+| Union-find, boundary extraction, shell composition | **Rust/CPU** | Sequential per-shell, but each shell processes fast (~2s at 3.89M primes/s for 8M primes). Composition operates on ~25 boundary ports per seam — trivially cheap |
+
+The CUDA part is the hot path (78% of wall time at scale). The Rust part is the orchestration + cheap boundary algebra.
+
+At upper composition levels (Level 8+), boolean transfer matrix composition via INT8 tensor cores becomes viable (~0.1ms for 25,600×25,600 matrix on A100). This creates a fully GPU-resident pipeline where only the final moat/candidate decision returns to CPU.
+
+### Curvature justification for rectangular tiles
+
+At R=1 billion, the curvature of the annulus over 128 lattice units is ~0.000000013. The strip is flat. A rectangle. "Cylinder coordinates" just means: treat X = radial distance, Y = tangential distance. The rectangle IS the cylinder, unrolled.
