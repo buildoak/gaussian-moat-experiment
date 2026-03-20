@@ -17,8 +17,8 @@ pub struct ProbeConfig {
 }
 
 pub struct ProbeResult {
-    pub moat_found: bool,
-    pub moat_radius: Option<f64>,
+    pub candidate_found: bool,
+    pub candidate_radius: Option<f64>,
     pub shells_processed: usize,
     pub total_primes: usize,
     pub total_tiles: usize,
@@ -118,8 +118,8 @@ pub fn run_probe(config: &ProbeConfig) -> (ProbeResult, Vec<ShellProfile>, Probe
         peak_rss_kb = peak_rss_kb.max(get_rss_kb());
         if !reaches_outer {
             let result = ProbeResult {
-                moat_found: true,
-                moat_radius: Some(r_center),
+                candidate_found: true,
+                candidate_radius: Some(r_center),
                 shells_processed: shell_idx + 1,
                 total_primes,
                 total_tiles,
@@ -138,8 +138,8 @@ pub fn run_probe(config: &ProbeConfig) -> (ProbeResult, Vec<ShellProfile>, Probe
     }
 
     let result = ProbeResult {
-        moat_found: false,
-        moat_radius: None,
+        candidate_found: false,
+        candidate_radius: None,
         shells_processed: shells.len(),
         total_primes,
         total_tiles,
@@ -171,6 +171,6 @@ mod tests {
         };
 
         let (result, _, _) = run_probe(&config);
-        assert!(result.moat_found);
+        assert!(result.candidate_found);
     }
 }

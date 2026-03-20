@@ -77,17 +77,17 @@ fn print_probe_result(config: &ProbeConfig, args: &Args) -> bool {
         }
     }
 
-    if result.moat_found {
+    if result.candidate_found {
         println!(
-            "  Result: MOAT FOUND at R ≈ {:.1} after {} shells ({} primes, {} tiles)",
-            result.moat_radius.unwrap_or(config.r_max),
+            "  Result: CANDIDATE at R ≈ {:.1} after {} shells ({} primes, {} tiles)",
+            result.candidate_radius.unwrap_or(config.r_max),
             result.shells_processed,
             result.total_primes,
             result.total_tiles
         );
     } else {
         println!(
-            "  Result: no moat found up to R = {:.1} after {} shells ({} primes, {} tiles)",
+            "  Result: no candidate up to R = {:.1} after {} shells ({} primes, {} tiles)",
             config.r_max, result.shells_processed, result.total_primes, result.total_tiles
         );
     }
@@ -111,7 +111,7 @@ fn print_probe_result(config: &ProbeConfig, args: &Args) -> bool {
         }
     }
 
-    result.moat_found
+    result.candidate_found
 }
 
 fn run_validation() -> bool {
@@ -119,7 +119,7 @@ fn run_validation() -> bool {
     for (k_sq, r_max) in validation_cases() {
         let config = validation_config(k_sq, r_max);
         let (result, _, _) = run_probe(&config);
-        let passed = result.moat_found;
+        let passed = result.candidate_found;
         println!(
             "validate k²={} r_max={:.0}: {}",
             k_sq,
@@ -153,7 +153,5 @@ fn main() {
         trace: args.trace,
     };
 
-    if !print_probe_result(&config, &args) && args.trace {
-        std::process::exit(0);
-    }
+    print_probe_result(&config, &args);
 }
