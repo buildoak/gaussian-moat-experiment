@@ -37,10 +37,23 @@ struct Args {
 
     #[arg(long)]
     validate: bool,
+
+    /// List known large-scale validation targets (Tsuchimura data)
+    #[arg(long)]
+    known_targets: bool,
 }
 
 fn validation_cases() -> Vec<(u64, f64)> {
     vec![(2, 20.0), (4, 40.0), (6, 50.0)]
+}
+
+/// Large-scale validation targets with Tsuchimura-known moat distances.
+/// These are NOT run by --validate (too slow); use --k-squared directly.
+fn known_targets() -> Vec<(u64, f64, &'static str)> {
+    vec![
+        // Tsuchimura (2004): R_moat = 1,015,639
+        (26, 1_100_000.0, "Tsuchimura exact: 1,015,639"),
+    ]
 }
 
 fn validation_config(k_sq: u64, r_max: f64) -> ProbeConfig {
@@ -51,6 +64,27 @@ fn validation_config(k_sq: u64, r_max: f64) -> ProbeConfig {
         strip_width: 4.0,
         num_strips: 8,
         tile_depth: 1.0,
+        trace: false,
+    }
+}
+
+fn large_target_config(k_sq: u64, r_max: f64) -> ProbeConfig {
+    // Scale strip/depth parameters for large runs.
+    // At R~1M, step sqrt(26)~5.1 can drift laterally ~5 per shell.
+    // With 1000-deep shells and ~1000 shells, lateral drift can reach ~5000.
+    // Use 64 strips of 256 width = 16K lateral coverage (generous).
+    let collar = (k_sq as f64).sqrt().ceil();
+    let strip_width = (collar * 40.0).max(128.0);
+    let num_strips = 64;
+    let tile_depth = (r_max / 100.0).max(1000.0).min(10000.0);
+
+    ProbeConfig {
+        k_sq,
+        r_min: 0.0,
+        r_max,
+        strip_width,
+        num_strips,
+        tile_depth,
         trace: false,
     }
 }
@@ -133,6 +167,19 @@ fn run_validation() -> bool {
 
 fn main() {
     let args = Args::parse();
+
+    if args.known_targets {
+        println!("Known large-scale validation targets:");
+        for (k_sq, r_max, note) in known_targets() {
+            let config = large_target_config(k_sq, r_max);
+            println!(
+                "  k²={} r_max={:.0} strips={}×{:.0} depth={:.0} — {}",
+                k_sq, r_max, config.num_strips, config.strip_width, config.tile_depth, note
+            );
+        }
+        println!("\nRun with: tile-probe --k-squared 26 --r-max 1100000 --num-strips 64 --strip-width 240 --tile-depth 10000 --profile");
+        return;
+    }
 
     if args.validate {
         if !run_validation() {
