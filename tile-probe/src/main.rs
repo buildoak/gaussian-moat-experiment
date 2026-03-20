@@ -41,6 +41,14 @@ struct Args {
     /// List known large-scale validation targets (Tsuchimura data)
     #[arg(long)]
     known_targets: bool,
+
+    /// Write shell profiles as JSON to this path
+    #[arg(long)]
+    json_trace: Option<String>,
+
+    /// Export detailed tile coordinates and seam events (large output, for debugging/visualization)
+    #[arg(long)]
+    export_detail: bool,
 }
 
 fn validation_cases() -> Vec<(u64, f64)> {
@@ -65,6 +73,7 @@ fn validation_config(k_sq: u64, r_max: f64) -> ProbeConfig {
         num_strips: 8,
         tile_depth: 1.0,
         trace: false,
+        export_detail: false,
     }
 }
 
@@ -86,6 +95,7 @@ fn large_target_config(k_sq: u64, r_max: f64) -> ProbeConfig {
         num_strips,
         tile_depth,
         trace: false,
+        export_detail: false,
     }
 }
 
@@ -100,25 +110,31 @@ fn print_probe_result(config: &ProbeConfig, args: &Args) -> bool {
     if args.trace || shells.len() <= 32 {
         for shell in &shells {
             println!(
-                "  Shell {}: R≈{:.1} {} primes, {} tiles, compose {} ms, origin→outer: {}",
+                "  Shell {}: R≈{:.1} {} primes, band_io={} acc_io={} alive={} comps={}→{}",
                 shell.shell_idx,
                 shell.r_center,
                 shell.primes_in_shell,
-                shell.tiles_built,
-                shell.compose_time_ms,
-                if shell.origin_reaches_outer { "YES" } else { "NO" }
+                shell.band_io_crossings,
+                shell.io_crossing_count,
+                if shell.transport_alive { "Y" } else { "N" },
+                shell.band_components,
+                shell.accumulated_components,
             );
         }
     }
 
-    if result.candidate_found {
+    if result.candidate_found() {
         println!(
-            "  Result: CANDIDATE at R ≈ {:.1} after {} shells ({} primes, {} tiles)",
-            result.candidate_radius.unwrap_or(config.r_max),
+            "  Result: {} CANDIDATE(S) — first at R ≈ {:.1}, {} shells ({} primes, {} tiles)",
+            result.candidates.len(),
+            result.first_candidate_radius().unwrap_or(config.r_max),
             result.shells_processed,
             result.total_primes,
             result.total_tiles
         );
+        for (idx, &(shell_idx, radius)) in result.candidates.iter().enumerate() {
+            println!("    candidate {}: shell {} R ≈ {:.1}", idx + 1, shell_idx, radius);
+        }
     } else {
         println!(
             "  Result: no candidate up to R = {:.1} after {} shells ({} primes, {} tiles)",
@@ -145,7 +161,86 @@ fn print_probe_result(config: &ProbeConfig, args: &Args) -> bool {
         }
     }
 
-    result.candidate_found
+    // JSON trace output
+    if let Some(ref json_path) = args.json_trace {
+        let json_shells: Vec<_> = shells.iter().map(|s| {
+            let tile_io_str: Vec<String> = s.tile_io_counts.iter().map(|c| c.to_string()).collect();
+            let mut shell_json = format!(
+                concat!(
+                    "{{\"shell\":{},\"r_center\":{:.1},\"primes\":{},",
+                    "\"band_io\":{},\"acc_io\":{},\"alive\":{},",
+                    "\"band_components\":{},\"acc_components\":{},\"compose_ms\":{},",
+                    "\"tile_io\":[{}]"
+                ),
+                s.shell_idx, s.r_center, s.primes_in_shell,
+                s.band_io_crossings, s.io_crossing_count, s.transport_alive,
+                s.band_components, s.accumulated_components, s.compose_time_ms,
+                tile_io_str.join(","),
+            );
+            if let Some(ref detail) = s.detail {
+                let tile_details_json = serde_json::to_string(&detail.tile_details)
+                    .unwrap_or_else(|_| "[]".to_string());
+                let seam_events_json = serde_json::to_string(&detail.seam_events)
+                    .unwrap_or_else(|_| "[]".to_string());
+                let vert_seam_json = serde_json::to_string(&detail.vertical_seam_events)
+                    .unwrap_or_else(|_| "[]".to_string());
+                shell_json.push_str(&format!(
+                    ",\"tile_details\":{},\"seam_events\":{},\"vertical_seam_events\":{}",
+                    tile_details_json, seam_events_json, vert_seam_json
+                ));
+            }
+            shell_json.push('}');
+            shell_json
+        }).collect();
+        let json = format!(
+            "{{\"k_sq\":{},\"r_min\":{},\"r_max\":{},\"num_strips\":{},\"strip_width\":{},\"tile_depth\":{},\"shells\":[{}]}}",
+            config.k_sq, config.r_min, config.r_max, config.num_strips, config.strip_width, config.tile_depth,
+            json_shells.join(",")
+        );
+        std::fs::write(json_path, &json).expect("failed to write JSON trace");
+        println!("  JSON trace written to {json_path}");
+    }
+
+    // Stdout JSON output when export_detail is enabled but no json_trace path is set
+    if args.export_detail && args.json_trace.is_none() {
+        let json_shells: Vec<_> = shells.iter().map(|s| {
+            let tile_io_str: Vec<String> = s.tile_io_counts.iter().map(|c| c.to_string()).collect();
+            let mut shell_json = format!(
+                concat!(
+                    "{{\"shell\":{},\"r_center\":{:.1},\"primes\":{},",
+                    "\"band_io\":{},\"acc_io\":{},\"alive\":{},",
+                    "\"band_components\":{},\"acc_components\":{},\"compose_ms\":{},",
+                    "\"tile_io\":[{}]"
+                ),
+                s.shell_idx, s.r_center, s.primes_in_shell,
+                s.band_io_crossings, s.io_crossing_count, s.transport_alive,
+                s.band_components, s.accumulated_components, s.compose_time_ms,
+                tile_io_str.join(","),
+            );
+            if let Some(ref detail) = s.detail {
+                let tile_details_json = serde_json::to_string(&detail.tile_details)
+                    .unwrap_or_else(|_| "[]".to_string());
+                let seam_events_json = serde_json::to_string(&detail.seam_events)
+                    .unwrap_or_else(|_| "[]".to_string());
+                let vert_seam_json = serde_json::to_string(&detail.vertical_seam_events)
+                    .unwrap_or_else(|_| "[]".to_string());
+                shell_json.push_str(&format!(
+                    ",\"tile_details\":{},\"seam_events\":{},\"vertical_seam_events\":{}",
+                    tile_details_json, seam_events_json, vert_seam_json
+                ));
+            }
+            shell_json.push('}');
+            shell_json
+        }).collect();
+        let json = format!(
+            "{{\"k_sq\":{},\"r_min\":{},\"r_max\":{},\"num_strips\":{},\"strip_width\":{},\"tile_depth\":{},\"export_detail\":true,\"shells\":[{}]}}",
+            config.k_sq, config.r_min, config.r_max, config.num_strips, config.strip_width, config.tile_depth,
+            json_shells.join(",")
+        );
+        println!("{json}");
+    }
+
+    result.candidate_found()
 }
 
 fn run_validation() -> bool {
@@ -153,7 +248,7 @@ fn run_validation() -> bool {
     for (k_sq, r_max) in validation_cases() {
         let config = validation_config(k_sq, r_max);
         let (result, _, _) = run_probe(&config);
-        let passed = result.candidate_found;
+        let passed = result.candidate_found();
         println!(
             "validate k²={} r_max={:.0}: {}",
             k_sq,
@@ -198,6 +293,7 @@ fn main() {
         num_strips: args.num_strips,
         tile_depth: args.tile_depth,
         trace: args.trace,
+        export_detail: args.export_detail,
     };
 
     print_probe_result(&config, &args);
