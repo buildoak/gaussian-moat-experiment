@@ -3,20 +3,23 @@ const MR_WITNESSES: [u64; 12] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
 
 fn mod_mul_u128(a: u128, b: u128, m: u128) -> u128 {
     debug_assert!(m > 0);
-
-    let mut a_acc = a % m;
-    let mut b_acc = b;
-    let mut result = 0_u128;
-
-    while b_acc > 0 {
-        if b_acc & 1 == 1 {
-            result = (result + a_acc) % m;
+    if m <= (1_u128 << 63) {
+        // m < 2^63 -> (m-1)^2 < 2^126 < 2^128, native multiply is safe
+        (a % m) * (b % m) % m
+    } else {
+        // Fallback: Russian peasant for huge moduli (rare in our use case)
+        let mut a_acc = a % m;
+        let mut b_acc = b;
+        let mut result = 0_u128;
+        while b_acc > 0 {
+            if b_acc & 1 == 1 {
+                result = (result + a_acc) % m;
+            }
+            a_acc = (a_acc << 1) % m;
+            b_acc >>= 1;
         }
-        a_acc = (a_acc << 1) % m;
-        b_acc >>= 1;
+        result
     }
-
-    result
 }
 
 fn mod_pow_u128(base: u128, exp: u128, m: u128) -> u128 {
@@ -113,23 +116,31 @@ fn simple_sieve(limit: u64) -> Vec<bool> {
     is_prime
 }
 
+pub struct PrimeSieve {
+    is_prime: Vec<bool>,
+}
+
+impl PrimeSieve {
+    pub fn new(limit: u64) -> Self {
+        Self {
+            is_prime: simple_sieve(limit.max(2)),
+        }
+    }
+
+    pub fn is_prime(&self, n: u64) -> bool {
+        if (n as usize) < self.is_prime.len() {
+            self.is_prime[n as usize]
+        } else {
+            is_prime_miller_rabin(n)
+        }
+    }
+}
+
 fn abs_u64(value: i64) -> u64 {
     value.unsigned_abs()
 }
 
-fn is_prime_lookup(value: u64, small_primes: &[bool]) -> bool {
-    if (value as usize) < small_primes.len() {
-        small_primes[value as usize]
-    } else {
-        is_prime_miller_rabin(value)
-    }
-}
-
-pub fn gaussian_primes_in_rect(a_min: i64, a_max: i64, b_min: i64, b_max: i64) -> Vec<(i64, i64)> {
-    if a_min > a_max || b_min > b_max {
-        return Vec::new();
-    }
-
+fn gaussian_sieve_limit(a_min: i64, a_max: i64, b_min: i64, b_max: i64) -> u64 {
     let max_a = a_min.unsigned_abs().max(a_max.unsigned_abs());
     let max_b = b_min.unsigned_abs().max(b_max.unsigned_abs());
     let max_axis = max_a.max(max_b);
@@ -137,15 +148,27 @@ pub fn gaussian_primes_in_rect(a_min: i64, a_max: i64, b_min: i64, b_max: i64) -
         .saturating_mul(max_a as u128)
         .saturating_add((max_b as u128).saturating_mul(max_b as u128))
         .min(u64::MAX as u128) as u64;
-    let sieve_limit = max_axis.max(max_norm.min(SMALL_PRIME_LIMIT));
-    let small_primes = simple_sieve(sieve_limit.max(2));
+
+    max_axis.max(max_norm.min(SMALL_PRIME_LIMIT))
+}
+
+pub fn gaussian_primes_in_rect_with_sieve(
+    a_min: i64,
+    a_max: i64,
+    b_min: i64,
+    b_max: i64,
+    sieve: &PrimeSieve,
+) -> Vec<(i64, i64)> {
+    if a_min > a_max || b_min > b_max {
+        return Vec::new();
+    }
 
     let mut primes = Vec::new();
 
     if b_min <= 0 && 0 <= b_max {
         for a in a_min..=a_max {
             let aa = abs_u64(a);
-            if aa >= 2 && aa % 4 == 3 && is_prime_lookup(aa, &small_primes) {
+            if aa >= 2 && aa % 4 == 3 && sieve.is_prime(aa) {
                 primes.push((a, 0));
             }
         }
@@ -157,7 +180,7 @@ pub fn gaussian_primes_in_rect(a_min: i64, a_max: i64, b_min: i64, b_max: i64) -
                 continue;
             }
             let bb = abs_u64(b);
-            if bb >= 2 && bb % 4 == 3 && is_prime_lookup(bb, &small_primes) {
+            if bb >= 2 && bb % 4 == 3 && sieve.is_prime(bb) {
                 primes.push((0, b));
             }
         }
@@ -173,13 +196,18 @@ pub fn gaussian_primes_in_rect(a_min: i64, a_max: i64, b_min: i64, b_max: i64) -
             }
 
             let norm = (a as i128 * a as i128 + b as i128 * b as i128) as u64;
-            if is_prime_lookup(norm, &small_primes) {
+            if sieve.is_prime(norm) {
                 primes.push((a, b));
             }
         }
     }
 
     primes
+}
+
+pub fn gaussian_primes_in_rect(a_min: i64, a_max: i64, b_min: i64, b_max: i64) -> Vec<(i64, i64)> {
+    let sieve = PrimeSieve::new(gaussian_sieve_limit(a_min, a_max, b_min, b_max));
+    gaussian_primes_in_rect_with_sieve(a_min, a_max, b_min, b_max, &sieve)
 }
 
 #[cfg(test)]

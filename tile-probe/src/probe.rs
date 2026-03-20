@@ -3,8 +3,9 @@ use std::time::Instant;
 use rayon::prelude::*;
 
 use crate::compose::{compose_grid, compose_vertical};
+use crate::primes::PrimeSieve;
 use crate::profile::{get_rss_kb, PhaseTimer, ProbeProfile};
-use crate::tile::{build_tile, FACE_OUTER_BIT, TileOperator};
+use crate::tile::{build_tile_with_sieve, FACE_OUTER_BIT, TileOperator};
 
 pub struct ProbeConfig {
     pub k_sq: u64,
@@ -80,9 +81,29 @@ pub fn run_probe(config: &ProbeConfig) -> (ProbeResult, Vec<ShellProfile>, Probe
 
     for (shell_idx, &(a_lo, a_hi, r_center)) in shells.iter().enumerate() {
         phase_timer.phase("tile-build");
+        // Build a shared sieve once per shell so each tile reuses the same primality lookup table.
+        let collar = (config.k_sq as f64).sqrt().ceil() as i64;
+        let max_b = strip_bounds
+            .iter()
+            .map(|&(lo, hi)| lo.unsigned_abs().max(hi.unsigned_abs()))
+            .max()
+            .unwrap_or(0) as i64
+            + collar;
+        let sieve_limit = ((a_hi + collar) as u64).max(max_b as u64);
+        let sieve_limit_norm = {
+            let ma = (a_hi.unsigned_abs() + collar as u64) as u128;
+            let mb = max_b as u128;
+            let max_norm = ma
+                .saturating_mul(ma)
+                .saturating_add(mb.saturating_mul(mb))
+                .min(u64::MAX as u128) as u64;
+            max_norm.min(10_000_000)
+        };
+        let sieve_limit = sieve_limit.max(sieve_limit_norm);
+        let sieve = PrimeSieve::new(sieve_limit);
         let tiles: Vec<_> = strip_bounds
             .par_iter()
-            .map(|&(b_lo, b_hi)| build_tile(a_lo, a_hi, b_lo, b_hi, config.k_sq))
+            .map(|&(b_lo, b_hi)| build_tile_with_sieve(a_lo, a_hi, b_lo, b_hi, config.k_sq, &sieve))
             .collect();
         let primes_in_shell = tiles.iter().map(|tile| tile.num_primes).sum::<usize>();
         total_primes += primes_in_shell;

@@ -1,6 +1,6 @@
 use fxhash::FxHashMap;
 
-use crate::primes::gaussian_primes_in_rect;
+use crate::primes::{gaussian_primes_in_rect, gaussian_primes_in_rect_with_sieve, PrimeSieve};
 
 pub const FACE_INNER_BIT: FaceSet = 1 << 0;
 pub const FACE_OUTER_BIT: FaceSet = 1 << 1;
@@ -115,8 +115,45 @@ pub fn build_tile(a_min: i64, a_max: i64, b_min: i64, b_max: i64, k_sq: u64) -> 
     let expanded_a_max = a_max + collar;
     let expanded_b_min = b_min - collar;
     let expanded_b_max = b_max + collar;
+    let primes =
+        gaussian_primes_in_rect(expanded_a_min, expanded_a_max, expanded_b_min, expanded_b_max);
 
-    let primes = gaussian_primes_in_rect(expanded_a_min, expanded_a_max, expanded_b_min, expanded_b_max);
+    build_tile_from_primes(a_min, a_max, b_min, b_max, k_sq, primes)
+}
+
+pub fn build_tile_with_sieve(
+    a_min: i64,
+    a_max: i64,
+    b_min: i64,
+    b_max: i64,
+    k_sq: u64,
+    sieve: &PrimeSieve,
+) -> TileOperator {
+    let collar = (k_sq as f64).sqrt().ceil() as i64;
+    let expanded_a_min = a_min - collar;
+    let expanded_a_max = a_max + collar;
+    let expanded_b_min = b_min - collar;
+    let expanded_b_max = b_max + collar;
+    let primes = gaussian_primes_in_rect_with_sieve(
+        expanded_a_min,
+        expanded_a_max,
+        expanded_b_min,
+        expanded_b_max,
+        sieve,
+    );
+
+    build_tile_from_primes(a_min, a_max, b_min, b_max, k_sq, primes)
+}
+
+fn build_tile_from_primes(
+    a_min: i64,
+    a_max: i64,
+    b_min: i64,
+    b_max: i64,
+    k_sq: u64,
+    primes: Vec<(i64, i64)>,
+) -> TileOperator {
+    let collar = (k_sq as f64).sqrt().ceil() as i64;
     let num_primes = primes.len();
 
     if primes.is_empty() {
