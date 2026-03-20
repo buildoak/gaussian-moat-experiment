@@ -1,6 +1,18 @@
 use rayon::prelude::*;
+use serde::Serialize;
 
 use crate::tile::{face_bit, Face, FacePort, SimpleUF, TileOperator};
+
+/// A single seam connection event during L<->R or I<->O composition.
+#[derive(Debug, Clone, Serialize)]
+pub struct SeamEvent {
+    pub left_strip: usize,
+    pub right_strip: usize,
+    pub left_port: (i64, i64),
+    pub right_port: (i64, i64),
+    pub merged_component_before: (usize, usize),
+    pub merged_component_after: usize,
+}
 
 fn port_distance_sq(left: &FacePort, right: &FacePort) -> u64 {
     let da = left.a - right.a;
@@ -57,13 +69,52 @@ fn finalize_origin_component(
 }
 
 pub fn compose_horizontal(left: &TileOperator, right: &TileOperator, k_sq: u64) -> TileOperator {
+    compose_horizontal_inner(left, right, k_sq, None, 0, 0)
+}
+
+/// Compose horizontally with seam event logging.
+/// `left_strip` and `right_strip` are strip indices for the SeamEvent records.
+pub fn compose_horizontal_with_seams(
+    left: &TileOperator,
+    right: &TileOperator,
+    k_sq: u64,
+    seams: &mut Vec<SeamEvent>,
+    left_strip: usize,
+    right_strip: usize,
+) -> TileOperator {
+    compose_horizontal_inner(left, right, k_sq, Some(seams), left_strip, right_strip)
+}
+
+fn compose_horizontal_inner(
+    left: &TileOperator,
+    right: &TileOperator,
+    k_sq: u64,
+    mut seams: Option<&mut Vec<SeamEvent>>,
+    left_strip: usize,
+    right_strip: usize,
+) -> TileOperator {
     let right_offset = left.num_components;
     let mut uf = SimpleUF::new(left.num_components + right.num_components);
 
     for left_port in &left.face_right {
         for right_port in &right.face_left {
             if port_distance_sq(left_port, right_port) <= k_sq {
-                uf.union(left_port.component, right_offset + right_port.component);
+                if let Some(ref mut seams) = seams {
+                    let before_l = uf.find(left_port.component);
+                    let before_r = uf.find(right_offset + right_port.component);
+                    uf.union(left_port.component, right_offset + right_port.component);
+                    let after = uf.find(left_port.component);
+                    seams.push(SeamEvent {
+                        left_strip,
+                        right_strip,
+                        left_port: (left_port.a, left_port.b),
+                        right_port: (right_port.a, right_port.b),
+                        merged_component_before: (before_l, before_r),
+                        merged_component_after: after,
+                    });
+                } else {
+                    uf.union(left_port.component, right_offset + right_port.component);
+                }
             }
         }
     }
@@ -147,17 +198,57 @@ pub fn compose_horizontal(left: &TileOperator, right: &TileOperator, k_sq: u64) 
         component_faces,
         origin_component,
         num_primes: left.num_primes + right.num_primes,
+        detail: None,
     }
 }
 
 pub fn compose_vertical(bottom: &TileOperator, top: &TileOperator, k_sq: u64) -> TileOperator {
+    compose_vertical_inner(bottom, top, k_sq, None, 0, 0)
+}
+
+/// Compose vertically with seam event logging.
+/// `bottom_shell` and `top_shell` are shell indices for the SeamEvent records.
+pub fn compose_vertical_with_seams(
+    bottom: &TileOperator,
+    top: &TileOperator,
+    k_sq: u64,
+    seams: &mut Vec<SeamEvent>,
+    bottom_shell: usize,
+    top_shell: usize,
+) -> TileOperator {
+    compose_vertical_inner(bottom, top, k_sq, Some(seams), bottom_shell, top_shell)
+}
+
+fn compose_vertical_inner(
+    bottom: &TileOperator,
+    top: &TileOperator,
+    k_sq: u64,
+    mut seams: Option<&mut Vec<SeamEvent>>,
+    bottom_shell: usize,
+    top_shell: usize,
+) -> TileOperator {
     let top_offset = bottom.num_components;
     let mut uf = SimpleUF::new(bottom.num_components + top.num_components);
 
     for bottom_port in &bottom.face_outer {
         for top_port in &top.face_inner {
             if port_distance_sq(bottom_port, top_port) <= k_sq {
-                uf.union(bottom_port.component, top_offset + top_port.component);
+                if let Some(ref mut seams) = seams {
+                    let before_b = uf.find(bottom_port.component);
+                    let before_t = uf.find(top_offset + top_port.component);
+                    uf.union(bottom_port.component, top_offset + top_port.component);
+                    let after = uf.find(bottom_port.component);
+                    seams.push(SeamEvent {
+                        left_strip: bottom_shell,
+                        right_strip: top_shell,
+                        left_port: (bottom_port.a, bottom_port.b),
+                        right_port: (top_port.a, top_port.b),
+                        merged_component_before: (before_b, before_t),
+                        merged_component_after: after,
+                    });
+                } else {
+                    uf.union(bottom_port.component, top_offset + top_port.component);
+                }
             }
         }
     }
@@ -241,6 +332,7 @@ pub fn compose_vertical(bottom: &TileOperator, top: &TileOperator, k_sq: u64) ->
         component_faces,
         origin_component,
         num_primes: bottom.num_primes + top.num_primes,
+        detail: None,
     }
 }
 
@@ -287,6 +379,32 @@ pub fn compose_grid(mut grid: Vec<Vec<TileOperator>>, k_sq: u64) -> TileOperator
     }
 
     grid.pop().unwrap().pop().unwrap()
+}
+
+/// Like `compose_grid` but collects SeamEvent records for L<->R composition.
+/// Only does single-row grids (the common case in probe: one row of tiles per shell).
+pub fn compose_grid_with_seams(
+    tiles: Vec<TileOperator>,
+    k_sq: u64,
+    seams: &mut Vec<SeamEvent>,
+) -> TileOperator {
+    assert!(!tiles.is_empty(), "tiles must not be empty");
+
+    if tiles.len() == 1 {
+        return tiles.into_iter().next().unwrap();
+    }
+
+    // Sequential pairwise reduction with seam logging (cannot parallelize seam collection)
+    let mut iter = tiles.into_iter().enumerate();
+    let (_, mut acc) = iter.next().unwrap();
+    let mut acc_left_strip = 0_usize;
+
+    for (right_strip, right) in iter {
+        acc = compose_horizontal_with_seams(&acc, &right, k_sq, seams, acc_left_strip, right_strip);
+        acc_left_strip = right_strip;
+    }
+
+    acc
 }
 
 #[cfg(test)]

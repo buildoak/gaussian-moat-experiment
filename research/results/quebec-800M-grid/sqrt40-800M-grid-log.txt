@@ -1,0 +1,491 @@
+=== sqrt(40) 800M Fine-Grid Campaign ===
+Started: 2026-03-19T09:08:19+00:00
+Purpose: Map the 800M anomaly (46.6% ratio) with fine resolution
+
+=== PROBE: 400M (D=400000000) ===
+[2026-03-19T09:08:19+00:00] Starting probe at D=400000000
+[09:08:19] === UB Campaign: k^2=40 tag=sqrt40-grid-400M mode=progressive sweep_mode=sweep ===
+[09:08:19]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:08:19]   start=400000000 ceiling=400000000 shell=5 wedges=6
+[09:08:19]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-400M.jsonl
+[09:08:19] [sweep] estimated primes 212.0M exceed 150.0M cap; switching to chunked sweep
+[09:08:19] sweep exceeds cap, using 1 chunks for norm=[159999994400000049,160000011200000196]
+[09:08:19] [chunked_sweep_1] it=1 dist=[400000000,400000000] norm=[159999994400000049,160000011200000196] timeout=849s
+[09:08:19] CMD (timeout=849s): build/gm_cuda_primes --norm-lo 159999994400000049 --norm-hi 160000011200000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-400M_chunkA.gprf --mode sieve --k-squared 40
+[09:09:22] CMD (timeout=849s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 400000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-400M_chunkA.gprf --batch-size 500000 --norm-bound 160000011200000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 62.944
+solve time (s): 74.920
+total time (s): 137.864
+primes generated: 212052767
+primes processed: 212052767
+effective throughput (primes/sec): 1538130.1
+moat result: NO_MOAT_IN_RANGE distance=400000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 62.944
+total solve time (s): 74.920
+result: no_moat_in_range
+boundary: 400000000
+[2026-03-19T09:10:37+00:00] Probe 400M complete
+
+=== PROBE: 500M (D=500000000) ===
+[2026-03-19T09:10:37+00:00] Starting probe at D=500000000
+[09:10:37] === UB Campaign: k^2=40 tag=sqrt40-grid-500M mode=progressive sweep_mode=sweep ===
+[09:10:37]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:10:37]   start=500000000 ceiling=500000000 shell=5 wedges=6
+[09:10:37]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-500M.jsonl
+[09:10:38] [sweep] estimated primes 262.1M exceed 150.0M cap; switching to chunked sweep
+[09:10:38] sweep exceeds cap, using 1 chunks for norm=[249999993000000049,250000014000000196]
+[09:10:38] [chunked_sweep_1] it=1 dist=[500000000,500000000] norm=[249999993000000049,250000014000000196] timeout=1049s
+[09:10:38] CMD (timeout=1049s): build/gm_cuda_primes --norm-lo 249999993000000049 --norm-hi 250000014000000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-500M_chunkA.gprf --mode sieve --k-squared 40
+[09:11:56] CMD (timeout=1049s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 500000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-500M_chunkA.gprf --batch-size 500000 --norm-bound 250000014000000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 78.564
+solve time (s): 92.109
+total time (s): 170.673
+primes generated: 262112951
+primes processed: 262112951
+effective throughput (primes/sec): 1535761.1
+moat result: NO_MOAT_IN_RANGE distance=500000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 78.564
+total solve time (s): 92.109
+result: no_moat_in_range
+boundary: 500000000
+[2026-03-19T09:13:28+00:00] Probe 500M complete
+
+=== PROBE: 550M (D=550000000) ===
+[2026-03-19T09:13:28+00:00] Starting probe at D=550000000
+[09:13:28] === UB Campaign: k^2=40 tag=sqrt40-grid-550M mode=progressive sweep_mode=sweep ===
+[09:13:28]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:13:28]   start=550000000 ceiling=550000000 shell=5 wedges=6
+[09:13:28]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-550M.jsonl
+[09:13:28] [sweep] estimated primes 287.0M exceed 150.0M cap; switching to chunked sweep
+[09:13:28] sweep exceeds cap, using 1 chunks for norm=[302499992300000049,302500015400000196]
+[09:13:28] [chunked_sweep_1] it=1 dist=[550000000,550000000] norm=[302499992300000049,302500015400000196] timeout=1148s
+[09:13:28] CMD (timeout=1148s): build/gm_cuda_primes --norm-lo 302499992300000049 --norm-hi 302500015400000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-550M_chunkA.gprf --mode sieve --k-squared 40
+[09:15:02] CMD (timeout=1148s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 550000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-550M_chunkA.gprf --batch-size 500000 --norm-bound 302500015400000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 93.456
+solve time (s): 102.993
+total time (s): 196.449
+primes generated: 286943711
+primes processed: 286943711
+effective throughput (primes/sec): 1460652.4
+moat result: NO_MOAT_IN_RANGE distance=550000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 93.456
+total solve time (s): 102.993
+result: no_moat_in_range
+boundary: 550000000
+[2026-03-19T09:16:45+00:00] Probe 550M complete
+
+=== PROBE: 600M (D=600000000) ===
+[2026-03-19T09:16:45+00:00] Starting probe at D=600000000
+[09:16:45] === UB Campaign: k^2=40 tag=sqrt40-grid-600M mode=progressive sweep_mode=sweep ===
+[09:16:45]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:16:45]   start=600000000 ceiling=600000000 shell=5 wedges=6
+[09:16:45]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-600M.jsonl
+[09:16:45] [sweep] estimated primes 311.7M exceed 150.0M cap; switching to chunked sweep
+[09:16:45] sweep exceeds cap, using 1 chunks for norm=[359999991600000049,360000016800000196]
+[09:16:45] [chunked_sweep_1] it=1 dist=[600000000,600000000] norm=[359999991600000049,360000016800000196] timeout=1247s
+[09:16:45] CMD (timeout=1247s): build/gm_cuda_primes --norm-lo 359999991600000049 --norm-hi 360000016800000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-600M_chunkA.gprf --mode sieve --k-squared 40
+[09:18:33] CMD (timeout=1247s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 600000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-600M_chunkA.gprf --batch-size 500000 --norm-bound 360000016800000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 108.210
+solve time (s): 112.866
+total time (s): 221.076
+primes generated: 311685096
+primes processed: 311685096
+effective throughput (primes/sec): 1409855.0
+moat result: NO_MOAT_IN_RANGE distance=600000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 108.210
+total solve time (s): 112.866
+result: no_moat_in_range
+boundary: 600000000
+[2026-03-19T09:20:26+00:00] Probe 600M complete
+
+=== PROBE: 650M (D=650000000) ===
+[2026-03-19T09:20:26+00:00] Starting probe at D=650000000
+[09:20:26] === UB Campaign: k^2=40 tag=sqrt40-grid-650M mode=progressive sweep_mode=sweep ===
+[09:20:26]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:20:26]   start=650000000 ceiling=650000000 shell=5 wedges=6
+[09:20:26]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-650M.jsonl
+[09:20:26] [sweep] estimated primes 336.3M exceed 150.0M cap; switching to chunked sweep
+[09:20:26] sweep exceeds cap, using 1 chunks for norm=[422499990900000049,422500018200000196]
+[09:20:26] [chunked_sweep_1] it=1 dist=[650000000,650000000] norm=[422499990900000049,422500018200000196] timeout=1346s
+[09:20:26] CMD (timeout=1346s): build/gm_cuda_primes --norm-lo 422499990900000049 --norm-hi 422500018200000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-650M_chunkA.gprf --mode sieve --k-squared 40
+[09:22:24] CMD (timeout=1346s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 650000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-650M_chunkA.gprf --batch-size 500000 --norm-bound 422500018200000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 117.717
+solve time (s): 126.784
+total time (s): 244.501
+primes generated: 336323916
+primes processed: 336323916
+effective throughput (primes/sec): 1375552.3
+moat result: NO_MOAT_IN_RANGE distance=650000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 117.717
+total solve time (s): 126.784
+result: no_moat_in_range
+boundary: 650000000
+[2026-03-19T09:24:31+00:00] Probe 650M complete
+
+=== PROBE: 700M (D=700000000) ===
+[2026-03-19T09:24:31+00:00] Starting probe at D=700000000
+[09:24:31] === UB Campaign: k^2=40 tag=sqrt40-grid-700M mode=progressive sweep_mode=sweep ===
+[09:24:31]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:24:31]   start=700000000 ceiling=700000000 shell=5 wedges=6
+[09:24:31]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-700M.jsonl
+[09:24:31] [sweep] estimated primes 360.9M exceed 150.0M cap; switching to chunked sweep
+[09:24:31] sweep exceeds cap, using 1 chunks for norm=[489999990200000049,490000019600000196]
+[09:24:31] [chunked_sweep_1] it=1 dist=[700000000,700000000] norm=[489999990200000049,490000019600000196] timeout=1444s
+[09:24:31] CMD (timeout=1444s): build/gm_cuda_primes --norm-lo 489999990200000049 --norm-hi 490000019600000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-700M_chunkA.gprf --mode sieve --k-squared 40
+[09:26:45] CMD (timeout=1444s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 700000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-700M_chunkA.gprf --batch-size 500000 --norm-bound 490000019600000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 134.184
+solve time (s): 134.822
+total time (s): 269.006
+primes generated: 360875553
+primes processed: 360875553
+effective throughput (primes/sec): 1341514.9
+moat result: NO_MOAT_IN_RANGE distance=700000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 134.184
+total solve time (s): 134.822
+result: no_moat_in_range
+boundary: 700000000
+[2026-03-19T09:29:00+00:00] Probe 700M complete
+
+=== PROBE: 750M (D=750000000) ===
+[2026-03-19T09:29:00+00:00] Starting probe at D=750000000
+[09:29:00] === UB Campaign: k^2=40 tag=sqrt40-grid-750M mode=progressive sweep_mode=sweep ===
+[09:29:00]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:29:00]   start=750000000 ceiling=750000000 shell=5 wedges=6
+[09:29:00]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-750M.jsonl
+[09:29:01] [sweep] estimated primes 385.4M exceed 150.0M cap; switching to chunked sweep
+[09:29:01] sweep exceeds cap, using 1 chunks for norm=[562499989500000049,562500021000000196]
+[09:29:01] [chunked_sweep_1] it=1 dist=[750000000,750000000] norm=[562499989500000049,562500021000000196] timeout=1542s
+[09:29:01] CMD (timeout=1542s): build/gm_cuda_primes --norm-lo 562499989500000049 --norm-hi 562500021000000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-750M_chunkA.gprf --mode sieve --k-squared 40
+[09:31:31] CMD (timeout=1542s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 750000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-750M_chunkA.gprf --batch-size 500000 --norm-bound 562500021000000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 150.087
+solve time (s): 145.997
+total time (s): 296.084
+primes generated: 385333461
+primes processed: 385333461
+effective throughput (primes/sec): 1301432.9
+moat result: NO_MOAT_IN_RANGE distance=750000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 150.087
+total solve time (s): 145.997
+result: no_moat_in_range
+boundary: 750000000
+[2026-03-19T09:33:57+00:00] Probe 750M complete
+
+=== PROBE: 775M (D=775000000) ===
+[2026-03-19T09:33:57+00:00] Starting probe at D=775000000
+[09:33:57] === UB Campaign: k^2=40 tag=sqrt40-grid-775M mode=progressive sweep_mode=sweep ===
+[09:33:57]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:33:57]   start=775000000 ceiling=775000000 shell=5 wedges=6
+[09:33:57]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-775M.jsonl
+[09:33:57] [sweep] estimated primes 397.6M exceed 150.0M cap; switching to chunked sweep
+[09:33:57] sweep exceeds cap, using 1 chunks for norm=[600624989150000049,600625021700000196]
+[09:33:57] [chunked_sweep_1] it=1 dist=[775000000,775000000] norm=[600624989150000049,600625021700000196] timeout=1591s
+[09:33:57] CMD (timeout=1591s): build/gm_cuda_primes --norm-lo 600624989150000049 --norm-hi 600625021700000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-775M_chunkA.gprf --mode sieve --k-squared 40
+[09:36:29] CMD (timeout=1591s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 775000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-775M_chunkA.gprf --batch-size 500000 --norm-bound 600625021700000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 151.730
+solve time (s): 150.082
+total time (s): 301.812
+primes generated: 397561177
+primes processed: 397561177
+effective throughput (primes/sec): 1317247.7
+moat result: NO_MOAT_IN_RANGE distance=775000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 151.730
+total solve time (s): 150.082
+result: no_moat_in_range
+boundary: 775000000
+[2026-03-19T09:38:59+00:00] Probe 775M complete
+
+=== PROBE: 790M (D=790000000) ===
+[2026-03-19T09:38:59+00:00] Starting probe at D=790000000
+[09:38:59] === UB Campaign: k^2=40 tag=sqrt40-grid-790M mode=progressive sweep_mode=sweep ===
+[09:38:59]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:38:59]   start=790000000 ceiling=790000000 shell=5 wedges=6
+[09:38:59]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-790M.jsonl
+[09:38:59] [sweep] estimated primes 404.9M exceed 150.0M cap; switching to chunked sweep
+[09:38:59] sweep exceeds cap, using 1 chunks for norm=[624099988940000049,624100022120000196]
+[09:38:59] [chunked_sweep_1] it=1 dist=[790000000,790000000] norm=[624099988940000049,624100022120000196] timeout=1620s
+[09:38:59] CMD (timeout=1620s): build/gm_cuda_primes --norm-lo 624099988940000049 --norm-hi 624100022120000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-790M_chunkA.gprf --mode sieve --k-squared 40
+[09:41:39] CMD (timeout=1620s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 790000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-790M_chunkA.gprf --batch-size 500000 --norm-bound 624100022120000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 159.957
+solve time (s): 152.052
+total time (s): 312.009
+primes generated: 404887341
+primes processed: 404887341
+effective throughput (primes/sec): 1297678.4
+moat result: NO_MOAT_IN_RANGE distance=790000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 159.957
+total solve time (s): 152.052
+result: no_moat_in_range
+boundary: 790000000
+[2026-03-19T09:44:11+00:00] Probe 790M complete
+
+=== PROBE: 800M (D=800000000) ===
+[2026-03-19T09:44:11+00:00] Starting probe at D=800000000
+[09:44:11] === UB Campaign: k^2=40 tag=sqrt40-grid-800M mode=progressive sweep_mode=sweep ===
+[09:44:11]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:44:11]   start=800000000 ceiling=800000000 shell=5 wedges=6
+[09:44:11]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-800M.jsonl
+[09:44:11] [sweep] estimated primes 409.8M exceed 150.0M cap; switching to chunked sweep
+[09:44:11] sweep exceeds cap, using 1 chunks for norm=[639999988800000049,640000022400000196]
+[09:44:11] [chunked_sweep_1] it=1 dist=[800000000,800000000] norm=[639999988800000049,640000022400000196] timeout=1640s
+[09:44:11] CMD (timeout=1640s): build/gm_cuda_primes --norm-lo 639999988800000049 --norm-hi 640000022400000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-800M_chunkA.gprf --mode sieve --k-squared 40
+[09:46:53] CMD (timeout=1640s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 800000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-800M_chunkA.gprf --batch-size 500000 --norm-bound 640000022400000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 161.365
+solve time (s): 156.869
+total time (s): 318.234
+primes generated: 409766916
+primes processed: 409766916
+effective throughput (primes/sec): 1287627.7
+moat result: NO_MOAT_IN_RANGE distance=800000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 161.365
+total solve time (s): 156.869
+result: no_moat_in_range
+boundary: 800000000
+[2026-03-19T09:49:30+00:00] Probe 800M complete
+
+=== PROBE: 810M (D=810000000) ===
+[2026-03-19T09:49:30+00:00] Starting probe at D=810000000
+[09:49:30] === UB Campaign: k^2=40 tag=sqrt40-grid-810M mode=progressive sweep_mode=sweep ===
+[09:49:30]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:49:30]   start=810000000 ceiling=810000000 shell=5 wedges=6
+[09:49:30]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-810M.jsonl
+[09:49:30] [sweep] estimated primes 414.6M exceed 150.0M cap; switching to chunked sweep
+[09:49:30] sweep exceeds cap, using 1 chunks for norm=[656099988660000049,656100022680000196]
+[09:49:30] [chunked_sweep_1] it=1 dist=[810000000,810000000] norm=[656099988660000049,656100022680000196] timeout=1659s
+[09:49:30] CMD (timeout=1659s): build/gm_cuda_primes --norm-lo 656099988660000049 --norm-hi 656100022680000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-810M_chunkA.gprf --mode sieve --k-squared 40
+[09:52:14] CMD (timeout=1659s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 810000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-810M_chunkA.gprf --batch-size 500000 --norm-bound 656100022680000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 163.914
+solve time (s): 157.564
+total time (s): 321.478
+primes generated: 414616968
+primes processed: 414616968
+effective throughput (primes/sec): 1289721.1
+moat result: NO_MOAT_IN_RANGE distance=810000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 163.914
+total solve time (s): 157.564
+result: no_moat_in_range
+boundary: 810000000
+[2026-03-19T09:54:52+00:00] Probe 810M complete
+
+=== PROBE: 825M (D=825000000) ===
+[2026-03-19T09:54:52+00:00] Starting probe at D=825000000
+[09:54:52] === UB Campaign: k^2=40 tag=sqrt40-grid-825M mode=progressive sweep_mode=sweep ===
+[09:54:52]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:54:52]   start=825000000 ceiling=825000000 shell=5 wedges=6
+[09:54:52]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-825M.jsonl
+[09:54:52] [sweep] estimated primes 421.9M exceed 150.0M cap; switching to chunked sweep
+[09:54:52] sweep exceeds cap, using 1 chunks for norm=[680624988450000049,680625023100000196]
+[09:54:52] [chunked_sweep_1] it=1 dist=[825000000,825000000] norm=[680624988450000049,680625023100000196] timeout=1688s
+[09:54:52] CMD (timeout=1688s): build/gm_cuda_primes --norm-lo 680624988450000049 --norm-hi 680625023100000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-825M_chunkA.gprf --mode sieve --k-squared 40
+[09:57:38] CMD (timeout=1688s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 825000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-825M_chunkA.gprf --batch-size 500000 --norm-bound 680625023100000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 166.791
+solve time (s): 157.421
+total time (s): 324.212
+primes generated: 421924211
+primes processed: 421924211
+effective throughput (primes/sec): 1301383.7
+moat result: NO_MOAT_IN_RANGE distance=825000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 166.791
+total solve time (s): 157.421
+result: no_moat_in_range
+boundary: 825000000
+[2026-03-19T10:00:16+00:00] Probe 825M complete
+
+=== PROBE: 850M (D=850000000) ===
+[2026-03-19T10:00:16+00:00] Starting probe at D=850000000
+[10:00:16] === UB Campaign: k^2=40 tag=sqrt40-grid-850M mode=progressive sweep_mode=sweep ===
+[10:00:16]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[10:00:16]   start=850000000 ceiling=850000000 shell=5 wedges=6
+[10:00:16]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-850M.jsonl
+[10:00:16] [sweep] estimated primes 434.1M exceed 150.0M cap; switching to chunked sweep
+[10:00:16] sweep exceeds cap, using 1 chunks for norm=[722499988100000049,722500023800000196]
+[10:00:16] [chunked_sweep_1] it=1 dist=[850000000,850000000] norm=[722499988100000049,722500023800000196] timeout=1737s
+[10:00:16] CMD (timeout=1737s): build/gm_cuda_primes --norm-lo 722499988100000049 --norm-hi 722500023800000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-850M_chunkA.gprf --mode sieve --k-squared 40
+[10:03:17] CMD (timeout=1737s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 850000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-850M_chunkA.gprf --batch-size 500000 --norm-bound 722500023800000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 180.430
+solve time (s): 164.477
+total time (s): 344.907
+primes generated: 434078872
+primes processed: 434078872
+effective throughput (primes/sec): 1258538.9
+moat result: NO_MOAT_IN_RANGE distance=850000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 180.430
+total solve time (s): 164.477
+result: no_moat_in_range
+boundary: 850000000
+[2026-03-19T10:06:01+00:00] Probe 850M complete
+
+=== PROBE: 900M (D=900000000) ===
+[2026-03-19T10:06:01+00:00] Starting probe at D=900000000
+[10:06:01] === UB Campaign: k^2=40 tag=sqrt40-grid-900M mode=progressive sweep_mode=sweep ===
+[10:06:01]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[10:06:01]   start=900000000 ceiling=900000000 shell=5 wedges=6
+[10:06:01]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-900M.jsonl
+[10:06:01] [sweep] estimated primes 458.3M exceed 150.0M cap; switching to chunked sweep
+[10:06:01] sweep exceeds cap, using 1 chunks for norm=[809999987400000049,810000025200000196]
+[10:06:01] [chunked_sweep_1] it=1 dist=[900000000,900000000] norm=[809999987400000049,810000025200000196] timeout=1834s
+[10:06:01] CMD (timeout=1834s): build/gm_cuda_primes --norm-lo 809999987400000049 --norm-hi 810000025200000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-900M_chunkA.gprf --mode sieve --k-squared 40
+[10:09:13] CMD (timeout=1834s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 900000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-900M_chunkA.gprf --batch-size 500000 --norm-bound 810000025200000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 191.630
+solve time (s): 172.741
+total time (s): 364.371
+primes generated: 458344024
+primes processed: 458344024
+effective throughput (primes/sec): 1257904.8
+moat result: NO_MOAT_IN_RANGE distance=900000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 191.630
+total solve time (s): 172.741
+result: no_moat_in_range
+boundary: 900000000
+[2026-03-19T10:12:06+00:00] Probe 900M complete
+
+=== PROBE: 950M (D=950000000) ===
+[2026-03-19T10:12:06+00:00] Starting probe at D=950000000
+[10:12:06] === UB Campaign: k^2=40 tag=sqrt40-grid-950M mode=progressive sweep_mode=sweep ===
+[10:12:06]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[10:12:06]   start=950000000 ceiling=950000000 shell=5 wedges=6
+[10:12:06]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-950M.jsonl
+[10:12:06] [sweep] estimated primes 482.5M exceed 150.0M cap; switching to chunked sweep
+[10:12:06] sweep exceeds cap, using 1 chunks for norm=[902499986700000049,902500026600000196]
+[10:12:06] [chunked_sweep_1] it=1 dist=[950000000,950000000] norm=[902499986700000049,902500026600000196] timeout=1931s
+[10:12:06] CMD (timeout=1931s): build/gm_cuda_primes --norm-lo 902499986700000049 --norm-hi 902500026600000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-950M_chunkA.gprf --mode sieve --k-squared 40
+[10:15:30] CMD (timeout=1931s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 950000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-950M_chunkA.gprf --batch-size 500000 --norm-bound 902500026600000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 204.257
+solve time (s): 181.454
+total time (s): 385.711
+primes generated: 482536634
+primes processed: 482536634
+effective throughput (primes/sec): 1251031.6
+moat result: NO_MOAT_IN_RANGE distance=950000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 204.257
+total solve time (s): 181.454
+result: no_moat_in_range
+boundary: 950000000
+[2026-03-19T10:18:32+00:00] Probe 950M complete
+
+=== PROBE: 1000M (D=1000000000) ===
+[2026-03-19T10:18:32+00:00] Starting probe at D=1000000000
+[10:18:32] === UB Campaign: k^2=40 tag=sqrt40-grid-1000M mode=progressive sweep_mode=sweep ===
+[10:18:32]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[10:18:32]   start=1000000000 ceiling=1000000000 shell=5 wedges=6
+[10:18:32]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1000M.jsonl
+[10:18:32] [sweep] estimated primes 506.7M exceed 150.0M cap; switching to chunked sweep
+[10:18:32] sweep exceeds cap, using 1 chunks for norm=[999999986000000049,1000000028000000196]
+[10:18:32] [chunked_sweep_1] it=1 dist=[1000000000,1000000000] norm=[999999986000000049,1000000028000000196] timeout=2027s
+[10:18:32] CMD (timeout=2027s): build/gm_cuda_primes --norm-lo 999999986000000049 --norm-hi 1000000028000000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1000M_chunkA.gprf --mode sieve --k-squared 40
+[10:22:10] CMD (timeout=2027s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 1000000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1000M_chunkA.gprf --batch-size 500000 --norm-bound 1000000028000000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 218.002
+solve time (s): 190.653
+total time (s): 408.655
+primes generated: 506675717
+primes processed: 506675717
+effective throughput (primes/sec): 1239861.8
+moat result: NO_MOAT_IN_RANGE distance=1000000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 218.002
+total solve time (s): 190.653
+result: no_moat_in_range
+boundary: 1000000000
+[2026-03-19T10:25:21+00:00] Probe 1000M complete
+
+=== PROBE: 1200M (D=1200000000) ===
+[2026-03-19T10:25:21+00:00] Starting probe at D=1200000000
+[10:25:21] === UB Campaign: k^2=40 tag=sqrt40-grid-1200M mode=progressive sweep_mode=sweep ===
+[10:25:21]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[10:25:21]   start=1200000000 ceiling=1200000000 shell=5 wedges=6
+[10:25:21]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1200M.jsonl
+[10:25:21] [sweep] estimated primes 602.7M exceed 150.0M cap; switching to chunked sweep
+[10:25:21] sweep exceeds cap, using 1 chunks for norm=[1439999983200000049,1440000033600000196]
+[10:25:21] [chunked_sweep_1] it=1 dist=[1200000000,1200000000] norm=[1439999983200000049,1440000033600000196] timeout=2411s
+[10:25:21] CMD (timeout=2411s): build/gm_cuda_primes --norm-lo 1439999983200000049 --norm-hi 1440000033600000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1200M_chunkA.gprf --mode sieve --k-squared 40
+[10:30:03] CMD (timeout=2411s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 1200000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1200M_chunkA.gprf --batch-size 500000 --norm-bound 1440000033600000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 282.048
+solve time (s): 231.981
+total time (s): 514.029
+primes generated: 602700735
+primes processed: 602700735
+effective throughput (primes/sec): 1172503.4
+moat result: NO_MOAT_IN_RANGE distance=1200000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 282.048
+total solve time (s): 231.981
+result: no_moat_in_range
+boundary: 1200000000
+[2026-03-19T10:33:56+00:00] Probe 1200M complete
+
+=== PROBE: 1600M (D=1600000000) ===
+[2026-03-19T10:33:56+00:00] Starting probe at D=1600000000
+[10:33:56] === UB Campaign: k^2=40 tag=sqrt40-grid-1600M mode=progressive sweep_mode=sweep ===
+[10:33:56]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[10:33:56]   start=1600000000 ceiling=1600000000 shell=5 wedges=6
+[10:33:56]   results=/root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1600M.jsonl
+[10:33:56] [sweep] estimated primes 792.7M exceed 150.0M cap; switching to chunked sweep
+[10:33:56] sweep exceeds cap, using 1 chunks for norm=[2559999977600000049,2560000044800000196]
+[10:33:56] [chunked_sweep_1] it=1 dist=[1600000000,1600000000] norm=[2559999977600000049,2560000044800000196] timeout=3171s
+[10:33:56] CMD (timeout=3171s): build/gm_cuda_primes --norm-lo 2559999977600000049 --norm-hi 2560000044800000196 --output /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1600M_chunkA.gprf --mode sieve --k-squared 40
+[10:41:16] CMD (timeout=3171s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 1600000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-800M-grid/ub_sqrt40-grid-1600M_chunkA.gprf --batch-size 500000 --norm-bound 2560000044800000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 440.423
+solve time (s): 321.176
+total time (s): 761.599
+primes generated: 792705860
+primes processed: 792705860
+effective throughput (primes/sec): 1040844.1
+moat result: NO_MOAT_IN_RANGE distance=1600000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 440.423
+total solve time (s): 321.176
+result: no_moat_in_range
+boundary: 1600000000
+[2026-03-19T10:46:38+00:00] Probe 1600M complete
+
+=== ALL 800M GRID PROBES COMPLETE: 2026-03-19T10:46:38+00:00 ===

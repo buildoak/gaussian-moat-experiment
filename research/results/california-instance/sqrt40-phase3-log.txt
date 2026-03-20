@@ -1,0 +1,126 @@
+[07:29:47] === UB Campaign: k^2=40 tag=sqrt40-phase3-2.4B mode=progressive sweep_mode=sweep ===
+[07:29:47]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[07:29:47]   start=2400000000 ceiling=2400000000 shell=5 wedges=6
+[07:29:47]   results=/root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-2.4B.jsonl
+[07:29:47] [sweep] estimated primes 1166.7M exceed 150.0M cap; switching to chunked sweep
+[07:29:47] sweep exceeds cap, using 1 chunks for norm=[5759999966400000049,5760000067200000196]
+[07:29:47] [chunked_sweep_1] it=1 dist=[2400000000,2400000000] norm=[5759999966400000049,5760000067200000196] timeout=3600s
+[07:29:47] CMD (timeout=3600s): build/gm_cuda_primes --norm-lo 5759999966400000049 --norm-hi 5760000067200000196 --output /root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-2.4B_chunkA.gprf --mode sieve --k-squared 40
+[07:48:54] CMD (timeout=3600s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 2400000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-2.4B_chunkA.gprf --batch-size 500000 --norm-bound 5760000067200000196 --profile
+=== SWEEP SUMMARY ===
+sieve time (s): 1147.491
+solve time (s): 877.760
+total time (s): 2025.251
+primes generated: 1166729096
+primes processed: 1166729096
+effective throughput (primes/sec): 576091.1
+moat result: NO_MOAT_IN_RANGE distance=2400000014.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 1147.491
+total solve time (s): 877.760
+result: no_moat_in_range
+boundary: 2400000000
+[08:03:32] === UB Campaign: k^2=40 tag=sqrt40-phase3-3.2B mode=progressive sweep_mode=sweep ===
+[08:03:32]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[08:03:32]   start=3200000000 ceiling=3200000000 shell=5 wedges=6
+[08:03:32]   results=/root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-3.2B.jsonl
+[08:03:32] [sweep] estimated primes 1535.2M exceed 150.0M cap; switching to chunked sweep
+[08:03:32] sweep exceeds cap, using 1 chunks for norm=[10239999955200000049,10240000089600000196]
+[08:03:32] [chunked_sweep_1] it=1 dist=[3200000000,3200000000] norm=[10239999955200000049,10240000089600000196] timeout=3600s
+[08:03:32] CMD (timeout=3600s): build/gm_cuda_primes --norm-lo 10239999955200000049 --norm-hi 10240000089600000196 --output /root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-3.2B_chunkA.gprf --mode sieve --k-squared 40
+[09:03:25] CMD (timeout=3600s): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 3200000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-3.2B_chunkA.gprf --batch-size 500000 --norm-bound 10240000089600000196 --profile
+[09:32:59] [chunked_sweep_1] it=1 ERROR: command failed (exit -9): solver/target/release/gaussian-moat-solver --k-squared 40 --start-distance 3200000000 --angular 6 --prime-file /root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-3.2B_chunkA.gprf --batch-size 500000 --norm-bound 10240000089600000196 --profile
+elapsed=1632.78s
+angular progress: phase=stream-parallel primes=840000000 wedges=6 elapsed=1635.61s
+angular progress: phase=stream-parallel primes=841000000 wedges=6 elapsed=1638.27s
+angular progress: phase=stream-parallel primes=842000000 wedges=6 elapsed=1640.94s
+angular progress: phase=stream-parallel primes=843000000 wedges=6 elapsed=1643.68s
+angular progress: phase=stream-parallel primes=844000000 wedges=6 elapsed=1646.32s
+angular progress: phase=stream-parallel primes=845000000 wedges=6 elapsed=1648.97s
+angular progress: phase=stream-parallel primes=846000000 wedges=6 elapsed=1651.50s
+angular progress: phase=stream-parallel primes=847000000 wedges=6 elapsed=1654.05s
+angular progress: phase=stream-parallel primes=848000000 wedges=6 elapsed=1656.72s
+angular progress: phase=stream-parallel primes=849000000 wedges=6 elapsed=1659.57s
+angular progress: phase=stream-parallel primes=850000000 wedges=6 elapsed=1662.20s
+angular progress: phase=stream-parallel primes=851000000 wedges=6 elapsed=1664.92s
+angular progress: phase=stream-parallel primes=852000000 wedges=6 elapsed=1667.95s
+angular progress: phase=stream-parallel primes=853000000 wedges=6 elapsed=1670.74s
+angular progress: phase=stream-parallel primes=854000000 wedges=6 elapsed=1673.40s
+angular progress: phase=stream-parallel primes=855000000 wedges=6 elapsed=1676.03s
+angular progress: phase=stream-parallel primes=856000000 wedges=6 elapsed=1678.73s
+angular progress: phase=stream-parallel primes=857000000 wedges=6 elapsed=1681.37s
+angular progress: phase=stream-parallel primes=858000000 wedges=6 elapsed=1684.00s
+angular progress: phase=stream-parallel primes=859000000 wedges=6 elapsed=1686.72s
+angular progress: phase=stream-parallel primes=860000000 wedges=6 elapsed=1689.50s
+angular progress: phase=stream-parallel primes=861000000 wedges=6 elapsed=1692.34s
+angular progress: phase=stream-parallel primes=862000000 wedges=6 elapsed=1695.21s
+angular progress: phase=stream-parallel primes=863000000 wedges=6 elapsed=1697.98s
+angular progress: phase=stream-parallel primes=864000000 wedges=6 elapsed=1700.93s
+angular progress: phase=stream-parallel primes=865000000 wedges=6 elapsed=1703.72s
+angular progress: phase=stream-parallel primes=866000000 wedges=6 elapsed=1706.45s
+angular progress: phase=stream-parallel primes=867000000 wedges=6 elapsed=1709.13s
+angular progress: phase=stream-parallel primes=868000000 wedges=6 elapsed=1711.78s
+angular progress: phase=stream-parallel primes=869000000 wedges=6 elapsed=1714.36s
+angular progress: phase=stream-parallel primes=870000000 wedges=6 elapsed=1716.97s
+angular progress: phase=stream-parallel primes=871000000 wedges=6 elapsed=1719.57s
+angular progress: phase=stream-parallel primes=872000000 wedges=6 elapsed=1722.17s
+angular progress: phase=stream-parallel primes=873000000 wedges=6 elapsed=1724.74s
+angular progress: phase=stream-parallel primes=874000000 wedges=6 elapsed=1727.39s
+angular progress: phase=stream-parallel primes=875000000 wedges=6 elapsed=1729.99s
+angular progress: phase=stream-parallel primes=876000000 wedges=6 elapsed=1732.90s
+angular progress: phase=stream-parallel primes=877000000 wedges=6 elapsed=1735.60s
+angular progress: phase=stream-parallel primes=878000000 wedges=6 elapsed=1738.44s
+angular progress: phase=stream-parallel primes=879000000 wedges=6 elapsed=1741.24s
+angular progress: phase=stream-parallel primes=880000000 wedges=6 elapsed=1743.85s
+angular progress: phase=stream-parallel primes=881000000 wedges=6 elapsed=1746.49s
+angular progress: phase=stream-parallel primes=882000000 wedges=6 elapsed=1749.36s
+angular progress: phase=stream-parallel primes=883000000 wedges=6 elapsed=1752.17s
+angular progress: phase=stream-parallel primes=884000000 wedges=6 elapsed=1754.90s
+angular progress: phase=stream-parallel primes=885000000 wedges=6 elapsed=1757.79s
+angular progress: phase=stream-parallel primes=886000000 wedges=6 elapsed=1760.57s
+angular progress: phase=stream-parallel primes=887000000 wedges=6 elapsed=1763.38s
+=== SWEEP SUMMARY ===
+sieve time (s): 3592.714
+solve time (s): 0.000
+total time (s): 3592.714
+primes generated: 1535214811
+primes processed: 1535214811
+effective throughput (primes/sec): 427313.4
+moat result: NO_MOAT_IN_RANGE distance=3200000000.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 3592.714
+total solve time (s): 0.000
+result: error
+boundary: 3200000000
+[09:32:59] === UB Campaign: k^2=40 tag=sqrt40-phase3-6.4B mode=progressive sweep_mode=sweep ===
+[09:32:59]   platform=custom sieve=build/gm_cuda_primes solver=solver/target/release/gaussian-moat-solver
+[09:32:59]   start=6400000000 ceiling=6400000000 shell=5 wedges=6
+[09:32:59]   results=/root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-6.4B.jsonl
+[09:33:00] [sweep] estimated primes 2976.1M exceed 150.0M cap; switching to chunked sweep
+[09:33:00] sweep exceeds cap, using 1 chunks for norm=[40959999910400000049,40960000179200000196]
+[09:33:00] [chunked_sweep_1] it=1 dist=[6400000000,6400000000] norm=[40959999910400000049,40960000179200000196] timeout=3600s
+[09:33:00] CMD (timeout=3600s): build/gm_cuda_primes --norm-lo 40959999910400000049 --norm-hi 40960000179200000196 --output /root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-6.4B_chunkA.gprf --mode sieve --k-squared 40
+[09:33:16] [chunked_sweep_1] it=1 ERROR: command failed (exit 1): build/gm_cuda_primes --norm-lo 40959999910400000049 --norm-hi 40960000179200000196 --output /root/gaussian-moat-cuda/sqrt40-campaign/ub_sqrt40-phase3-6.4B_chunkA.gprf --mode sieve --k-squared 40
+gm_cuda_primes — mode=sieve, norm range [18446744073709551615, 18446744073709551615)
+Device: NVIDIA GeForce RTX 3090 (SM 8.6, 82 SMs, 23.6 GB)
+[sieve] Generating base primes up to 4294967298...
+[sieve] 203280221 base primes in 9.103 s
+[sieve] tiny=54, small=23000, large=203257221
+[sieve] Sieve buffer: 65536 entries (0.5 MB), GP buffer: 1.0 MB
+FATAL: sieve output overflow — 12811762 primes exceed buffer capacity 65536. Increase EST_PRIME_FACTOR or reduce batch size.
+=== SWEEP SUMMARY ===
+sieve time (s): 0.000
+solve time (s): 0.000
+total time (s): 0.000
+primes generated: 0
+primes processed: 0
+effective throughput (primes/sec): 0.0
+moat result: NO_MOAT_IN_RANGE distance=6400000000.000
+=== SUMMARY ===
+total probes: 1
+total sieve time (s): 0.000
+total solve time (s): 0.000
+result: error
+boundary: 6400000000
