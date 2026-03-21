@@ -5,6 +5,9 @@ use serde::{Deserialize, Serialize};
 
 use moat_kernel::kernel::{TileKernel, TileResult};
 use moat_kernel::primes::PrimeSieve;
+use moat_kernel::tile::{
+    build_tile_with_sieve, FacePort, TileDetail, TileOperator, FACE_LEFT_BIT, FACE_RIGHT_BIT,
+};
 
 /// Configuration for an ISE campaign.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,6 +20,10 @@ pub struct IseConfig {
     pub num_stripes: usize,
     pub fallback_heights: Vec<u32>,
     pub trace: bool,
+    /// When true, populate full per-tile detail (primes, edges, face_ports) in TileRecord.
+    /// Off by default; zero overhead when disabled.
+    #[serde(default)]
+    pub export_detail: bool,
 }
 
 /// A single tile's record within a stripe, including position, dimensions, and results.
@@ -28,9 +35,25 @@ pub struct TileRecord {
     pub height: u32,
     pub result: TileResult,
     pub connects_below: Option<bool>, // Always None in ISE mode
-    pub connects_left: Option<bool>,  // LB mode post-processing only
-    pub connects_right: Option<bool>, // LB mode post-processing only
+    pub connects_left: Option<bool>,
+    pub connects_right: Option<bool>,
     pub time_ms: u64,
+    /// Full tile detail (primes, edges, face assignments, component IDs).
+    /// Only populated when `export_detail=true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<TileDetail>,
+    /// Face port lists per face. Only populated when `export_detail=true`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub face_ports: Option<TileRecordFacePorts>,
+}
+
+/// Face port lists extracted from TileOperator, attached to TileRecord when detail is on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TileRecordFacePorts {
+    pub inner: Vec<FacePort>,
+    pub outer: Vec<FacePort>,
+    pub left: Vec<FacePort>,
+    pub right: Vec<FacePort>,
 }
 
 /// A vertical stripe: a sequence of tile records from r_min to r_max.
@@ -211,6 +234,8 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
     // Per-stripe accumulators: built up as we process shells
     let num_stripes = config.num_stripes;
 
+    let export_detail = config.export_detail;
+
     // Process shells in parallel. Each shell builds its own sieve and kernel.
     let shell_results: Vec<(ShellRecord, Vec<(usize, TileRecord)>)> = shells
         .par_iter()
@@ -221,18 +246,40 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
             // Build per-shell sieve
             let sieve_limit = sieve_limit_for_shell(a_lo, a_hi, &offsets, w, config.k_sq);
             let sieve = PrimeSieve::new(sieve_limit);
-            let kernel = moat_kernel::kernel::CpuKernel::new(&sieve);
+
+            // When export_detail is off, use the kernel trait (fast path, no detail overhead).
+            // When export_detail is on, call build_tile_with_sieve directly to get the
+            // full TileOperator (including TileDetail and FacePort lists).
+            let kernel = if !export_detail {
+                Some(moat_kernel::kernel::CpuKernel::new(&sieve))
+            } else {
+                None
+            };
 
             // Process all stripes for this shell
-            let tile_results: Vec<(usize, TileResult, u64)> = offsets
+            // (stripe_idx, result, time_ms, detail, tile_operator)
+            type TileOut = (usize, TileResult, u64, Option<TileDetail>, Option<TileOperator>);
+            let tile_results: Vec<TileOut> = offsets
                 .par_iter()
                 .enumerate()
                 .map(|(stripe_idx, &b_lo)| {
                     let tile_start = Instant::now();
                     let b_hi = b_lo + w as i64;
-                    let result = kernel.run_tile(a_lo, a_hi, b_lo, b_hi, config.k_sq);
-                    let tile_ms = tile_start.elapsed().as_millis() as u64;
-                    (stripe_idx, result, tile_ms)
+                    if let Some(ref k) = kernel {
+                        // Fast path: no detail
+                        let result = k.run_tile(a_lo, a_hi, b_lo, b_hi, config.k_sq);
+                        let tile_ms = tile_start.elapsed().as_millis() as u64;
+                        (stripe_idx, result, tile_ms, None, None)
+                    } else {
+                        // Detail path: build full TileOperator
+                        let tile_op = build_tile_with_sieve(
+                            a_lo, a_hi, b_lo, b_hi, config.k_sq, &sieve, true,
+                        );
+                        let result = TileResult::from_tile_operator(&tile_op);
+                        let detail = tile_op.detail.clone();
+                        let tile_ms = tile_start.elapsed().as_millis() as u64;
+                        (stripe_idx, result, tile_ms, detail, Some(tile_op))
+                    }
                 })
                 .collect();
 
@@ -241,9 +288,32 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
             let mut total_primes = 0usize;
             let mut tile_records: Vec<(usize, TileRecord)> = Vec::with_capacity(num_stripes);
 
-            for (stripe_idx, result, tile_ms) in tile_results {
+            for (stripe_idx, result, tile_ms, detail, tile_op) in tile_results {
                 io_counts[stripe_idx] = result.io_count;
                 total_primes += result.num_primes;
+
+                // Connectivity flags: populated when detail is on
+                let (connects_below, connects_left, connects_right, face_ports) =
+                    if let Some(ref op) = tile_op {
+                        let cb = result.io_count > 0;
+                        let cl = op
+                            .component_faces
+                            .iter()
+                            .any(|&f| f & FACE_LEFT_BIT != 0);
+                        let cr = op
+                            .component_faces
+                            .iter()
+                            .any(|&f| f & FACE_RIGHT_BIT != 0);
+                        let fp = TileRecordFacePorts {
+                            inner: op.face_inner.clone(),
+                            outer: op.face_outer.clone(),
+                            left: op.face_left.clone(),
+                            right: op.face_right.clone(),
+                        };
+                        (Some(cb), Some(cl), Some(cr), Some(fp))
+                    } else {
+                        (None, None, None, None)
+                    };
 
                 let record = TileRecord {
                     a_lo,
@@ -251,10 +321,12 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                     width: w,
                     height: config.tile_height,
                     result,
-                    connects_below: None, // ISE mode: always None
-                    connects_left: None,
-                    connects_right: None,
+                    connects_below,
+                    connects_left,
+                    connects_right,
                     time_ms: tile_ms,
+                    detail,
+                    face_ports,
                 };
                 tile_records.push((stripe_idx, record));
             }
@@ -424,6 +496,7 @@ mod tests {
             num_stripes: 8,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
 
         let result = run_ise(&config);
@@ -473,6 +546,7 @@ mod tests {
             num_stripes: 16,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
 
         let result = run_ise(&config);
@@ -513,6 +587,7 @@ mod tests {
             num_stripes: 8,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
 
         let result = run_ise(&config);
@@ -545,6 +620,7 @@ mod tests {
             num_stripes: 4,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
 
         let result = run_ise(&config);
@@ -596,6 +672,7 @@ mod tests {
             num_stripes: 8,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
         let result_no_fb = run_ise(&config_no_fb);
         let candidates_no_fb = result_no_fb
@@ -615,6 +692,7 @@ mod tests {
             num_stripes: 8,
             fallback_heights: vec![20],
             trace: false,
+            export_detail: false,
         };
         let result_with_fb = run_ise(&config_with_fb);
         let candidates_with_fb = result_with_fb
@@ -645,6 +723,7 @@ mod tests {
             num_stripes: 8,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
         let result_no_fb = run_ise(&config_no_fb);
 
@@ -657,6 +736,7 @@ mod tests {
             num_stripes: 8,
             fallback_heights: vec![8], // Same as primary
             trace: false,
+            export_detail: false,
         };
         let result_with_same = run_ise(&config_with_same);
 
@@ -692,6 +772,7 @@ mod tests {
             num_stripes: 0,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
         run_ise(&config);
     }

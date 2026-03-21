@@ -68,6 +68,10 @@ struct Args {
     #[arg(long, value_delimiter = ',')]
     fallback_heights: Option<Vec<u32>>,
 
+    /// Export full per-tile detail (primes, edges, face_ports) in JSON output.
+    #[arg(long)]
+    export_detail: bool,
+
     /// Run validation against known moats.
     #[arg(long)]
     validate: bool,
@@ -114,6 +118,7 @@ fn run_validation() -> bool {
             num_stripes: 8,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
 
         let result = run_ise(&config);
@@ -166,6 +171,7 @@ fn main() {
         num_stripes: args.stripes,
         fallback_heights: args.fallback_heights.unwrap_or_default(),
         trace: args.trace,
+        export_detail: args.export_detail,
     };
 
     let result = run_ise(&config);

@@ -16,7 +16,7 @@ pub enum Face {
     Right,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct FacePort {
     pub a: i64,
     pub b: i64,
@@ -27,7 +27,7 @@ pub type FaceSet = u8;
 
 /// Detailed prime positions, edges, and component assignments for a single tile.
 /// Only populated when `export_detail` is enabled (opt-in, can be large).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, serde::Deserialize)]
 pub struct TileDetail {
     pub primes: Vec<(i64, i64)>,
     pub edges: Vec<(usize, usize)>,
