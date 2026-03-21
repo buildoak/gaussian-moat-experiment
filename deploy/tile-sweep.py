@@ -27,15 +27,15 @@ from pathlib import Path
 # ---------------------------------------------------------------------------
 # Defaults
 # ---------------------------------------------------------------------------
-DEFAULT_TILE_DEPTHS  = [250, 500, 1000, 2000, 4000]
-DEFAULT_STRIP_WIDTHS = [120, 240, 480, 960]
-DEFAULT_NUM_STRIPS   = [32, 64, 128, 256]
+DEFAULT_TILE_DEPTHS  = [500, 1000, 2000, 4000]
+DEFAULT_STRIP_WIDTHS = [240, 480, 960]
+DEFAULT_NUM_STRIPS   = [32, 64, 128]
 DEFAULT_K_SQUARED    = 26
 DEFAULT_R_MIN        = 950_000
 DEFAULT_R_MAX        = 1_050_000
 DEFAULT_BINARY       = "./target/release/tile-probe"
 DEFAULT_TSUCHIMURA   = 1_015_639
-DEFAULT_TIMEOUT_SEC  = 300  # 5 minutes per run
+DEFAULT_TIMEOUT_SEC  = 3600  # 1 hour per run
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +308,7 @@ def main():
     parser.add_argument("--tsuchimura",   type=int, default=DEFAULT_TSUCHIMURA,
                         help="Known moat R for gap calculation")
     parser.add_argument("--timeout",      type=int, default=DEFAULT_TIMEOUT_SEC,
-                        help="Per-run timeout in seconds (default: 300)")
+                        help="Per-run timeout in seconds (default: 3600)")
 
     args = parser.parse_args()
 
