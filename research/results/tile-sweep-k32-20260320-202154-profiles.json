@@ -1,0 +1,11 @@
+[
+  {
+    "tile_depth": 2000,
+    "strip_width": 240,
+    "num_strips": 64,
+    "k_squared": 32,
+    "r_min": 2700000,
+    "r_max": 2950000,
+    "shells": []
+  }
+]
