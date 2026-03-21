@@ -1,11 +1,8 @@
-[package]
-name = "tile-probe"
-version = "0.1.0"
-edition = "2021"
-publish = false
+[workspace]
+members = ["crates/moat-kernel", "crates/ise", "crates/lb-probe"]
+resolver = "2"
 
-[dependencies]
-solver = { path = "../solver", package = "gaussian-moat-solver" }
+[workspace.dependencies]
 rayon = "1.10"
 clap = { version = "4", features = ["derive"] }
 fxhash = "0.2"
