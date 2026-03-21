@@ -81,7 +81,7 @@ fn large_target_config(k_sq: u64, r_max: f64) -> ProbeConfig {
     let collar = (k_sq as f64).sqrt().ceil();
     let strip_width = (collar * 40.0).max(128.0);
     let num_strips = 64;
-    let tile_depth = (r_max / 100.0).max(1000.0).min(10000.0);
+    let tile_depth = (r_max / 100.0).clamp(1000.0, 10000.0);
 
     ProbeConfig {
         k_sq,
