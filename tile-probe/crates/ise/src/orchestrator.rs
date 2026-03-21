@@ -20,10 +20,14 @@ pub struct IseConfig {
     pub num_stripes: usize,
     pub fallback_heights: Vec<u32>,
     pub trace: bool,
-    /// When true, populate full per-tile detail (primes, edges, face_ports) in TileRecord.
-    /// Off by default; zero overhead when disabled.
+    /// When true, populate lightweight per-tile metadata (face_ports, connectivity
+    /// flags, per-face component lists) in TileRecord. Negligible overhead.
     #[serde(default)]
     pub export_detail: bool,
+    /// When true, populate heavy per-tile data (primes, edges, face_assignments,
+    /// component_ids) in TileRecord. Implies export_detail. Large memory cost.
+    #[serde(default)]
+    pub export_primes: bool,
 }
 
 /// A single tile's record within a stripe, including position, dimensions, and results.
@@ -235,6 +239,7 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
     let num_stripes = config.num_stripes;
 
     let export_detail = config.export_detail;
+    let export_primes = config.export_primes;
 
     // Process shells in parallel. Each shell builds its own sieve and kernel.
     let shell_results: Vec<(ShellRecord, Vec<(usize, TileRecord)>)> = shells
@@ -247,9 +252,12 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
             let sieve_limit = sieve_limit_for_shell(a_lo, a_hi, &offsets, w, config.k_sq);
             let sieve = PrimeSieve::new(sieve_limit);
 
-            // When export_detail is off, use the kernel trait (fast path, no detail overhead).
-            // When export_detail is on, call build_tile_with_sieve directly to get the
-            // full TileOperator (including TileDetail and FacePort lists).
+            // Three paths:
+            // 1. No flags: CpuKernel fast path (no detail, no face_ports).
+            // 2. --export-detail only: build_tile_with_sieve(export_detail=false) to
+            //    get TileOperator with face_ports but NO TileDetail (no primes/edges).
+            // 3. --export-primes: build_tile_with_sieve(export_detail=true) to get
+            //    full TileDetail (primes, edges, face_assignments, component_ids).
             let kernel = if !export_detail {
                 Some(moat_kernel::kernel::CpuKernel::new(&sieve))
             } else {
@@ -266,12 +274,12 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                     let tile_start = Instant::now();
                     let b_hi = b_lo + w as i64;
                     if let Some(ref k) = kernel {
-                        // Fast path: no detail
+                        // Fast path: no detail, no face_ports
                         let result = k.run_tile(a_lo, a_hi, b_lo, b_hi, config.k_sq);
                         let tile_ms = tile_start.elapsed().as_millis() as u64;
                         (stripe_idx, result, tile_ms, None, None)
-                    } else {
-                        // Detail path: build full TileOperator
+                    } else if export_primes {
+                        // Heavy path: full TileDetail (primes, edges, etc.)
                         let tile_op = build_tile_with_sieve(
                             a_lo, a_hi, b_lo, b_hi, config.k_sq, &sieve, true,
                         );
@@ -279,6 +287,14 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                         let detail = tile_op.detail.clone();
                         let tile_ms = tile_start.elapsed().as_millis() as u64;
                         (stripe_idx, result, tile_ms, detail, Some(tile_op))
+                    } else {
+                        // Lightweight path: face_ports + connectivity, no TileDetail
+                        let tile_op = build_tile_with_sieve(
+                            a_lo, a_hi, b_lo, b_hi, config.k_sq, &sieve, false,
+                        );
+                        let result = TileResult::from_tile_operator(&tile_op);
+                        let tile_ms = tile_start.elapsed().as_millis() as u64;
+                        (stripe_idx, result, tile_ms, None, Some(tile_op))
                     }
                 })
                 .collect();
@@ -497,6 +513,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
 
         let result = run_ise(&config);
@@ -547,6 +564,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
 
         let result = run_ise(&config);
@@ -588,6 +606,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
 
         let result = run_ise(&config);
@@ -621,6 +640,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
 
         let result = run_ise(&config);
@@ -673,6 +693,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
         let result_no_fb = run_ise(&config_no_fb);
         let candidates_no_fb = result_no_fb
@@ -693,6 +714,7 @@ mod tests {
             fallback_heights: vec![20],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
         let result_with_fb = run_ise(&config_with_fb);
         let candidates_with_fb = result_with_fb
@@ -724,6 +746,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
         let result_no_fb = run_ise(&config_no_fb);
 
@@ -737,6 +760,7 @@ mod tests {
             fallback_heights: vec![8], // Same as primary
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
         let result_with_same = run_ise(&config_with_same);
 
@@ -773,6 +797,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
         run_ise(&config);
     }
