@@ -68,9 +68,15 @@ struct Args {
     #[arg(long, value_delimiter = ',')]
     fallback_heights: Option<Vec<u32>>,
 
-    /// Export full per-tile detail (primes, edges, face_ports) in JSON output.
+    /// Export lightweight per-tile metadata (face_ports, connectivity flags,
+    /// per-face component lists) in JSON output. Negligible memory overhead.
     #[arg(long)]
     export_detail: bool,
+
+    /// Export heavy per-tile data (primes, edges, face_assignments, component_ids)
+    /// in JSON output. Implies --export-detail. WARNING: 4GB+ RAM on large tiles.
+    #[arg(long)]
+    export_primes: bool,
 
     /// Run validation against known moats.
     #[arg(long)]
@@ -119,6 +125,7 @@ fn run_validation() -> bool {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
 
         let result = run_ise(&config);
@@ -171,7 +178,8 @@ fn main() {
         num_stripes: args.stripes,
         fallback_heights: args.fallback_heights.unwrap_or_default(),
         trace: args.trace,
-        export_detail: args.export_detail,
+        export_detail: args.export_detail || args.export_primes,
+        export_primes: args.export_primes,
     };
 
     let result = run_ise(&config);

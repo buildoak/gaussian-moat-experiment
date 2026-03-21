@@ -163,8 +163,9 @@ pub fn write_json_trace(
                             .collect(),
                     });
 
-                    // Per-face component lists from TileResult, only when detail is on
-                    let (i_comps, o_comps, l_comps, r_comps) = if t.detail.is_some() {
+                    // Per-face component lists from TileResult -- lightweight metadata,
+                    // emitted whenever face_ports are present (--export-detail or --export-primes)
+                    let (i_comps, o_comps, l_comps, r_comps) = if t.face_ports.is_some() {
                         (
                             Some(t.result.i_face_components.clone()),
                             Some(t.result.o_face_components.clone()),
@@ -290,6 +291,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
 
         let result = run_ise(&config);
@@ -387,6 +389,7 @@ mod tests {
             fallback_heights: vec![],
             trace: false,
             export_detail: false,
+            export_primes: false,
         };
 
         let result = run_ise(&config);
