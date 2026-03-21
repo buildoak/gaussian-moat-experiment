@@ -204,7 +204,7 @@ pub(crate) fn build_tile_from_primes(
     }
 
     let mut uf = SimpleUF::new(primes.len());
-    let mut detail_edges: Vec<(usize, usize)> = if export_detail { Vec::new() } else { Vec::new() };
+    let mut detail_edges: Vec<(usize, usize)> = Vec::new();
 
     for (idx, &(a, b)) in primes.iter().enumerate() {
         let (cx, cy) = cell_key(a, b, cell_size);
@@ -262,11 +262,7 @@ pub(crate) fn build_tile_from_primes(
     let mut detail_component_ids: Vec<usize> = Vec::new();
     let mut detail_primes: Vec<(i64, i64)> = Vec::new();
     // Map from original prime index to detail index (for remapping edges)
-    let mut detail_index_map: FxHashMap<usize, usize> = if export_detail {
-        FxHashMap::default()
-    } else {
-        FxHashMap::default()
-    };
+    let mut detail_index_map: FxHashMap<usize, usize> = FxHashMap::default();
 
     for (idx, &(a, b)) in primes.iter().enumerate() {
         if a < a_min || a > a_max || b < b_min || b > b_max {

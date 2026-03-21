@@ -127,7 +127,7 @@ fn sieve_limit_for_shell(
         .min(u64::MAX as u128) as u64;
 
     // PrimeSieve stores a boolean array, so cap at 10M for memory safety
-    max_norm.min(10_000_000).max(1000)
+    max_norm.clamp(1000, 10_000_000)
 }
 
 /// Run the ISE campaign.

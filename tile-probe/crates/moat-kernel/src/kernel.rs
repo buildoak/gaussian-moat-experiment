@@ -105,6 +105,7 @@ impl TileResult {
 /// is an implementation detail of each backend:
 /// - CpuKernel holds a &PrimeSieve internally.
 /// - CudaKernel uses device-side sieve in shared memory.
+///
 /// This keeps the trait clean and compatible with all backends.
 pub trait TileKernel: Send + Sync {
     /// Run the kernel on a single tile. Returns rich TileResult with all face connectivity.

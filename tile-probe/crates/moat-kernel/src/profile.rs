@@ -33,6 +33,12 @@ pub struct PhaseTimer {
     phases: Vec<(String, Duration)>,
 }
 
+impl Default for PhaseTimer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PhaseTimer {
     pub fn new() -> Self {
         Self {

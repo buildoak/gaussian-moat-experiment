@@ -45,6 +45,7 @@ pub struct ShellDetail {
     pub vertical_seam_events: Vec<SeamEvent>,
 }
 
+#[allow(dead_code)]
 pub struct ShellProfile {
     pub shell_idx: usize,
     pub r_center: f64,
@@ -155,7 +156,7 @@ pub fn run_probe(config: &ProbeConfig) -> (ProbeResult, Vec<ShellProfile>, Probe
         peak_rss_kb = peak_rss_kb.max(get_rss_kb());
 
         // Per-tile connectivity BEFORE horizontal composition
-        let tile_io_counts: Vec<usize> = tiles.iter().map(|t| io_crossing_count(t)).collect();
+        let tile_io_counts: Vec<usize> = tiles.iter().map(io_crossing_count).collect();
 
         // Extract tile details before composition consumes them
         let tile_details: Vec<TileDetail> = if export_detail {

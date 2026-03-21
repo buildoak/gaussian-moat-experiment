@@ -47,7 +47,7 @@ fn is_prime_miller_rabin(n: u64) -> bool {
     if n == 2 || n == 3 {
         return true;
     }
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         return false;
     }
 
@@ -55,7 +55,7 @@ fn is_prime_miller_rabin(n: u64) -> bool {
         if n == p {
             return true;
         }
-        if n % p == 0 {
+        if n.is_multiple_of(p) {
             return false;
         }
     }
@@ -63,7 +63,7 @@ fn is_prime_miller_rabin(n: u64) -> bool {
     let d0 = n - 1;
     let mut d = d0;
     let mut s = 0_u32;
-    while d % 2 == 0 {
+    while d.is_multiple_of(2) {
         d /= 2;
         s += 1;
     }
@@ -119,14 +119,14 @@ fn miller_rabin(n: u64, witnesses: &[u64]) -> bool {
     if n == 2 || n == 3 {
         return true;
     }
-    if n % 2 == 0 {
+    if n.is_multiple_of(2) {
         return false;
     }
 
     let d0 = n - 1;
     let mut d = d0;
     let mut s = 0_u32;
-    while d % 2 == 0 {
+    while d.is_multiple_of(2) {
         d /= 2;
         s += 1;
     }
@@ -166,7 +166,7 @@ pub fn is_prime_fast(n: u64) -> bool {
         if n == p {
             return true;
         }
-        if n % p == 0 {
+        if n.is_multiple_of(p) {
             return false;
         }
     }

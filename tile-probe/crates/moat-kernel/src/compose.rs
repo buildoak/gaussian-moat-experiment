@@ -178,7 +178,6 @@ fn compose_horizontal_inner(
 
     let origin_component = finalize_origin_component(
         left.origin_component
-            .map(|component| component)
             .or_else(|| right.origin_component.map(|component| right_offset + component)),
         &mut uf,
         &mut root_map,
@@ -312,7 +311,6 @@ fn compose_vertical_inner(
 
     let origin_component = finalize_origin_component(
         bottom.origin_component
-            .map(|component| component)
             .or_else(|| top.origin_component.map(|component| top_offset + component)),
         &mut uf,
         &mut root_map,
@@ -345,7 +343,7 @@ pub fn compose_grid(mut grid: Vec<Vec<TileOperator>>, k_sq: u64) -> TileOperator
             grid = grid
                 .into_par_iter()
                 .map(|row| {
-                    let mut next_row = Vec::with_capacity((row.len() + 1) / 2);
+                    let mut next_row = Vec::with_capacity(row.len().div_ceil(2));
                     let mut iter = row.into_iter();
                     while let Some(left) = iter.next() {
                         if let Some(right) = iter.next() {
@@ -360,7 +358,7 @@ pub fn compose_grid(mut grid: Vec<Vec<TileOperator>>, k_sq: u64) -> TileOperator
         }
 
         if grid.len() > 1 {
-            let mut next_grid = Vec::with_capacity((grid.len() + 1) / 2);
+            let mut next_grid = Vec::with_capacity(grid.len().div_ceil(2));
             let mut rows = grid.into_iter();
             while let Some(bottom_row) = rows.next() {
                 if let Some(top_row) = rows.next() {
