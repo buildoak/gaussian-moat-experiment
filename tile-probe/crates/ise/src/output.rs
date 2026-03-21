@@ -4,7 +4,26 @@ use serde::Serialize;
 
 use crate::orchestrator::{IseConfig, IseSummary, ShellRecord, StripeRecord};
 
+/// A single face port entry in JSON output.
+#[derive(Serialize)]
+struct JsonFacePort {
+    a: i64,
+    b: i64,
+    component: usize,
+}
+
+/// Face port lists per face boundary. Only present when `--export-detail` is on.
+#[derive(Serialize)]
+struct JsonFacePorts {
+    inner: Vec<JsonFacePort>,
+    outer: Vec<JsonFacePort>,
+    left: Vec<JsonFacePort>,
+    right: Vec<JsonFacePort>,
+}
+
 /// Flattened tile record for JSON output (avoids nested TileResult fields).
+/// Optional detail fields are skipped when None, so the output is identical
+/// to the pre-detail format when `--export-detail` is off.
 #[derive(Serialize)]
 struct JsonTileRecord {
     a_lo: i64,
@@ -20,6 +39,29 @@ struct JsonTileRecord {
     num_primes: usize,
     connects_below: Option<bool>,
     time_ms: u64,
+    // --- Detail fields (only when --export-detail is on) ---
+    #[serde(skip_serializing_if = "Option::is_none")]
+    primes: Option<Vec<[i64; 2]>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    edges: Option<Vec<[usize; 2]>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    face_assignments: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    component_ids: Option<Vec<usize>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    face_ports: Option<JsonFacePorts>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connects_left: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connects_right: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    i_face_components: Option<Vec<usize>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    o_face_components: Option<Vec<usize>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    l_face_components: Option<Vec<usize>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    r_face_components: Option<Vec<usize>>,
 }
 
 /// Full JSON trace structure.
@@ -56,20 +98,109 @@ pub fn write_json_trace(
             tiles: s
                 .tiles
                 .iter()
-                .map(|t| JsonTileRecord {
-                    a_lo: t.a_lo,
-                    b_lo: t.b_lo,
-                    width: t.width,
-                    height: t.height,
-                    io_count: t.result.io_count,
-                    il_count: t.result.il_count,
-                    ir_count: t.result.ir_count,
-                    ol_count: t.result.ol_count,
-                    or_count: t.result.or_count,
-                    lr_count: t.result.lr_count,
-                    num_primes: t.result.num_primes,
-                    connects_below: t.connects_below,
-                    time_ms: t.time_ms,
+                .map(|t| {
+                    // Extract detail fields if present
+                    let (primes, edges, face_assignments, component_ids) =
+                        if let Some(ref detail) = t.detail {
+                            (
+                                Some(
+                                    detail
+                                        .primes
+                                        .iter()
+                                        .map(|&(a, b)| [a, b])
+                                        .collect(),
+                                ),
+                                Some(
+                                    detail
+                                        .edges
+                                        .iter()
+                                        .map(|&(a, b)| [a, b])
+                                        .collect(),
+                                ),
+                                Some(detail.face_assignments.clone()),
+                                Some(detail.component_ids.clone()),
+                            )
+                        } else {
+                            (None, None, None, None)
+                        };
+
+                    let face_ports = t.face_ports.as_ref().map(|fp| JsonFacePorts {
+                        inner: fp
+                            .inner
+                            .iter()
+                            .map(|p| JsonFacePort {
+                                a: p.a,
+                                b: p.b,
+                                component: p.component,
+                            })
+                            .collect(),
+                        outer: fp
+                            .outer
+                            .iter()
+                            .map(|p| JsonFacePort {
+                                a: p.a,
+                                b: p.b,
+                                component: p.component,
+                            })
+                            .collect(),
+                        left: fp
+                            .left
+                            .iter()
+                            .map(|p| JsonFacePort {
+                                a: p.a,
+                                b: p.b,
+                                component: p.component,
+                            })
+                            .collect(),
+                        right: fp
+                            .right
+                            .iter()
+                            .map(|p| JsonFacePort {
+                                a: p.a,
+                                b: p.b,
+                                component: p.component,
+                            })
+                            .collect(),
+                    });
+
+                    // Per-face component lists from TileResult, only when detail is on
+                    let (i_comps, o_comps, l_comps, r_comps) = if t.detail.is_some() {
+                        (
+                            Some(t.result.i_face_components.clone()),
+                            Some(t.result.o_face_components.clone()),
+                            Some(t.result.l_face_components.clone()),
+                            Some(t.result.r_face_components.clone()),
+                        )
+                    } else {
+                        (None, None, None, None)
+                    };
+
+                    JsonTileRecord {
+                        a_lo: t.a_lo,
+                        b_lo: t.b_lo,
+                        width: t.width,
+                        height: t.height,
+                        io_count: t.result.io_count,
+                        il_count: t.result.il_count,
+                        ir_count: t.result.ir_count,
+                        ol_count: t.result.ol_count,
+                        or_count: t.result.or_count,
+                        lr_count: t.result.lr_count,
+                        num_primes: t.result.num_primes,
+                        connects_below: t.connects_below,
+                        time_ms: t.time_ms,
+                        primes,
+                        edges,
+                        face_assignments,
+                        component_ids,
+                        face_ports,
+                        connects_left: t.connects_left,
+                        connects_right: t.connects_right,
+                        i_face_components: i_comps,
+                        o_face_components: o_comps,
+                        l_face_components: l_comps,
+                        r_face_components: r_comps,
+                    }
                 })
                 .collect(),
             _phantom: std::marker::PhantomData,
@@ -158,6 +289,7 @@ mod tests {
             num_stripes: 4,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
 
         let result = run_ise(&config);
@@ -254,6 +386,7 @@ mod tests {
             num_stripes: 4,
             fallback_heights: vec![],
             trace: false,
+            export_detail: false,
         };
 
         let result = run_ise(&config);
