@@ -338,6 +338,21 @@ pub fn compose_grid(mut grid: Vec<Vec<TileOperator>>, k_sq: u64) -> TileOperator
     assert!(!grid.is_empty(), "grid must not be empty");
     assert!(!grid[0].is_empty(), "grid rows must not be empty");
 
+    // All rows must have equal length. Without this check, the vertical
+    // composition step uses zip() which silently drops tiles on ragged rows,
+    // producing silently wrong results.
+    let expected_cols = grid[0].len();
+    for (row_idx, row) in grid.iter().enumerate() {
+        assert_eq!(
+            row.len(),
+            expected_cols,
+            "compose_grid: row {} has {} columns, expected {} (ragged grid not supported)",
+            row_idx,
+            row.len(),
+            expected_cols,
+        );
+    }
+
     while grid.len() > 1 || grid[0].len() > 1 {
         if grid[0].len() > 1 {
             grid = grid
@@ -447,5 +462,16 @@ mod tests {
         let origin_component = merged.origin_component.expect("origin component should exist");
         assert!(merged.component_faces[origin_component] & FACE_OUTER_BIT != 0);
         assert_eq!(merged.b_max, 3);
+    }
+
+    /// Ragged grid input must panic (previously zip would silently truncate).
+    #[test]
+    #[should_panic(expected = "ragged grid not supported")]
+    fn compose_grid_rejects_ragged_input() {
+        let grid = vec![
+            vec![build_tile(0, 2, 0, 1, 2), build_tile(0, 2, 2, 3, 2)], // 2 columns
+            vec![build_tile(3, 5, 0, 1, 2)],                              // 1 column
+        ];
+        compose_grid(grid, 2);
     }
 }
