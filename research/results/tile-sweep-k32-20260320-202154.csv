@@ -1,0 +1,2 @@
+tile_depth,strip_width,num_strips,k_squared,r_min,r_max,first_band_io_zero_R,first_acc_io_zero_R,band_io_zero_count,total_shells,wall_seconds,status
+2000,240,64,32,2700000,2950000,,,0,0,300.132,timeout
