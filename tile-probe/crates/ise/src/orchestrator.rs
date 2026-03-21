@@ -92,12 +92,28 @@ fn shell_bounds(r_min: f64, r_max: f64, tile_height: u32) -> Vec<(i64, i64, f64)
 }
 
 /// Compute centered stripe offsets: b_lo values for M stripes, centered around b=0.
-fn stripe_offsets(tile_width: u32, num_stripes: usize) -> Vec<i64> {
+///
+/// The LaTeX (Section 4.2) requires center-to-center spacing `Δb >= W + 2c`
+/// (where `c = ceil(sqrt(k_sq))`) so that expanded tile neighborhoods (with
+/// collar) are disjoint. This ensures the per-stripe io_count outcomes are
+/// statistically independent, which is needed for the `p^M` false-positive
+/// bound in Theorem 4.2.
+///
+/// Without the gap, stripes share collar primes and their outcomes are
+/// correlated. The ISE is still *correct* (each kernel runs in complete
+/// isolation with its own union-find -- structural independence), but the
+/// `p^M` decay model becomes an approximation rather than exact.
+///
+/// We include the gap by default for faithfulness to the formalization.
+fn stripe_offsets(tile_width: u32, num_stripes: usize, k_sq: u64) -> Vec<i64> {
     let w = tile_width as i64;
-    let total_width = w * num_stripes as i64;
+    let collar = (k_sq as f64).sqrt().ceil() as i64;
+    // Stride = W + 2*collar for disjoint expanded neighborhoods (LaTeX Sec 4.2)
+    let stride = w + 2 * collar;
+    let total_width = stride * num_stripes as i64;
     let origin = -total_width / 2;
     (0..num_stripes)
-        .map(|idx| origin + idx as i64 * w)
+        .map(|idx| origin + idx as i64 * stride)
         .collect()
 }
 
@@ -189,7 +205,7 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
     let started = Instant::now();
 
     let shells = shell_bounds(config.r_min, config.r_max, config.tile_height);
-    let offsets = stripe_offsets(config.tile_width, config.num_stripes);
+    let offsets = stripe_offsets(config.tile_width, config.num_stripes, config.k_sq);
     let w = config.tile_width;
 
     // Per-stripe accumulators: built up as we process shells
