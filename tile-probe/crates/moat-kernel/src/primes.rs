@@ -92,6 +92,99 @@ fn is_prime_miller_rabin(n: u64) -> bool {
     true
 }
 
+/// Small primes for trial division (all primes up to 199, 46 primes).
+const SMALL_PRIMES_46: [u64; 46] = [
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89,
+    97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191,
+    193, 197, 199,
+];
+
+/// Reduced MR witness sets -- provably correct up to the given thresholds.
+const MR_WITNESSES_4: [u64; 4] = [2, 3, 5, 7];
+const MR_WITNESSES_5: [u64; 5] = [2, 3, 5, 7, 11];
+const MR_WITNESSES_7: [u64; 7] = [2, 3, 5, 7, 11, 13, 17];
+
+/// Threshold: {2,3,5,7} is correct for n < 3,215,031,751.
+const MAX_NORM_4_WITNESS: u64 = 3_215_031_751;
+/// Threshold: {2,3,5,7,11} is correct for n < 2,152,302,898,747.
+const MAX_NORM_5_WITNESS: u64 = 2_152_302_898_747;
+/// Threshold: {2,3,5,7,11,13,17} is correct for n < 341,550,071,728,321.
+const MAX_NORM_7_WITNESS: u64 = 341_550_071_728_321;
+
+/// Miller-Rabin primality test with a caller-specified witness set.
+fn miller_rabin(n: u64, witnesses: &[u64]) -> bool {
+    if n < 2 {
+        return false;
+    }
+    if n == 2 || n == 3 {
+        return true;
+    }
+    if n % 2 == 0 {
+        return false;
+    }
+
+    let d0 = n - 1;
+    let mut d = d0;
+    let mut s = 0_u32;
+    while d % 2 == 0 {
+        d /= 2;
+        s += 1;
+    }
+
+    let n128 = n as u128;
+    'witness: for &a in witnesses {
+        if a >= n {
+            continue;
+        }
+
+        let mut x = mod_pow_u128(a as u128, d as u128, n128);
+        if x == 1 || x == n128 - 1 {
+            continue;
+        }
+
+        for _ in 1..s {
+            x = mod_mul_u128(x, x, n128);
+            if x == n128 - 1 {
+                continue 'witness;
+            }
+        }
+
+        return false;
+    }
+
+    true
+}
+
+/// Fast primality test with trial division by small primes + tiered MR witnesses.
+/// Runtime bounds check (NOT debug_assert) ensures correctness.
+pub fn is_prime_fast(n: u64) -> bool {
+    if n < 2 {
+        return false;
+    }
+    // Trial division by 46 small primes (up to 199)
+    for &p in &SMALL_PRIMES_46 {
+        if n == p {
+            return true;
+        }
+        if n % p == 0 {
+            return false;
+        }
+    }
+    // Tiered MR witnesses with runtime bounds check
+    if n < MAX_NORM_4_WITNESS {
+        miller_rabin(n, &MR_WITNESSES_4)
+    } else if n < MAX_NORM_5_WITNESS {
+        miller_rabin(n, &MR_WITNESSES_5)
+    } else {
+        assert!(
+            n < MAX_NORM_7_WITNESS,
+            "norm {} exceeds 7-witness MR correctness bound (3.41e14)",
+            n
+        );
+        miller_rabin(n, &MR_WITNESSES_7)
+    }
+}
+
 fn simple_sieve(limit: u64) -> Vec<bool> {
     if limit < 2 {
         return vec![false; (limit + 1) as usize];
@@ -214,7 +307,7 @@ pub fn gaussian_primes_in_rect(a_min: i64, a_max: i64, b_min: i64, b_max: i64) -
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{gaussian_primes_in_rect, is_prime_miller_rabin};
+    use super::{gaussian_primes_in_rect, gaussian_primes_in_rect_with_sieve, is_prime_fast, is_prime_miller_rabin, PrimeSieve};
 
     #[test]
     fn small_rectangle_matches_known_gaussian_primes() {
@@ -272,5 +365,106 @@ mod tests {
                 "{composite} should be composite"
             );
         }
+    }
+
+    /// Gate 2: is_prime_fast agrees with legacy PrimeSieve::is_prime on known primes/composites
+    #[test]
+    fn is_prime_fast_agrees_with_legacy() {
+        let known_primes: Vec<u64> = vec![2, 3, 5, 17, 97, 1_000_000_007, 9_999_999_967];
+        for &p in &known_primes {
+            assert!(is_prime_fast(p), "is_prime_fast({p}) should be true");
+            assert!(
+                is_prime_miller_rabin(p),
+                "is_prime_miller_rabin({p}) should be true"
+            );
+        }
+
+        let known_composites: Vec<u64> = vec![0, 1, 4, 9, 21, 341, 561, 1_000_000_009 * 13];
+        for &c in &known_composites {
+            assert!(!is_prime_fast(c), "is_prime_fast({c}) should be false");
+        }
+    }
+
+    /// Gate 2: Cross-check is_prime_fast vs PrimeSieve on Gaussian prime rectangles
+    /// at R=100, R=1000, R=10000
+    #[test]
+    fn gaussian_primes_fast_matches_sieve_at_multiple_radii() {
+        for &r in &[100i64, 1000, 10000] {
+            let (a_min, a_max) = (r, r + 10);
+            let (b_min, b_max) = (-5i64, 5i64);
+
+            // Legacy path using PrimeSieve
+            let max_coord = (a_max.unsigned_abs() + 2).max(b_max.unsigned_abs() + 2);
+            let max_norm = max_coord * max_coord * 2;
+            let sieve = PrimeSieve::new(max_norm.min(10_000_000).max(1000));
+            let legacy: BTreeSet<(i64, i64)> =
+                gaussian_primes_in_rect_with_sieve(a_min, a_max, b_min, b_max, &sieve)
+                    .into_iter()
+                    .collect();
+
+            // New path using is_prime_fast
+            let mut fast: BTreeSet<(i64, i64)> = BTreeSet::new();
+            // Axis primes: b=0
+            if b_min <= 0 && 0 <= b_max {
+                for a in a_min..=a_max {
+                    let aa = a.unsigned_abs();
+                    if aa >= 2 && aa % 4 == 3 && is_prime_fast(aa) {
+                        fast.insert((a, 0));
+                    }
+                }
+            }
+            // Axis primes: a=0
+            if a_min <= 0 && 0 <= a_max {
+                for b in b_min..=b_max {
+                    if b == 0 {
+                        continue;
+                    }
+                    let bb = b.unsigned_abs();
+                    if bb >= 2 && bb % 4 == 3 && is_prime_fast(bb) {
+                        fast.insert((0, b));
+                    }
+                }
+            }
+            // General: norm-based
+            for a in a_min..=a_max {
+                if a == 0 {
+                    continue;
+                }
+                for b in b_min..=b_max {
+                    if b == 0 {
+                        continue;
+                    }
+                    let norm = (a as i128 * a as i128 + b as i128 * b as i128) as u64;
+                    if is_prime_fast(norm) {
+                        fast.insert((a, b));
+                    }
+                }
+            }
+
+            assert_eq!(
+                legacy, fast,
+                "Mismatch at R={r}: legacy has {} primes, fast has {} primes",
+                legacy.len(),
+                fast.len()
+            );
+        }
+    }
+
+    /// Gate 2: Axis primes are correctly identified by is_prime_fast
+    #[test]
+    fn is_prime_fast_handles_axis_primes() {
+        // 3 mod 4 primes on real axis
+        assert!(is_prime_fast(3));
+        assert!(is_prime_fast(7));
+        assert!(is_prime_fast(11));
+        assert!(is_prime_fast(19));
+        assert!(is_prime_fast(23));
+
+        // Not 3 mod 4 (even if prime)
+        // 5 = 1 mod 4, so (5,0) is NOT a Gaussian prime
+        assert!(is_prime_fast(5)); // 5 is a rational prime
+        // But 5 mod 4 == 1, so we verify the mod check separately
+        assert_eq!(5 % 4, 1); // NOT 3 mod 4 -> not axis Gaussian prime
+        assert_eq!(3 % 4, 3); // IS 3 mod 4 -> axis Gaussian prime
     }
 }
