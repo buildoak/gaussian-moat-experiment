@@ -274,22 +274,29 @@ pub(crate) fn build_tile_from_primes(
 
         let mut face_set: FaceSet = 0;
 
-        if a - a_min < collar {
+        // Face membership uses <= to match the LaTeX definition (Definition 3):
+        //   I-face: a_0 <= Re(pi) <= a_0 + sqrt(k^2)
+        //   O-face: a_0 + H - sqrt(k^2) <= Re(pi) <= a_0 + H
+        //   L-face: b_0 <= Im(pi) <= b_0 + sqrt(k^2)
+        //   R-face: b_0 + W - sqrt(k^2) <= Im(pi) <= b_0 + W
+        // Using strict < would exclude boundary primes when k^2 is a perfect
+        // square (e.g. k^2=4: collar=2, prime at distance exactly 2 is missed).
+        if a - a_min <= collar {
             face_inner.push(FacePort { a, b, component });
             component_faces[component] |= FACE_INNER_BIT;
             face_set |= FACE_INNER_BIT;
         }
-        if a_max - a < collar {
+        if a_max - a <= collar {
             face_outer.push(FacePort { a, b, component });
             component_faces[component] |= FACE_OUTER_BIT;
             face_set |= FACE_OUTER_BIT;
         }
-        if b - b_min < collar {
+        if b - b_min <= collar {
             face_left.push(FacePort { a, b, component });
             component_faces[component] |= FACE_LEFT_BIT;
             face_set |= FACE_LEFT_BIT;
         }
-        if b_max - b < collar {
+        if b_max - b <= collar {
             face_right.push(FacePort { a, b, component });
             component_faces[component] |= FACE_RIGHT_BIT;
             face_set |= FACE_RIGHT_BIT;
@@ -355,10 +362,14 @@ mod tests {
 
         assert_eq!(tile.num_primes, 24);
         assert!(tile.origin_component.is_some());
-        assert_eq!(tile.face_inner.len(), 2);
-        assert_eq!(tile.face_outer.len(), 2);
-        assert_eq!(tile.face_left.len(), 2);
-        assert_eq!(tile.face_right.len(), 2);
+        // Tile [-1,1]x[-1,1] with k^2=2 => collar=2.
+        // In-bounds Gaussian primes: (-1,-1), (-1,1), (1,-1), (1,1) -- all at norm 2.
+        // For each, max distance to any edge is 2 = collar, so with <= all 4
+        // primes are on all 4 faces.
+        assert_eq!(tile.face_inner.len(), 4);
+        assert_eq!(tile.face_outer.len(), 4);
+        assert_eq!(tile.face_left.len(), 4);
+        assert_eq!(tile.face_right.len(), 4);
 
         let origin_component = tile.origin_component.unwrap();
         assert_eq!(
@@ -386,5 +397,70 @@ mod tests {
         assert!(all_right.contains(&(1, 1)));
         assert!(all_right.contains(&(1, 2)));
         assert!(all_right.contains(&(2, 1)));
+    }
+
+    /// Regression test: perfect-square k^2=4 must include boundary primes.
+    /// With collar = ceil(sqrt(4)) = 2, a prime at distance exactly 2 from the
+    /// inner edge must be in the I-face (LaTeX Def 3: Re <= a_0 + sqrt(k^2)).
+    #[test]
+    fn perfect_square_k4_includes_boundary_primes() {
+        // Tile [0, 10] x [0, 10], k^2=4 => collar=2
+        // A Gaussian prime at a=2 is exactly at distance 2 from a_min=0.
+        // It must be in the I-face (distance <= collar).
+        let tile = build_tile(0, 10, 0, 10, 4);
+        let inner_as: Vec<i64> = tile.face_inner.iter().map(|p| p.a).collect();
+
+        // Primes at a=2 should be in the I-face (distance = 2 = collar)
+        assert!(
+            inner_as.contains(&2),
+            "Primes at a=2 should be in I-face for k^2=4 (collar=2). \
+             I-face a-values: {:?}",
+            inner_as
+        );
+
+        // Similarly, primes at a=8 should be in the O-face (distance 10-8=2 = collar)
+        let outer_as: Vec<i64> = tile.face_outer.iter().map(|p| p.a).collect();
+        assert!(
+            outer_as.contains(&8),
+            "Primes at a=8 should be in O-face for k^2=4 (collar=2). \
+             O-face a-values: {:?}",
+            outer_as
+        );
+    }
+
+    /// Regression test: perfect-square k^2=9 must include boundary primes.
+    /// With collar = ceil(sqrt(9)) = 3, a prime at distance exactly 3 from
+    /// the edge must be in the face.
+    #[test]
+    fn perfect_square_k9_includes_boundary_primes() {
+        // Tile [0, 20] x [0, 20], k^2=9 => collar=3
+        let tile = build_tile(0, 20, 0, 20, 9);
+        let inner_as: Vec<i64> = tile.face_inner.iter().map(|p| p.a).collect();
+
+        // Primes at a=3 should be in the I-face (distance = 3 = collar)
+        assert!(
+            inner_as.contains(&3),
+            "Primes at a=3 should be in I-face for k^2=9 (collar=3). \
+             I-face a-values: {:?}",
+            inner_as
+        );
+
+        // Primes at a=17 should be in the O-face (distance 20-17=3 = collar)
+        let outer_as: Vec<i64> = tile.face_outer.iter().map(|p| p.a).collect();
+        assert!(
+            outer_as.contains(&17),
+            "Primes at a=17 should be in O-face for k^2=9 (collar=3). \
+             O-face a-values: {:?}",
+            outer_as
+        );
+
+        // Primes at b=3 should be in the L-face
+        let left_bs: Vec<i64> = tile.face_left.iter().map(|p| p.b).collect();
+        assert!(
+            left_bs.contains(&3),
+            "Primes at b=3 should be in L-face for k^2=9 (collar=3). \
+             L-face b-values: {:?}",
+            left_bs
+        );
     }
 }
