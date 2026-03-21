@@ -3,6 +3,7 @@ name = "lb-probe"
 version = "0.1.0"
 edition = "2021"
 publish = false
+description = "DEPRECATED: Lower-bound Gaussian moat prober. Use `ise` instead."
 
 [[bin]]
 name = "lb-probe"

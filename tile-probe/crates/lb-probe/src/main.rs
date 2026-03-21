@@ -5,7 +5,17 @@ use clap::Parser;
 use crate::probe::{run_probe, ProbeConfig};
 
 #[derive(Parser)]
-#[command(name = "tile-probe", about = "Tile-based Gaussian moat prober")]
+#[command(
+    name = "lb-probe",
+    about = "Lower-bound Gaussian moat prober (DEPRECATED — use `ise` instead)",
+    long_about = "\
+Lower-bound (LB) Gaussian moat prober.\n\n\
+NOTE: This tool is DEPRECATED. The Independent Strip Ensemble (ISE) binary \
+is the primary forward path for moat candidate detection. ISE is faster, \
+embarrassingly parallel, and has formal soundness guarantees.\n\n\
+lb-probe remains available for validation and cross-checking against ISE \
+results, but receives no new features. Use `ise --help` for the recommended tool."
+)]
 struct Args {
     #[arg(long)]
     k_squared: Option<u64>,
