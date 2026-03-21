@@ -1,8 +1,4 @@
-mod compose;
-mod primes;
 mod probe;
-mod profile;
-mod tile;
 
 use clap::Parser;
 

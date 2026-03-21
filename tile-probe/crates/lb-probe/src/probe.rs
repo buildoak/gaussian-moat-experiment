@@ -4,10 +4,10 @@ use rayon::prelude::*;
 
 use serde::Serialize;
 
-use crate::compose::{compose_grid, compose_grid_with_seams, compose_vertical, compose_vertical_with_seams, SeamEvent};
-use crate::primes::PrimeSieve;
-use crate::profile::{get_rss_kb, PhaseTimer, ProbeProfile};
-use crate::tile::{build_tile_with_sieve, TileDetail, FACE_INNER_BIT, FACE_OUTER_BIT, TileOperator};
+use moat_kernel::compose::{compose_grid, compose_grid_with_seams, compose_vertical, compose_vertical_with_seams, SeamEvent};
+use moat_kernel::primes::PrimeSieve;
+use moat_kernel::profile::{get_rss_kb, PhaseTimer, ProbeProfile};
+use moat_kernel::tile::{build_tile_with_sieve, TileDetail, FACE_INNER_BIT, FACE_OUTER_BIT, TileOperator};
 
 pub struct ProbeConfig {
     pub k_sq: u64,

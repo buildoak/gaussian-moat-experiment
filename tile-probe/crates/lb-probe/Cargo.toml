@@ -1,0 +1,16 @@
+[package]
+name = "lb-probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "lb-probe"
+path = "src/main.rs"
+
+[dependencies]
+moat-kernel = { path = "../moat-kernel" }
+rayon = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
