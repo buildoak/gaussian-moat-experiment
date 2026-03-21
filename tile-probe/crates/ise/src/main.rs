@@ -95,7 +95,7 @@ fn resolve_tile_size(args: &Args) -> (u32, u32) {
 
 fn validation_cases() -> Vec<(u64, f64, &'static str)> {
     vec![
-        (2, 30.0, "k^2=2: moat at R~8-10"),
+        (2, 50.0, "k^2=2: moat at R~15-25"),
     ]
 }
 
@@ -103,12 +103,14 @@ fn run_validation() -> bool {
     let mut all_passed = true;
 
     for (k_sq, r_max, description) in validation_cases() {
+        // Tile height must exceed 2*collar for non-overlapping I/O faces.
+        // For k^2=2, collar=2, so H >= 5. Use H=8 for robust detection.
         let config = IseConfig {
             k_sq,
             r_min: 0.0,
             r_max,
-            tile_width: 4,
-            tile_height: 4,
+            tile_width: 8,
+            tile_height: 8,
             num_stripes: 8,
             fallback_heights: vec![],
             trace: false,
