@@ -155,6 +155,88 @@ uint64_t mulmod64(uint64_t a, uint64_t b, uint64_t m) {
 }
 
 // ============================================================================
+// Montgomery multiplication helpers
+//   Used by Miller-Rabin for large odd moduli to avoid repeated 128-bit
+//   division during modular exponentiation. The existing mulmod variants stay
+//   available for direct testing and for non-Montgomery callers.
+// ============================================================================
+struct MontgomeryParams {
+    uint64_t n;
+    uint64_t n_inv;  // -n^(-1) mod 2^64
+    uint64_t r2;     // (2^64)^2 mod n
+};
+
+__host__ __device__ __forceinline__
+uint64_t mulhi64(uint64_t a, uint64_t b) {
+#ifdef __CUDA_ARCH__
+    return __umul64hi(a, b);
+#else
+    return (uint64_t)(((unsigned __int128)a * b) >> 64);
+#endif
+}
+
+__host__ __device__ __forceinline__
+MontgomeryParams montgomery_init(uint64_t n) {
+    uint64_t inv = 1;
+    for (int i = 0; i < 6; ++i) {
+        inv *= 2 - n * inv;
+    }
+
+    // 2^64 mod n represented as the 128-bit value (1:0) reduced modulo n.
+    uint64_t r = reduce128(1, 0, n);
+
+    MontgomeryParams params = {n, (uint64_t)(0 - inv), mulmod64_v2(r, r, n)};
+    return params;
+}
+
+__host__ __device__ __forceinline__
+uint64_t mont_mul(uint64_t a, uint64_t b, uint64_t n, uint64_t n_inv) {
+    uint64_t t_lo = a * b;
+    uint64_t t_hi = mulhi64(a, b);
+
+    uint64_t m = t_lo * n_inv;
+    uint64_t mn_lo = m * n;
+    uint64_t mn_hi = mulhi64(m, n);
+
+    uint64_t u_lo = t_lo + mn_lo;
+    uint64_t carry = (u_lo < t_lo) ? 1ULL : 0ULL;
+    uint64_t u = t_hi + mn_hi + carry;
+
+    return (u >= n) ? u - n : u;
+}
+
+__host__ __device__ __forceinline__
+uint64_t mont_to(uint64_t a, const MontgomeryParams& p) {
+    return mont_mul(a % p.n, p.r2, p.n, p.n_inv);
+}
+
+__host__ __device__ __forceinline__
+uint64_t mont_from(uint64_t a, const MontgomeryParams& p) {
+    return mont_mul(a, 1, p.n, p.n_inv);
+}
+
+__host__ __device__ __forceinline__
+uint64_t mont_powmod_mont(uint64_t base, uint64_t exp, const MontgomeryParams& p) {
+    uint64_t result = mont_to(1, p);
+    uint64_t factor = mont_to(base, p);
+
+    while (exp > 0) {
+        if (exp & 1ULL) {
+            result = mont_mul(result, factor, p.n, p.n_inv);
+        }
+        factor = mont_mul(factor, factor, p.n, p.n_inv);
+        exp >>= 1;
+    }
+
+    return result;
+}
+
+__host__ __device__ __forceinline__
+uint64_t mont_powmod(uint64_t base, uint64_t exp, const MontgomeryParams& p) {
+    return mont_from(mont_powmod_mont(base, exp, p), p);
+}
+
+// ============================================================================
 // Small-modulus fast path: mulmod_small / powmod_small
 //   When m < 2^32, a and b (already reduced mod m) each fit in 32 bits.
 //   Their product a*b < 2^64, so no 128-bit arithmetic is needed at all.

@@ -67,6 +67,31 @@ bool miller_rabin_witness(uint64_t n, uint64_t d, uint32_t s, uint64_t a) {
 }
 
 // ============================================================================
+// Large-modulus Miller-Rabin witness test in Montgomery space
+//   Reuses one Montgomery setup per is_prime() call.
+// ============================================================================
+__host__ __device__ __forceinline__
+bool miller_rabin_witness_mont(uint64_t d,
+                               uint32_t s,
+                               uint64_t a,
+                               const MontgomeryParams& mp,
+                               uint64_t one_mont,
+                               uint64_t nm1_mont) {
+    if (a >= mp.n) return true;
+
+    uint64_t x = mont_powmod_mont(a, d, mp);
+
+    if (x == one_mont || x == nm1_mont) return true;
+
+    for (uint32_t r = 1; r < s; ++r) {
+        x = mont_mul(x, x, mp.n, mp.n_inv);
+        if (x == nm1_mont) return true;
+    }
+
+    return false;
+}
+
+// ============================================================================
 // Deterministic Miller-Rabin primality test for 64-bit unsigned integers.
 //
 // Small-factor pre-sieve: trial divide by 3,5,7,11,13,17,19,23 before MR.
@@ -160,24 +185,17 @@ bool is_prime(uint64_t n) {
         }
     }
 
-    // --- Large modulus path: n >= 2^32, uses __int128 mulmod ---
-    // For n < 3.215×10^14: 4 witnesses {2,3,5,7} suffice
-    if (n < 321503175100ULL) {
-        if (!miller_rabin_witness(n, d, s, 2)) return false;
-        if (!miller_rabin_witness(n, d, s, 3)) return false;
-        if (!miller_rabin_witness(n, d, s, 5)) return false;
-        if (!miller_rabin_witness(n, d, s, 7)) return false;
-        return true;
-    }
+    // --- Large modulus path: n >= 2^32, uses Montgomery multiplication ---
+    MontgomeryParams mp = montgomery_init(n);
+    uint64_t one_mont = mont_to(1, mp);
+    uint64_t nm1_mont = mont_to(n - 1, mp);
+    int num_witnesses = (n < 321503175100ULL) ? 4 : MR_NUM_WITNESSES;
 
-    // Full 7 witnesses for everything else
-    if (!miller_rabin_witness(n, d, s, 2))  return false;
-    if (!miller_rabin_witness(n, d, s, 3))  return false;
-    if (!miller_rabin_witness(n, d, s, 5))  return false;
-    if (!miller_rabin_witness(n, d, s, 7))  return false;
-    if (!miller_rabin_witness(n, d, s, 11)) return false;
-    if (!miller_rabin_witness(n, d, s, 13)) return false;
-    if (!miller_rabin_witness(n, d, s, 17)) return false;
+    for (int i = 0; i < num_witnesses; ++i) {
+        if (!miller_rabin_witness_mont(d, s, MR_WITNESSES[i], mp, one_mont, nm1_mont)) {
+            return false;
+        }
+    }
 
     return true;
 }
