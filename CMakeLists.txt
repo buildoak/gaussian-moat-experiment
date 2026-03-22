@@ -78,3 +78,8 @@ add_executable(gm_test_sieve
     src/sieve_kernel.cu
 )
 target_include_directories(gm_test_sieve PRIVATE src/)
+
+add_executable(tile_cuda
+    src/tile_main.cu
+)
+target_include_directories(tile_cuda PRIVATE src/)
