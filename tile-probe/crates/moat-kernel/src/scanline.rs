@@ -1,7 +1,7 @@
 use fxhash::FxHashMap;
 
 use crate::kernel::{TileKernel, TileResult};
-use crate::primality::is_gaussian_prime;
+use crate::primality::{is_gaussian_prime, sieve_row};
 use crate::tile::{
     FacePort, FaceSet, TileOperator, FACE_INNER_BIT, FACE_LEFT_BIT, FACE_OUTER_BIT, FACE_RIGHT_BIT,
 };
@@ -76,6 +76,7 @@ fn run_scanline_rect(
     b_hi: i64,
     k_sq: u64,
     _export_detail: bool,
+    use_row_sieve: bool,
 ) -> TileResult {
     let collar = (k_sq as f64).sqrt().ceil() as i64;
     let ea_lo = a_lo - collar;
@@ -94,15 +95,34 @@ fn run_scanline_rect(
     let mut rank = vec![0_u8; size];
     let offsets = precompute_backward_offsets(k_sq);
     let mut num_primes = 0_usize;
+    let mut row_sieve_marks = vec![false; w];
 
     for row in 0..h {
         let a = ea_lo + row as i64;
-        for col in 0..w {
-            let b = eb_lo + col as i64;
-            let idx = row * w + col;
-            if is_gaussian_prime(a, b) {
-                bitmap[idx] = true;
-                num_primes += 1;
+        if use_row_sieve {
+            row_sieve_marks.fill(false);
+            sieve_row(a, eb_lo, w, &mut row_sieve_marks);
+
+            for (col, &marked_composite) in row_sieve_marks.iter().enumerate() {
+                let b = eb_lo + col as i64;
+                if marked_composite && a != 0 && b != 0 {
+                    continue;
+                }
+
+                let idx = row * w + col;
+                if is_gaussian_prime(a, b) {
+                    bitmap[idx] = true;
+                    num_primes += 1;
+                }
+            }
+        } else {
+            for col in 0..w {
+                let b = eb_lo + col as i64;
+                let idx = row * w + col;
+                if is_gaussian_prime(a, b) {
+                    bitmap[idx] = true;
+                    num_primes += 1;
+                }
             }
         }
     }
@@ -199,16 +219,34 @@ pub fn run_scanline_tile(
 ) -> TileResult {
     let a_hi = a_lo + i64::from(side);
     let b_hi = b_lo + i64::from(side);
-    run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail)
+    run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, true)
 }
 
 pub struct ScanlineKernel {
     pub export_detail: bool,
+    pub use_row_sieve: bool,
+}
+
+impl ScanlineKernel {
+    pub const fn new(export_detail: bool) -> Self {
+        Self {
+            export_detail,
+            use_row_sieve: true,
+        }
+    }
 }
 
 impl TileKernel for ScanlineKernel {
     fn run_tile(&self, a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64, k_sq: u64) -> TileResult {
-        run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, self.export_detail)
+        run_scanline_rect(
+            a_lo,
+            a_hi,
+            b_lo,
+            b_hi,
+            k_sq,
+            self.export_detail,
+            self.use_row_sieve,
+        )
     }
 }
 
@@ -216,6 +254,7 @@ impl TileKernel for ScanlineKernel {
 mod tests {
     use super::{precompute_backward_offsets, run_scanline_tile, ScanlineKernel};
     use crate::kernel::{CpuKernel, TileKernel};
+    use crate::primality::sieve_row;
     use crate::primes::PrimeSieve;
 
     fn sieve_for_tile(a_hi: i64, b_hi: i64, k_sq: u64) -> crate::primes::PrimeSieve {
@@ -230,13 +269,43 @@ mod tests {
         assert_eq!(precompute_backward_offsets(36).len(), 56);
     }
 
+    fn brute_row_composite(a: i64, b: i64) -> bool {
+        let norm = (i128::from(a) * i128::from(a) + i128::from(b) * i128::from(b)) as u64;
+        if norm < 2 {
+            return true;
+        }
+        if norm == 2 {
+            return false;
+        }
+
+        let mut divisor = 2_u64;
+        while divisor * divisor <= norm {
+            if norm.is_multiple_of(divisor) {
+                return true;
+            }
+            divisor += 1;
+        }
+
+        false
+    }
+
+    #[test]
+    fn sieve_row_unit_test() {
+        let width = 100;
+        let mut marks = vec![false; width];
+        sieve_row(5, 0, width, &mut marks);
+
+        for (idx, &marked) in marks.iter().enumerate() {
+            let b = idx as i64;
+            assert_eq!(marked, brute_row_composite(5, b), "mismatch at b={b}");
+        }
+    }
+
     #[test]
     fn scanline_matches_legacy_counts_on_small_tile() {
         let legacy_sieve = sieve_for_tile(10, 10, 2);
         let legacy = CpuKernel::new(&legacy_sieve);
-        let scanline = ScanlineKernel {
-            export_detail: false,
-        };
+        let scanline = ScanlineKernel::new(false);
 
         let legacy_result = legacy.run_tile(0, 10, 0, 10, 2);
         let scanline_result = scanline.run_tile(0, 10, 0, 10, 2);
@@ -254,6 +323,7 @@ mod tests {
     fn square_wrapper_matches_trait_path() {
         let kernel = ScanlineKernel {
             export_detail: false,
+            use_row_sieve: true,
         };
 
         let via_wrapper = run_scanline_tile(0, 0, 10, 2, false);
@@ -266,5 +336,39 @@ mod tests {
         assert_eq!(via_wrapper.or_count, via_trait.or_count);
         assert_eq!(via_wrapper.lr_count, via_trait.lr_count);
         assert_eq!(via_wrapper.num_primes, via_trait.num_primes);
+    }
+
+    #[test]
+    fn row_sieve_cross_validation_k2() {
+        let sieve_kernel = ScanlineKernel {
+            export_detail: false,
+            use_row_sieve: true,
+        };
+        let pointwise_kernel = ScanlineKernel {
+            export_detail: false,
+            use_row_sieve: false,
+        };
+
+        let sieve_result = sieve_kernel.run_tile(0, 12, 0, 12, 2);
+        let pointwise_result = pointwise_kernel.run_tile(0, 12, 0, 12, 2);
+
+        assert_eq!(sieve_result, pointwise_result);
+    }
+
+    #[test]
+    fn row_sieve_cross_validation_k26() {
+        let sieve_kernel = ScanlineKernel {
+            export_detail: false,
+            use_row_sieve: true,
+        };
+        let pointwise_kernel = ScanlineKernel {
+            export_detail: false,
+            use_row_sieve: false,
+        };
+
+        let sieve_result = sieve_kernel.run_tile(0, 24, 0, 24, 26);
+        let pointwise_result = pointwise_kernel.run_tile(0, 24, 0, 24, 26);
+
+        assert_eq!(sieve_result, pointwise_result);
     }
 }

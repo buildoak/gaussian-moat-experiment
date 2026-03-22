@@ -1,16 +1,39 @@
+use std::sync::LazyLock;
+
 pub const SMALL_PRIMES: [u64; 168] = [
-    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89,
-    97, 101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191,
-    193, 197, 199, 211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281, 283, 293,
-    307, 311, 313, 317, 331, 337, 347, 349, 353, 359, 367, 373, 379, 383, 389, 397, 401, 409, 419,
-    421, 431, 433, 439, 443, 449, 457, 461, 463, 467, 479, 487, 491, 499, 503, 509, 521, 523, 541,
-    547, 557, 563, 569, 571, 577, 587, 593, 599, 601, 607, 613, 617, 619, 631, 641, 643, 647, 653,
-    659, 661, 673, 677, 683, 691, 701, 709, 719, 727, 733, 739, 743, 751, 757, 761, 769, 773, 787,
-    797, 809, 811, 821, 823, 827, 829, 839, 853, 857, 859, 863, 877, 881, 883, 887, 907, 911, 919,
-    929, 937, 941, 947, 953, 967, 971, 977, 983, 991, 997,
+    2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59, 61, 67, 71, 73, 79, 83, 89, 97,
+    101, 103, 107, 109, 113, 127, 131, 137, 139, 149, 151, 157, 163, 167, 173, 179, 181, 191, 193,
+    197, 199, 211, 223, 227, 229, 233, 239, 241, 251, 257, 263, 269, 271, 277, 281, 283, 293, 307,
+    311, 313, 317, 331, 337, 347, 349, 353, 359, 367, 373, 379, 383, 389, 397, 401, 409, 419, 421,
+    431, 433, 439, 443, 449, 457, 461, 463, 467, 479, 487, 491, 499, 503, 509, 521, 523, 541, 547,
+    557, 563, 569, 571, 577, 587, 593, 599, 601, 607, 613, 617, 619, 631, 641, 643, 647, 653, 659,
+    661, 673, 677, 683, 691, 701, 709, 719, 727, 733, 739, 743, 751, 757, 761, 769, 773, 787, 797,
+    809, 811, 821, 823, 827, 829, 839, 853, 857, 859, 863, 877, 881, 883, 887, 907, 911, 919, 929,
+    937, 941, 947, 953, 967, 971, 977, 983, 991, 997,
 ];
 
 pub const MR_WITNESSES_9: [u64; 9] = [2, 3, 5, 7, 11, 13, 17, 19, 23];
+pub const ROW_SIEVE_LIMIT: u16 = 10_000;
+
+pub static SQRT_NEG1_TABLE: LazyLock<Vec<(u16, u16)>> = LazyLock::new(|| {
+    primes_up_to(ROW_SIEVE_LIMIT)
+        .into_iter()
+        .filter(|&p| p % 4 == 1)
+        .map(|p| {
+            let root = tonelli_shanks(u64::from(p - 1), u64::from(p))
+                .expect("sqrt(-1) must exist for primes congruent to 1 mod 4");
+            let canonical = root.min(u64::from(p) - root) as u16;
+            (p, canonical)
+        })
+        .collect()
+});
+
+static MOD_3_SIEVE_PRIMES: LazyLock<Vec<u16>> = LazyLock::new(|| {
+    primes_up_to(ROW_SIEVE_LIMIT)
+        .into_iter()
+        .filter(|&p| p % 4 == 3)
+        .collect()
+});
 
 #[inline(always)]
 pub fn mulmod(a: u64, b: u64, m: u64) -> u64 {
@@ -32,6 +55,145 @@ pub fn powmod(base: u64, exp: u64, m: u64) -> u64 {
     }
 
     result
+}
+
+fn primes_up_to(limit: u16) -> Vec<u16> {
+    if limit < 2 {
+        return Vec::new();
+    }
+
+    let mut is_prime = vec![true; usize::from(limit) + 1];
+    is_prime[0] = false;
+    is_prime[1] = false;
+
+    let mut p = 2_usize;
+    while p * p <= usize::from(limit) {
+        if is_prime[p] {
+            let mut multiple = p * p;
+            while multiple <= usize::from(limit) {
+                is_prime[multiple] = false;
+                multiple += p;
+            }
+        }
+        p += 1;
+    }
+
+    is_prime
+        .iter()
+        .enumerate()
+        .filter_map(|(n, &prime)| prime.then_some(n as u16))
+        .collect()
+}
+
+fn tonelli_shanks(n: u64, p: u64) -> Option<u64> {
+    if p == 2 {
+        return Some(n % p);
+    }
+
+    if powmod(n, (p - 1) / 2, p) != 1 {
+        return None;
+    }
+
+    let mut q = p - 1;
+    let mut s = 0_u32;
+    while q.is_multiple_of(2) {
+        q >>= 1;
+        s += 1;
+    }
+
+    if s == 1 {
+        return Some(powmod(n, (p + 1) / 4, p));
+    }
+
+    let mut z = 2_u64;
+    while powmod(z, (p - 1) / 2, p) != p - 1 {
+        z += 1;
+    }
+
+    let mut m = s;
+    let mut c = powmod(z, q, p);
+    let mut t = powmod(n, q, p);
+    let mut x = powmod(n, q.div_ceil(2), p);
+
+    while t != 1 {
+        let mut i = 1_u32;
+        let mut t_pow = mulmod(t, t, p);
+        while i < m && t_pow != 1 {
+            t_pow = mulmod(t_pow, t_pow, p);
+            i += 1;
+        }
+
+        if i == m {
+            return None;
+        }
+
+        let b = powmod(c, 1_u64 << (m - i - 1), p);
+        x = mulmod(x, b, p);
+        c = mulmod(b, b, p);
+        t = mulmod(t, c, p);
+        m = i;
+    }
+
+    Some(x)
+}
+
+#[inline]
+fn mark_residue_class(b_start: i64, width: usize, p: i64, residue: i64, sieve: &mut [bool]) {
+    let first = (residue - b_start).rem_euclid(p) as usize;
+    for idx in (first..width).step_by(p as usize) {
+        sieve[idx] = true;
+    }
+}
+
+pub fn sieve_row(a: i64, b_start: i64, width: usize, sieve: &mut [bool]) {
+    assert_eq!(sieve.len(), width, "row sieve width must match buffer length");
+
+    if width == 0 {
+        return;
+    }
+
+    let parity_start = if ((a ^ b_start) & 1) == 0 { 0 } else { 1 };
+    for idx in (parity_start..width).step_by(2) {
+        sieve[idx] = true;
+    }
+
+    for &(p_u16, r_u16) in SQRT_NEG1_TABLE.iter() {
+        let p = i64::from(p_u16);
+        let residue = (a.rem_euclid(p) * i64::from(r_u16)).rem_euclid(p);
+        mark_residue_class(b_start, width, p, residue, sieve);
+
+        let neg_residue = (-residue).rem_euclid(p);
+        if neg_residue != residue {
+            mark_residue_class(b_start, width, p, neg_residue, sieve);
+        }
+    }
+
+    for &p_u16 in MOD_3_SIEVE_PRIMES.iter() {
+        let p = i64::from(p_u16);
+        if a.rem_euclid(p) == 0 {
+            mark_residue_class(b_start, width, p, 0, sieve);
+        }
+    }
+
+    // Small norms can be equal to a sieve prime, so they must stay as MR candidates.
+    let a_sq = i128::from(a) * i128::from(a);
+    if a_sq <= i128::from(ROW_SIEVE_LIMIT) {
+        for (col, marked) in sieve.iter_mut().enumerate() {
+            if !*marked {
+                continue;
+            }
+
+            let b = b_start + col as i64;
+            let norm = a_sq + i128::from(b) * i128::from(b);
+            if !(2..=i128::from(ROW_SIEVE_LIMIT)).contains(&norm) {
+                continue;
+            }
+
+            if is_rational_prime(norm as u64) {
+                *marked = false;
+            }
+        }
+    }
 }
 
 #[inline]
@@ -131,7 +293,10 @@ pub fn is_gaussian_prime(a: i64, b: i64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{has_small_factor, is_gaussian_prime, miller_rabin_9, mulmod, powmod};
+    use super::{
+        has_small_factor, is_gaussian_prime, miller_rabin_9, mulmod, powmod, sieve_row,
+        SQRT_NEG1_TABLE,
+    };
 
     #[test]
     fn test_mulmod_basic() {
@@ -197,5 +362,25 @@ mod tests {
     #[test]
     fn test_origin_not_prime() {
         assert!(!is_gaussian_prime(0, 0));
+    }
+
+    #[test]
+    fn test_sqrt_neg1_table_is_complete() {
+        assert_eq!(SQRT_NEG1_TABLE.len(), 609);
+
+        for &(p, r) in SQRT_NEG1_TABLE.iter() {
+            let p = u64::from(p);
+            let r = u64::from(r);
+            assert_eq!(mulmod(r, r, p), p - 1);
+        }
+    }
+
+    #[test]
+    fn test_sieve_row_keeps_small_prime_norms_unmarked() {
+        let mut sieve = vec![false; 8];
+        sieve_row(1, -2, sieve.len(), &mut sieve);
+
+        let expected = [false, false, false, false, false, true, false, true];
+        assert_eq!(sieve, expected);
     }
 }
