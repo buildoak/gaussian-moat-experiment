@@ -3,3 +3,4 @@ pub mod tile;
 pub mod kernel;
 pub mod compose;
 pub mod profile;
+pub mod primality;
