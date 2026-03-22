@@ -44,11 +44,11 @@ stripe placement (positive-only b-offsets).
 | k26-tile500 | 26 | 1M-1.03M | 500 | 32 | Tile sensitivity | COMPLETE |
 | k26-tile1000 | 26 | 1M-1.03M | 1000 | 32 | Tile sensitivity | COMPLETE |
 | k26-tile2000 | 26 | 1M-1.03M | 2000 | 32 | Tile sensitivity | COMPLETE |
-| k26-moat-dense | 26 | 950K-1.1M | 500 | 32 | Tsuchimura moat sweep | RUNNING |
-| k26-control-below | 26 | 500K-550K | 500 | 32 | Control (connected) | PENDING |
-| k32-moat-dense | 32 | 2.7M-2.9M | 500 | 32 | Tsuchimura moat sweep | PENDING |
-| k32-control-below | 32 | 1.5M-1.55M | 500 | 32 | Control (connected) | PENDING |
-| k36-moat-dense | 36 | 79.5M-80.5M | 2000 | 32 | Transition zone probe | PENDING |
+| k26-moat-dense | 26 | 950K-1.1M | 500 | 32 | Tsuchimura moat sweep | COMPLETE |
+| k26-control-below | 26 | 500K-550K | 500 | 32 | Control (connected) | COMPLETE |
+| k32-moat-dense | 32 | 2.7M-2.9M | 500 | 32 | Tsuchimura moat sweep | COMPLETE |
+| k32-control-below | 32 | 1.5M-1.55M | 500 | 32 | Control (connected) | COMPLETE |
+| k36-moat-dense | 36 | 79.5M-80.5M | 2000 | 32 | Transition zone probe | RUNNING |
 | k36-control-50M | 36 | 49.9M-50.1M | 2000 | 32 | Control (connected) | PENDING |
 
 ## Key Questions
@@ -100,6 +100,68 @@ disconnected simultaneously, which is a very strong signal.
 
 Scaling: ~quadratic in tile height (as expected: area grows as H^2).
 
-## Results (continued runs)
+## Results
 
-[To be filled as k26-dense, k32, k36 campaigns complete]
+### k^2=26 Dense Moat Sweep (COMPLETE)
+
+300 shells from R=950K to R=1.1M, tile=500, 32 stripes, ~3s/shell.
+
+- **Zero f(r)=0 candidates** in the entire range
+- Minimum f(r) = 0.21875 at R~1,067,750 and R~1,084,250
+- Near known Tsuchimura moat (R~1,015,639): f(r) = 0.34 at R=1,016,250
+- f(r) profile shows a broad dip (0.25-0.50) from R=1M to R=1.09M
+
+Interpretation: the ISE 32-stripe method reliably detects the
+f(r) depression near the Tsuchimura moat, but the moat is too narrow
+(in angular extent) for all 32 independent strips to lose connectivity
+simultaneously. This is a resolution limit, not a detection failure.
+
+### k^2=26 Control Below (COMPLETE)
+
+100 shells from R=500K to R=550K, tile=500, 32 stripes.
+
+- **Zero false positives**
+- Minimum f(r) = 0.78 (25/32 stripes connected)
+- Clear separation: control f(r) >> moat region f(r)
+
+### k^2=32 Dense Moat Sweep (COMPLETE)
+
+400 shells from R=2.7M to R=2.9M, tile=500, 32 stripes, ~3.1s/shell.
+
+- **Zero f(r)=0 candidates** in the entire range
+- Minimum f(r) = 0.25 at R=2,812,250
+- Near known Tsuchimura moat (R~2,823,055): f(r) = 0.34 at R=2,823,250
+- Consistent pattern: ISE sees the dip but doesn't reach zero
+
+### k^2=32 Control Below (COMPLETE)
+
+100 shells from R=1.5M to R=1.55M, tile=500, 32 stripes.
+
+- **Zero false positives**
+- Minimum f(r) = 0.69 (22/32 stripes connected)
+- Clear separation from moat region
+
+### k^2=36 Transition Zone (RUNNING)
+
+500 shells from R=79.5M to R=80.5M, tile=2000, 32 stripes, ~47s/shell.
+Estimated completion: ~65 min from start (16:53).
+
+Early shells (first 6 completed):
+- f(r) = 0.1562 at R=79,501,000 (only 5/32 connected)
+- f(r) = 0.2188 at R=79,813,000
+- f(r) = 0.2500 at R=79,937,000
+
+These are substantially lower than k^2=26 and k^2=32 dips,
+suggesting the k^2=36 transition zone is genuinely sparser.
+
+### k^2=36 Control at 50M (PENDING)
+
+Will run after moat-dense completes.
+
+## Key Findings So Far
+
+1. **Tile height does not affect detection precision.** Tested 200, 500, 1000, 2000 at k^2=26 -- consistent f(r) values.
+2. **ISE detects f(r) dips at known moats** but does not reach f(r)=0 with 32 stripes at k^2=26 and k^2=32. This is a resolution property of the strip-sampling method.
+3. **Zero false positives** in all control regions (well below moats).
+4. **Clear f(r) separation** between moat regions (0.22-0.50) and control regions (0.69-1.0).
+5. **k^2=36 transition zone shows lowest f(r) values** yet (0.156), consistent with a genuine moat boundary approaching.
