@@ -4,9 +4,13 @@
 // Miller-Rabin primality test — deterministic for all 64-bit inputs.
 //
 // Uses modular_arith.cuh: powmod64 / powmod_small for witness testing.
-// Deterministic variant using 7 witnesses: {2, 3, 5, 7, 11, 13, 17}.
-// This witness set is sufficient for all n < 3.317 * 10^24, covering our
-// entire 64-bit range.
+// Deterministic variant using 9 witnesses: {2, 3, 5, 7, 11, 13, 17, 19, 23}.
+// This matches the Rust implementation (MR_WITNESSES_9 in primality.rs).
+//
+// NOTE: The previous 7-witness set {2,...,17} is NOT sufficient for 64-bit
+// inputs. Example: 341550071728321 = 10670053 * 32010157 passes all 7
+// witnesses but fails witness 23. Adding 19 and 23 makes the test
+// deterministic for all n < 3.317 * 10^24.
 //
 // Optimizations over baseline:
 //   1. Small-factor trial division eliminates ~77% of composites cheaply
@@ -18,10 +22,10 @@
 
 #include "modular_arith.cuh"
 
-// The 7 deterministic witnesses sufficient for 64-bit inputs.
+// 9 deterministic witnesses matching Rust primality.rs MR_WITNESSES_9.
 // Reference: https://miller-rabin.appspot.com/
-__constant__ static const uint64_t MR_WITNESSES[7] = {2, 3, 5, 7, 11, 13, 17};
-static const int MR_NUM_WITNESSES = 7;
+__constant__ static const uint64_t MR_WITNESSES[9] = {2, 3, 5, 7, 11, 13, 17, 19, 23};
+static const int MR_NUM_WITNESSES = 9;
 
 // ============================================================================
 // Small-modulus Miller-Rabin witness test (m < 2^32)
