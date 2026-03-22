@@ -40,8 +40,57 @@ pub fn mulmod(a: u64, b: u64, m: u64) -> u64 {
     ((a as u128) * (b as u128) % (m as u128)) as u64
 }
 
+#[derive(Clone, Copy, Debug)]
+struct MontgomeryParams {
+    n: u64,
+    n_inv: u64,
+    r2: u64,
+}
+
+impl MontgomeryParams {
+    #[inline]
+    fn new(n: u64) -> Self {
+        debug_assert!(n > 0 && !n.is_multiple_of(2));
+
+        let mut inv = 1_u64;
+        for _ in 0..6 {
+            inv = inv.wrapping_mul(2_u64.wrapping_sub(n.wrapping_mul(inv)));
+        }
+
+        let r = (((u64::MAX as u128) % (n as u128)) + 1) % (n as u128);
+        let r2 = (r * r % (n as u128)) as u64;
+
+        Self {
+            n,
+            n_inv: inv.wrapping_neg(),
+            r2,
+        }
+    }
+
+    #[inline(always)]
+    fn mont_mul(&self, a: u64, b: u64) -> u64 {
+        let t = (a as u128) * (b as u128);
+        let m = ((t as u64).wrapping_mul(self.n_inv)) as u128;
+        let u = (t.wrapping_add(m.wrapping_mul(self.n as u128))) >> 64;
+        let u = u as u64;
+        if u >= self.n { u - self.n } else { u }
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    #[inline(always)]
+    fn to_mont(&self, a: u64) -> u64 {
+        self.mont_mul(a, self.r2)
+    }
+
+    #[allow(clippy::wrong_self_convention)]
+    #[inline(always)]
+    fn from_mont(&self, a: u64) -> u64 {
+        self.mont_mul(a, 1)
+    }
+}
+
 #[inline(always)]
-pub fn powmod(base: u64, exp: u64, m: u64) -> u64 {
+fn powmod_division(base: u64, exp: u64, m: u64) -> u64 {
     let mut result = 1_u64;
     let mut factor = base % m;
     let mut exponent = exp;
@@ -55,6 +104,32 @@ pub fn powmod(base: u64, exp: u64, m: u64) -> u64 {
     }
 
     result
+}
+
+#[inline(always)]
+pub fn powmod(base: u64, exp: u64, m: u64) -> u64 {
+    if m <= 1 {
+        return 0;
+    }
+
+    if m.is_multiple_of(2) {
+        return powmod_division(base, exp, m);
+    }
+
+    let params = MontgomeryParams::new(m);
+    let mut result = params.to_mont(1);
+    let mut factor = params.to_mont(base);
+    let mut exponent = exp;
+
+    while exponent > 0 {
+        if exponent & 1 == 1 {
+            result = params.mont_mul(result, factor);
+        }
+        factor = params.mont_mul(factor, factor);
+        exponent >>= 1;
+    }
+
+    params.from_mont(result)
 }
 
 fn primes_up_to(limit: u16) -> Vec<u16> {
@@ -146,7 +221,11 @@ fn mark_residue_class(b_start: i64, width: usize, p: i64, residue: i64, sieve: &
 }
 
 pub fn sieve_row(a: i64, b_start: i64, width: usize, sieve: &mut [bool]) {
-    assert_eq!(sieve.len(), width, "row sieve width must match buffer length");
+    assert_eq!(
+        sieve.len(),
+        width,
+        "row sieve width must match buffer length"
+    );
 
     if width == 0 {
         return;
@@ -295,7 +374,7 @@ pub fn is_gaussian_prime(a: i64, b: i64) -> bool {
 mod tests {
     use super::{
         has_small_factor, is_gaussian_prime, miller_rabin_9, mulmod, powmod, sieve_row,
-        SQRT_NEG1_TABLE,
+        MontgomeryParams, SQRT_NEG1_TABLE,
     };
 
     #[test]
@@ -306,6 +385,22 @@ mod tests {
     #[test]
     fn test_powmod_basic() {
         assert_eq!(powmod(2, 10, 1000), 1024 % 1000);
+    }
+
+    #[test]
+    fn test_montgomery_agrees_with_mulmod() {
+        for n in [3_u64, 5, 7, 1_000_000_007, (1_u64 << 63) - 25] {
+            let params = MontgomeryParams::new(n);
+            let values = [0_u64, 1, 2, n / 2, n.saturating_sub(2), n - 1];
+
+            for a in values {
+                for b in values {
+                    let mont_product =
+                        params.from_mont(params.mont_mul(params.to_mont(a), params.to_mont(b)));
+                    assert_eq!(mont_product, mulmod(a % n, b % n, n), "n={n}, a={a}, b={b}");
+                }
+            }
+        }
     }
 
     #[test]
