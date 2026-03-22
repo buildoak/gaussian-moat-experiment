@@ -16,7 +16,7 @@
 #include <utility>
 #include <vector>
 
-#include "tile_kernel.cuh"
+#include "row_sieve.cuh"
 
 namespace {
 
@@ -423,6 +423,7 @@ int main(int argc, char** argv) {
 
     const size_t bitmap_words = gm::bitmap_word_count(geom.total_points);
     const size_t bitmap_bytes = bitmap_words * sizeof(uint32_t);
+    const size_t row_sieve_bytes = gm::row_sieve_shared_bytes(geom.side_exp);
     std::vector<uint32_t> bitmap(bitmap_words, 0);
     uint32_t* d_bitmap = nullptr;
     CUDA_CHECK(cudaMalloc(&d_bitmap, bitmap_bytes));
@@ -431,23 +432,24 @@ int main(int argc, char** argv) {
     cudaEvent_t gpu_stop;
     CUDA_CHECK(cudaEventCreate(&gpu_start));
     CUDA_CHECK(cudaEventCreate(&gpu_stop));
+    CUDA_CHECK(gm::init_row_sieve_tables());
     CUDA_CHECK(gm::copy_tile_k_sq(cfg.k_sq));
     CUDA_CHECK(cudaEventRecord(gpu_start));
     CUDA_CHECK(cudaMemset(d_bitmap, 0, bitmap_bytes));
 
-    const uint64_t blocks64 =
-        (geom.total_points + static_cast<uint64_t>(gm::kTileBitmapBlockSize) - 1ULL) /
-        static_cast<uint64_t>(gm::kTileBitmapBlockSize);
+    const uint64_t blocks64 = geom.side_exp;
     if (blocks64 > static_cast<uint64_t>(std::numeric_limits<unsigned int>::max())) {
         fail("grid size exceeds CUDA launch limits");
     }
 
-    gm::tile_primality_bitmap_kernel<<<static_cast<unsigned int>(blocks64), gm::kTileBitmapBlockSize>>>(
+    gm::tile_sieved_primality_bitmap_kernel<<<
+        static_cast<unsigned int>(blocks64),
+        gm::kTileRowSieveBlockSize,
+        row_sieve_bytes>>>(
         geom.a_lo,
         geom.b_lo,
         geom.collar,
         geom.side_exp,
-        geom.total_points,
         d_bitmap
     );
     CUDA_CHECK(cudaGetLastError());
