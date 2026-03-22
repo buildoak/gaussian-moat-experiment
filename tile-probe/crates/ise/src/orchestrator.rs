@@ -9,6 +9,10 @@ use moat_kernel::tile::{
     build_tile_with_sieve, FacePort, TileDetail, TileOperator, FACE_LEFT_BIT, FACE_RIGHT_BIT,
 };
 
+fn default_kernel_type() -> String {
+    "scanline".to_string()
+}
+
 /// Configuration for an ISE campaign.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IseConfig {
@@ -28,6 +32,8 @@ pub struct IseConfig {
     /// component_ids) in TileRecord. Implies export_detail. Large memory cost.
     #[serde(default)]
     pub export_primes: bool,
+    #[serde(default = "default_kernel_type")]
+    pub kernel_type: String,
 }
 
 /// A single tile's record within a stripe, including position, dimensions, and results.
@@ -145,13 +151,7 @@ fn stripe_offsets(tile_width: u32, num_stripes: usize, k_sq: u64) -> Vec<i64> {
 }
 
 /// Compute the sieve limit needed for a shell's tiles.
-fn sieve_limit_for_shell(
-    a_lo: i64,
-    a_hi: i64,
-    offsets: &[i64],
-    tile_width: u32,
-    k_sq: u64,
-) -> u64 {
+fn sieve_limit_for_shell(a_lo: i64, a_hi: i64, offsets: &[i64], tile_width: u32, k_sq: u64) -> u64 {
     let collar = (k_sq as f64).sqrt().ceil() as i64;
     let max_a = a_hi.abs().max(a_lo.abs()) + collar;
     let max_b = offsets
@@ -181,10 +181,16 @@ fn probe_shell_fr(
     offsets: &[i64],
     tile_width: u32,
     k_sq: u64,
+    kernel_type: &str,
 ) -> f64 {
     let sieve_limit = sieve_limit_for_shell(a_lo, a_hi, offsets, tile_width, k_sq);
     let sieve = PrimeSieve::new(sieve_limit);
-    let kernel = moat_kernel::kernel::CpuKernel::new(&sieve);
+    let kernel: Box<dyn TileKernel + '_> = match kernel_type {
+        "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
+            export_detail: false,
+        }),
+        _ => Box::new(moat_kernel::kernel::CpuKernel::new(&sieve)),
+    };
     let w = tile_width;
 
     let connected: usize = offsets
@@ -192,7 +198,11 @@ fn probe_shell_fr(
         .map(|&b_lo| {
             let b_hi = b_lo + w as i64;
             let result = kernel.run_tile(a_lo, a_hi, b_lo, b_hi, k_sq);
-            if result.io_count > 0 { 1usize } else { 0usize }
+            if result.io_count > 0 {
+                1usize
+            } else {
+                0usize
+            }
         })
         .sum();
 
@@ -253,20 +263,31 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
             let sieve = PrimeSieve::new(sieve_limit);
 
             // Three paths:
-            // 1. No flags: CpuKernel fast path (no detail, no face_ports).
+            // 1. No flags: selected fast kernel (scanline or legacy) with no detail.
             // 2. --export-detail only: build_tile_with_sieve(export_detail=false) to
             //    get TileOperator with face_ports but NO TileDetail (no primes/edges).
             // 3. --export-primes: build_tile_with_sieve(export_detail=true) to get
             //    full TileDetail (primes, edges, face_assignments, component_ids).
-            let kernel = if !export_detail {
-                Some(moat_kernel::kernel::CpuKernel::new(&sieve))
+            let kernel: Option<Box<dyn TileKernel + '_>> = if !export_detail {
+                Some(match config.kernel_type.as_str() {
+                    "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
+                        export_detail: false,
+                    }),
+                    _ => Box::new(moat_kernel::kernel::CpuKernel::new(&sieve)),
+                })
             } else {
                 None
             };
 
             // Process all stripes for this shell
             // (stripe_idx, result, time_ms, detail, tile_operator)
-            type TileOut = (usize, TileResult, u64, Option<TileDetail>, Option<TileOperator>);
+            type TileOut = (
+                usize,
+                TileResult,
+                u64,
+                Option<TileDetail>,
+                Option<TileOperator>,
+            );
             let tile_results: Vec<TileOut> = offsets
                 .par_iter()
                 .enumerate()
@@ -281,7 +302,13 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                     } else if export_primes {
                         // Heavy path: full TileDetail (primes, edges, etc.)
                         let tile_op = build_tile_with_sieve(
-                            a_lo, a_hi, b_lo, b_hi, config.k_sq, &sieve, true,
+                            a_lo,
+                            a_hi,
+                            b_lo,
+                            b_hi,
+                            config.k_sq,
+                            &sieve,
+                            true,
                         );
                         let result = TileResult::from_tile_operator(&tile_op);
                         let detail = tile_op.detail.clone();
@@ -290,7 +317,13 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                     } else {
                         // Lightweight path: face_ports + connectivity, no TileDetail
                         let tile_op = build_tile_with_sieve(
-                            a_lo, a_hi, b_lo, b_hi, config.k_sq, &sieve, false,
+                            a_lo,
+                            a_hi,
+                            b_lo,
+                            b_hi,
+                            config.k_sq,
+                            &sieve,
+                            false,
                         );
                         let result = TileResult::from_tile_operator(&tile_op);
                         let tile_ms = tile_start.elapsed().as_millis() as u64;
@@ -312,14 +345,8 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                 let (connects_below, connects_left, connects_right, face_ports) =
                     if let Some(ref op) = tile_op {
                         let cb = result.io_count > 0;
-                        let cl = op
-                            .component_faces
-                            .iter()
-                            .any(|&f| f & FACE_LEFT_BIT != 0);
-                        let cr = op
-                            .component_faces
-                            .iter()
-                            .any(|&f| f & FACE_RIGHT_BIT != 0);
+                        let cl = op.component_faces.iter().any(|&f| f & FACE_LEFT_BIT != 0);
+                        let cr = op.component_faces.iter().any(|&f| f & FACE_RIGHT_BIT != 0);
                         let fp = TileRecordFacePorts {
                             inner: op.face_inner.clone(),
                             outer: op.face_outer.clone(),
@@ -359,14 +386,7 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
             if config.trace {
                 eprintln!(
                     "trace shell {}: a=[{}, {}] R~{:.1} f(r)={:.4} io={:?} primes={} {:.0}ms",
-                    shell_idx,
-                    a_lo,
-                    a_hi,
-                    r_center,
-                    f_r,
-                    &io_counts,
-                    total_primes,
-                    shell_time_ms,
+                    shell_idx, a_lo, a_hi, r_center, f_r, &io_counts, total_primes, shell_time_ms,
                 );
             }
 
@@ -429,6 +449,7 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                     &offsets,
                     config.tile_width,
                     config.k_sq,
+                    &config.kernel_type,
                 );
 
                 if config.trace {
@@ -514,6 +535,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
 
         let result = run_ise(&config);
@@ -565,6 +587,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
 
         let result = run_ise(&config);
@@ -607,6 +630,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
 
         let result = run_ise(&config);
@@ -641,6 +665,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
 
         let result = run_ise(&config);
@@ -694,6 +719,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
         let result_no_fb = run_ise(&config_no_fb);
         let candidates_no_fb = result_no_fb
@@ -715,6 +741,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
         let result_with_fb = run_ise(&config_with_fb);
         let candidates_with_fb = result_with_fb
@@ -747,6 +774,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
         let result_no_fb = run_ise(&config_no_fb);
 
@@ -761,6 +789,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
         let result_with_same = run_ise(&config_with_same);
 
@@ -798,6 +827,7 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
         run_ise(&config);
     }
