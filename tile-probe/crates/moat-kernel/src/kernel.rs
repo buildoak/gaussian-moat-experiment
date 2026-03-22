@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::primes::PrimeSieve;
+pub use crate::scanline::ScanlineKernel;
 use crate::tile::{
     build_tile_with_sieve, TileOperator, FACE_INNER_BIT, FACE_LEFT_BIT, FACE_OUTER_BIT,
     FACE_RIGHT_BIT,
@@ -109,14 +110,7 @@ impl TileResult {
 /// This keeps the trait clean and compatible with all backends.
 pub trait TileKernel: Send + Sync {
     /// Run the kernel on a single tile. Returns rich TileResult with all face connectivity.
-    fn run_tile(
-        &self,
-        a_lo: i64,
-        a_hi: i64,
-        b_lo: i64,
-        b_hi: i64,
-        k_sq: u64,
-    ) -> TileResult;
+    fn run_tile(&self, a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64, k_sq: u64) -> TileResult;
 }
 
 /// CPU kernel backed by a PrimeSieve (legacy/Day-0 path).
@@ -131,14 +125,7 @@ impl<'a> CpuKernel<'a> {
 }
 
 impl<'a> TileKernel for CpuKernel<'a> {
-    fn run_tile(
-        &self,
-        a_lo: i64,
-        a_hi: i64,
-        b_lo: i64,
-        b_hi: i64,
-        k_sq: u64,
-    ) -> TileResult {
+    fn run_tile(&self, a_lo: i64, a_hi: i64, b_lo: i64, b_hi: i64, k_sq: u64) -> TileResult {
         let tile = build_tile_with_sieve(a_lo, a_hi, b_lo, b_hi, k_sq, self.sieve, false);
         TileResult::from_tile_operator(&tile)
     }
@@ -217,11 +204,8 @@ mod tests {
         let result = kernel.run_tile(0, 5, 0, 5, 4);
 
         // All counts should be non-negative (trivially true for usize, but no panics)
-        let total_cross = result.il_count
-            + result.ir_count
-            + result.ol_count
-            + result.or_count
-            + result.lr_count;
+        let total_cross =
+            result.il_count + result.ir_count + result.ol_count + result.or_count + result.lr_count;
         let _ = total_cross; // confirm no panics during computation
 
         // I-face component list should be at least as long as io_count

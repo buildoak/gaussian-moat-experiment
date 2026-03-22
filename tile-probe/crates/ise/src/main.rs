@@ -78,6 +78,10 @@ struct Args {
     #[arg(long)]
     export_primes: bool,
 
+    /// Kernel implementation for the fast path.
+    #[arg(long, default_value = "scanline", value_parser = ["scanline", "legacy"])]
+    kernel: String,
+
     /// Run validation against known moats.
     #[arg(long)]
     validate: bool,
@@ -104,9 +108,7 @@ fn resolve_tile_size(args: &Args) -> (u32, u32) {
 }
 
 fn validation_cases() -> Vec<(u64, f64, &'static str)> {
-    vec![
-        (2, 50.0, "k^2=2: moat at R~15-25"),
-    ]
+    vec![(2, 50.0, "k^2=2: moat at R~15-25")]
 }
 
 fn run_validation() -> bool {
@@ -126,6 +128,7 @@ fn run_validation() -> bool {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
         };
 
         let result = run_ise(&config);
@@ -180,6 +183,7 @@ fn main() {
         trace: args.trace,
         export_detail: args.export_detail || args.export_primes,
         export_primes: args.export_primes,
+        kernel_type: args.kernel,
     };
 
     let result = run_ise(&config);
