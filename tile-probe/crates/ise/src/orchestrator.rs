@@ -188,6 +188,7 @@ fn probe_shell_fr(
     let kernel: Box<dyn TileKernel + '_> = match kernel_type {
         "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
             export_detail: false,
+            use_row_sieve: true,
         }),
         _ => Box::new(moat_kernel::kernel::CpuKernel::new(&sieve)),
     };
@@ -272,6 +273,7 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                 Some(match config.kernel_type.as_str() {
                     "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
                         export_detail: false,
+                        use_row_sieve: true,
                     }),
                     _ => Box::new(moat_kernel::kernel::CpuKernel::new(&sieve)),
                 })

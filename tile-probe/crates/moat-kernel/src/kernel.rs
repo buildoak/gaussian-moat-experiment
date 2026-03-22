@@ -10,7 +10,7 @@ use crate::tile::{
 /// Result of running the kernel on a single tile.
 /// Contains full face connectivity -- mode-agnostic.
 /// ISE reads io_count. LB reads face component lists.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TileResult {
     // --- Cross-face component counts ---
     pub io_count: usize, // components touching both I-face and O-face
