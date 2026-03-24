@@ -154,6 +154,7 @@ fn run_scanline_rect(
     let mut face_left = Vec::new();
     let mut face_right = Vec::new();
     let mut component_faces = Vec::new();
+    let mut component_sizes = Vec::new();
     let mut root_map: FxHashMap<usize, usize> = FxHashMap::default();
 
     for row in 0..h {
@@ -171,6 +172,10 @@ fn run_scanline_rect(
 
             let root = find(&mut parent, idx);
             let component = component_id_for_root(root, &mut root_map, &mut component_faces);
+            if component_sizes.len() < component_faces.len() {
+                component_sizes.resize(component_faces.len(), 0);
+            }
+            component_sizes[component] += 1;
 
             if a - a_lo <= collar {
                 face_inner.push(FacePort { a, b, component });
@@ -202,6 +207,7 @@ fn run_scanline_rect(
         face_right,
         num_components: component_faces.len(),
         component_faces,
+        component_sizes,
         origin_component: None,
         num_primes,
         detail: None,
@@ -317,6 +323,32 @@ mod tests {
         assert_eq!(scanline_result.or_count, legacy_result.or_count);
         assert_eq!(scanline_result.lr_count, legacy_result.lr_count);
         assert_eq!(scanline_result.num_primes, legacy_result.num_primes);
+    }
+
+    /// Scanline vs legacy parity for component_sizes
+    #[test]
+    fn scanline_matches_legacy_component_sizes() {
+        let legacy_sieve = sieve_for_tile(10, 10, 2);
+        let legacy = CpuKernel::new(&legacy_sieve);
+        let scanline = ScanlineKernel::new(false);
+
+        let legacy_result = legacy.run_tile(0, 10, 0, 10, 2);
+        let scanline_result = scanline.run_tile(0, 10, 0, 10, 2);
+
+        let mut legacy_sizes = legacy_result.component_sizes.clone();
+        legacy_sizes.sort_unstable();
+        let mut scanline_sizes = scanline_result.component_sizes.clone();
+        scanline_sizes.sort_unstable();
+
+        assert_eq!(
+            legacy_sizes, scanline_sizes,
+            "Sorted component sizes must match between legacy and scanline kernels"
+        );
+        assert_eq!(legacy_result.num_components, scanline_result.num_components);
+        assert_eq!(
+            legacy_result.face_count_histogram,
+            scanline_result.face_count_histogram
+        );
     }
 
     #[test]

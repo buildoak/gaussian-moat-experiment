@@ -47,6 +47,7 @@ pub struct TileOperator {
     pub face_right: Vec<FacePort>,
     pub num_components: usize,
     pub component_faces: Vec<FaceSet>,
+    pub component_sizes: Vec<u32>,
     pub origin_component: Option<usize>,
     pub num_primes: usize,
     pub detail: Option<TileDetail>,
@@ -127,8 +128,12 @@ pub fn build_tile(a_min: i64, a_max: i64, b_min: i64, b_max: i64, k_sq: u64) -> 
     let expanded_a_max = a_max + collar;
     let expanded_b_min = b_min - collar;
     let expanded_b_max = b_max + collar;
-    let primes =
-        gaussian_primes_in_rect(expanded_a_min, expanded_a_max, expanded_b_min, expanded_b_max);
+    let primes = gaussian_primes_in_rect(
+        expanded_a_min,
+        expanded_a_max,
+        expanded_b_min,
+        expanded_b_max,
+    );
 
     build_tile_from_primes(a_min, a_max, b_min, b_max, k_sq, primes, false)
 }
@@ -182,6 +187,7 @@ pub(crate) fn build_tile_from_primes(
             face_right: Vec::new(),
             num_components: 0,
             component_faces: Vec::new(),
+            component_sizes: Vec::new(),
             origin_component: None,
             num_primes,
             detail: if export_detail {
@@ -200,7 +206,10 @@ pub(crate) fn build_tile_from_primes(
     let cell_size = collar.max(1);
     let mut cells: FxHashMap<(i64, i64), Vec<usize>> = FxHashMap::default();
     for (idx, &(a, b)) in primes.iter().enumerate() {
-        cells.entry(cell_key(a, b, cell_size)).or_default().push(idx);
+        cells
+            .entry(cell_key(a, b, cell_size))
+            .or_default()
+            .push(idx);
     }
 
     let mut uf = SimpleUF::new(primes.len());
@@ -255,6 +264,7 @@ pub(crate) fn build_tile_from_primes(
     let mut face_left = Vec::new();
     let mut face_right = Vec::new();
     let mut component_faces = Vec::new();
+    let mut component_sizes = Vec::new();
     let mut root_map: FxHashMap<usize, usize> = FxHashMap::default();
 
     // For detail: track face assignments and component IDs per prime (only in-bounds primes)
@@ -271,6 +281,10 @@ pub(crate) fn build_tile_from_primes(
 
         let root = uf.find(idx);
         let component = component_id_for_root(root, &mut root_map, &mut component_faces);
+        if component_sizes.len() < component_faces.len() {
+            component_sizes.resize(component_faces.len(), 0);
+        }
+        component_sizes[component] += 1;
 
         let mut face_set: FaceSet = 0;
 
@@ -311,9 +325,8 @@ pub(crate) fn build_tile_from_primes(
         }
     }
 
-    let origin_component = origin_component.map(|root| {
-        component_id_for_root(root, &mut root_map, &mut component_faces)
-    });
+    let origin_component = origin_component
+        .map(|root| component_id_for_root(root, &mut root_map, &mut component_faces));
 
     let detail = if export_detail {
         // Remap edges to detail indices (only keep edges where both endpoints are in-bounds)
@@ -346,6 +359,7 @@ pub(crate) fn build_tile_from_primes(
         face_right,
         num_components: component_faces.len(),
         component_faces,
+        component_sizes,
         origin_component,
         num_primes,
         detail,
