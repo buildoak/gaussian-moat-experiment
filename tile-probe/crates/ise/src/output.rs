@@ -37,6 +37,12 @@ struct JsonTileRecord {
     or_count: usize,
     lr_count: usize,
     num_primes: usize,
+    num_components: usize,
+    frag_density: f64,
+    largest_component_frac: f64,
+    susceptibility: f64,
+    c1_c2_ratio: Option<f64>,
+    face_span_entropy: f64,
     connects_below: Option<bool>,
     time_ms: u64,
     // --- Detail fields (only when --export-detail is on) ---
@@ -99,24 +105,68 @@ pub fn write_json_trace(
                 .tiles
                 .iter()
                 .map(|t| {
+                    let num_components = t.result.num_components;
+                    let num_primes = t.result.num_primes;
+                    let component_sizes = &t.result.component_sizes;
+
+                    let frag_density = if num_primes > 0 {
+                        num_components as f64 / num_primes as f64
+                    } else {
+                        0.0
+                    };
+
+                    let mut sorted: Vec<u32> = component_sizes.clone();
+                    sorted.sort_unstable_by(|a, b| b.cmp(a));
+
+                    let largest_component_frac = if num_primes > 0 && !sorted.is_empty() {
+                        sorted[0] as f64 / num_primes as f64
+                    } else {
+                        0.0
+                    };
+
+                    let c1_c2_ratio = if sorted.len() >= 2 && sorted[1] > 0 {
+                        Some(sorted[0] as f64 / sorted[1] as f64)
+                    } else {
+                        None
+                    };
+
+                    let susceptibility = if sorted.len() >= 2 {
+                        let non_giant = &sorted[1..];
+                        let sum_sq: f64 = non_giant.iter().map(|&s| (s as f64).powi(2)).sum();
+                        let sum_lin: f64 = non_giant.iter().map(|&s| s as f64).sum();
+                        if sum_lin > 0.0 {
+                            sum_sq / sum_lin
+                        } else {
+                            0.0
+                        }
+                    } else {
+                        0.0
+                    };
+
+                    let face_span_entropy = {
+                        let total: u32 = t.result.face_count_histogram.iter().sum();
+                        if total > 0 {
+                            let total_f = total as f64;
+                            -t.result
+                                .face_count_histogram
+                                .iter()
+                                .filter(|&&c| c > 0)
+                                .map(|&c| {
+                                    let p = c as f64 / total_f;
+                                    p * p.ln()
+                                })
+                                .sum::<f64>()
+                        } else {
+                            0.0
+                        }
+                    };
+
                     // Extract detail fields if present
                     let (primes, edges, face_assignments, component_ids) =
                         if let Some(ref detail) = t.detail {
                             (
-                                Some(
-                                    detail
-                                        .primes
-                                        .iter()
-                                        .map(|&(a, b)| [a, b])
-                                        .collect(),
-                                ),
-                                Some(
-                                    detail
-                                        .edges
-                                        .iter()
-                                        .map(|&(a, b)| [a, b])
-                                        .collect(),
-                                ),
+                                Some(detail.primes.iter().map(|&(a, b)| [a, b]).collect()),
+                                Some(detail.edges.iter().map(|&(a, b)| [a, b]).collect()),
                                 Some(detail.face_assignments.clone()),
                                 Some(detail.component_ids.clone()),
                             )
@@ -188,6 +238,12 @@ pub fn write_json_trace(
                         or_count: t.result.or_count,
                         lr_count: t.result.lr_count,
                         num_primes: t.result.num_primes,
+                        num_components,
+                        frag_density,
+                        largest_component_frac,
+                        susceptibility,
+                        c1_c2_ratio,
+                        face_span_entropy,
                         connects_below: t.connects_below,
                         time_ms: t.time_ms,
                         primes,
@@ -247,11 +303,37 @@ pub fn write_csv_summary(path: &str, shells: &[ShellRecord]) -> std::io::Result<
 
 /// Print human-readable summary to stdout.
 pub fn print_summary(config: &IseConfig, _shells: &[ShellRecord], summary: &IseSummary) {
-    println!(
-        "ISE k^2={} r=[{:.0}, {:.0}] tiles={}x{} stripes={}",
-        config.k_sq, config.r_min, config.r_max, config.tile_width, config.tile_height,
-        config.num_stripes
-    );
+    let stride_info = match config.stripe_stride {
+        Some(s) => format!(" stride={}", s),
+        None => String::new(),
+    };
+    let num_shells_info = match config.num_shells {
+        Some(n) => format!(" num_shells={}", n),
+        None => String::new(),
+    };
+    if config.r_target.is_some() {
+        println!(
+            "ISE k^2={} r_target={:.0} tiles={}x{} stripes={}{}{}",
+            config.k_sq,
+            config.r_target.unwrap(),
+            config.tile_width,
+            config.tile_height,
+            config.num_stripes,
+            stride_info,
+            num_shells_info
+        );
+    } else {
+        println!(
+            "ISE k^2={} r=[{:.0}, {:.0}] tiles={}x{} stripes={}{}",
+            config.k_sq,
+            config.r_min,
+            config.r_max,
+            config.tile_width,
+            config.tile_height,
+            config.num_stripes,
+            stride_info
+        );
+    }
     println!(
         "  {} shells, {} tiles, {:.2}s, {:.1} MB RSS",
         summary.total_shells,
@@ -292,6 +374,10 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
 
         let result = run_ise(&config);
@@ -323,11 +409,7 @@ mod tests {
 
         // Shell count matches
         let shell_count = parsed["shells"].as_array().unwrap().len();
-        assert_eq!(
-            shell_count,
-            result.shells.len(),
-            "Shell count mismatch"
-        );
+        assert_eq!(shell_count, result.shells.len(), "Shell count mismatch");
 
         // io_counts arrays have correct length
         for shell in parsed["shells"].as_array().unwrap() {
@@ -352,27 +434,88 @@ mod tests {
 
         // Stripe count matches
         let stripe_count = parsed["stripes"].as_array().unwrap().len();
-        assert_eq!(
-            stripe_count,
-            config.num_stripes,
-            "Stripe count mismatch"
-        );
+        assert_eq!(stripe_count, config.num_stripes, "Stripe count mismatch");
 
         // Tile dimensions in stripe records match config
         for stripe in parsed["stripes"].as_array().unwrap() {
             for tile in stripe["tiles"].as_array().unwrap() {
-                assert_eq!(
-                    tile["width"].as_u64().unwrap(),
-                    config.tile_width as u64
-                );
-                assert_eq!(
-                    tile["height"].as_u64().unwrap(),
-                    config.tile_height as u64
-                );
+                assert_eq!(tile["width"].as_u64().unwrap(), config.tile_width as u64);
+                assert_eq!(tile["height"].as_u64().unwrap(), config.tile_height as u64);
             }
         }
 
         // Cleanup
+        let _ = std::fs::remove_file(&json_path);
+    }
+
+    /// Graph metrics appear in JSON and have valid values
+    #[test]
+    fn json_contains_graph_metrics() {
+        let config = IseConfig {
+            k_sq: 2,
+            r_min: 0.0,
+            r_max: 20.0,
+            tile_width: 4,
+            tile_height: 4,
+            num_stripes: 4,
+            fallback_heights: vec![],
+            trace: false,
+            export_detail: false,
+            export_primes: false,
+            kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
+        };
+
+        let result = run_ise(&config);
+        let tmpdir = std::env::temp_dir();
+        let json_path = tmpdir.join("ise_graph_metrics_test.json");
+        let json_path_str = json_path.to_str().unwrap();
+
+        write_json_trace(
+            json_path_str,
+            &result.config,
+            &result.shells,
+            &result.stripes,
+            &result.summary,
+        )
+        .expect("Failed to write JSON");
+
+        let json_str = std::fs::read_to_string(&json_path).expect("Failed to read JSON");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_str).expect("Failed to parse JSON");
+
+        for stripe in parsed["stripes"].as_array().unwrap() {
+            for tile in stripe["tiles"].as_array().unwrap() {
+                assert!(tile["num_components"].is_number(), "num_components missing");
+                assert!(tile["frag_density"].is_number(), "frag_density missing");
+                assert!(
+                    tile["largest_component_frac"].is_number(),
+                    "largest_component_frac missing"
+                );
+                assert!(tile["susceptibility"].is_number(), "susceptibility missing");
+                assert!(
+                    tile["face_span_entropy"].is_number(),
+                    "face_span_entropy missing"
+                );
+                assert!(
+                    tile["c1_c2_ratio"].is_number() || tile["c1_c2_ratio"].is_null(),
+                    "c1_c2_ratio must be number or null"
+                );
+
+                let fd = tile["frag_density"].as_f64().unwrap();
+                assert!(fd >= 0.0, "frag_density should be >= 0, got {}", fd);
+
+                let lcf = tile["largest_component_frac"].as_f64().unwrap();
+                assert!(
+                    (0.0..=1.0).contains(&lcf),
+                    "largest_component_frac should be in [0,1], got {}",
+                    lcf
+                );
+            }
+        }
+
         let _ = std::fs::remove_file(&json_path);
     }
 
@@ -390,6 +533,10 @@ mod tests {
             trace: false,
             export_detail: false,
             export_primes: false,
+            kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
 
         let result = run_ise(&config);

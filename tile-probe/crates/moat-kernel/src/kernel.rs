@@ -27,12 +27,16 @@ pub struct TileResult {
     pub r_face_components: Vec<usize>, // component IDs touching Right-face
 
     pub num_primes: usize,
+    pub component_sizes: Vec<u32>,
+    pub num_components: usize,
+    pub face_count_histogram: [u32; 5],
 }
 
 impl TileResult {
     /// Build a TileResult from a TileOperator by inspecting component_faces
     /// and collecting per-face component ID sets.
     pub fn from_tile_operator(tile: &TileOperator) -> Self {
+        let num_primes = tile.component_sizes.iter().map(|&size| size as usize).sum();
         let mut io = 0;
         let mut il = 0;
         let mut ir = 0;
@@ -43,12 +47,14 @@ impl TileResult {
         let mut o_comps = Vec::new();
         let mut l_comps = Vec::new();
         let mut r_comps = Vec::new();
+        let mut face_count_histogram = [0_u32; 5];
 
         for (id, &faces) in tile.component_faces.iter().enumerate() {
             let has_i = faces & FACE_INNER_BIT != 0;
             let has_o = faces & FACE_OUTER_BIT != 0;
             let has_l = faces & FACE_LEFT_BIT != 0;
             let has_r = faces & FACE_RIGHT_BIT != 0;
+            face_count_histogram[faces.count_ones() as usize] += 1;
 
             if has_i && has_o {
                 io += 1;
@@ -94,7 +100,10 @@ impl TileResult {
             o_face_components: o_comps,
             l_face_components: l_comps,
             r_face_components: r_comps,
-            num_primes: tile.num_primes,
+            num_primes,
+            component_sizes: tile.component_sizes.clone(),
+            num_components: tile.num_components,
+            face_count_histogram,
         }
     }
 }
@@ -215,6 +224,77 @@ mod tests {
             "I-face components ({}) must be >= io_count ({})",
             result.i_face_components.len(),
             result.io_count
+        );
+    }
+
+    /// Graph metrics: small tile near origin should be well-connected
+    #[test]
+    fn graph_metrics_origin_tile_connected() {
+        let sieve = sieve_for_tile(5, 5, 2);
+        let kernel = CpuKernel::new(&sieve);
+        let result = kernel.run_tile(0, 5, 0, 5, 2);
+
+        assert!(result.num_primes > 0, "should have primes");
+        assert!(result.num_components > 0, "should have components");
+        assert!(
+            !result.component_sizes.is_empty(),
+            "should have component sizes"
+        );
+
+        let total: u32 = result.component_sizes.iter().sum();
+        assert_eq!(
+            total as usize, result.num_primes,
+            "component sizes sum ({}) must equal num_primes ({})",
+            total, result.num_primes
+        );
+
+        let max_size = *result.component_sizes.iter().max().unwrap();
+        let largest_frac = max_size as f64 / result.num_primes as f64;
+        assert!(
+            largest_frac > 0.5,
+            "Origin tile largest component fraction ({:.3}) should be > 0.5",
+            largest_frac
+        );
+    }
+
+    /// Graph metrics: far-field tile should be fragmented
+    #[test]
+    fn graph_metrics_far_field_fragmented() {
+        let sieve = sieve_for_tile(102, 5, 2);
+        let kernel = CpuKernel::new(&sieve);
+        let result = kernel.run_tile(100, 102, 0, 2, 2);
+
+        let total: u32 = result.component_sizes.iter().sum();
+        assert_eq!(
+            total as usize, result.num_primes,
+            "component sizes sum must equal num_primes"
+        );
+    }
+
+    /// Graph metrics: component_sizes invariant
+    #[test]
+    fn graph_metrics_component_sizes_invariant() {
+        let sieve = sieve_for_tile(10002, 2, 2);
+        let kernel = CpuKernel::new(&sieve);
+        let result = kernel.run_tile(10000, 10002, 10000, 10002, 2);
+
+        let total: u32 = result.component_sizes.iter().sum();
+        assert_eq!(total as usize, result.num_primes);
+        assert_eq!(result.num_components, result.component_sizes.len());
+    }
+
+    /// Face count histogram sum equals num_components
+    #[test]
+    fn face_count_histogram_sum_equals_components() {
+        let sieve = sieve_for_tile(10, 10, 2);
+        let kernel = CpuKernel::new(&sieve);
+        let result = kernel.run_tile(0, 10, 0, 10, 2);
+
+        let hist_sum: u32 = result.face_count_histogram.iter().sum();
+        assert_eq!(
+            hist_sum as usize, result.num_components,
+            "face_count_histogram sum ({}) must equal num_components ({})",
+            hist_sum, result.num_components
         );
     }
 

@@ -177,8 +177,11 @@ fn compose_horizontal_inner(
     );
 
     let origin_component = finalize_origin_component(
-        left.origin_component
-            .or_else(|| right.origin_component.map(|component| right_offset + component)),
+        left.origin_component.or_else(|| {
+            right
+                .origin_component
+                .map(|component| right_offset + component)
+        }),
         &mut uf,
         &mut root_map,
         &mut component_faces,
@@ -195,6 +198,7 @@ fn compose_horizontal_inner(
         face_right,
         num_components: component_faces.len(),
         component_faces,
+        component_sizes: Vec::new(),
         origin_component,
         num_primes: left.num_primes + right.num_primes,
         detail: None,
@@ -310,7 +314,8 @@ fn compose_vertical_inner(
     };
 
     let origin_component = finalize_origin_component(
-        bottom.origin_component
+        bottom
+            .origin_component
             .or_else(|| top.origin_component.map(|component| top_offset + component)),
         &mut uf,
         &mut root_map,
@@ -328,6 +333,7 @@ fn compose_vertical_inner(
         face_right,
         num_components: component_faces.len(),
         component_faces,
+        component_sizes: Vec::new(),
         origin_component,
         num_primes: bottom.num_primes + top.num_primes,
         detail: None,
@@ -432,7 +438,9 @@ mod tests {
         let right = build_tile(0, 2, 2, 3, 2);
         let merged = compose_horizontal(&left, &right, 2);
 
-        let origin_component = merged.origin_component.expect("origin component should exist");
+        let origin_component = merged
+            .origin_component
+            .expect("origin component should exist");
         assert_ne!(merged.num_components, 0);
         assert!(merged.component_faces[origin_component] & FACE_RIGHT_BIT != 0);
         assert_eq!(merged.b_min, 0);
@@ -445,7 +453,9 @@ mod tests {
         let top = compose_horizontal(&build_tile(3, 5, 0, 1, 2), &build_tile(3, 5, 2, 3, 2), 2);
         let merged = compose_vertical(&bottom, &top, 2);
 
-        let origin_component = merged.origin_component.expect("origin component should exist");
+        let origin_component = merged
+            .origin_component
+            .expect("origin component should exist");
         assert!(merged.component_faces[origin_component] & FACE_OUTER_BIT != 0);
         assert_eq!(merged.a_min, 0);
         assert_eq!(merged.a_max, 5);
@@ -459,7 +469,9 @@ mod tests {
         ];
         let merged = compose_grid(grid, 2);
 
-        let origin_component = merged.origin_component.expect("origin component should exist");
+        let origin_component = merged
+            .origin_component
+            .expect("origin component should exist");
         assert!(merged.component_faces[origin_component] & FACE_OUTER_BIT != 0);
         assert_eq!(merged.b_max, 3);
     }
@@ -470,7 +482,7 @@ mod tests {
     fn compose_grid_rejects_ragged_input() {
         let grid = vec![
             vec![build_tile(0, 2, 0, 1, 2), build_tile(0, 2, 2, 3, 2)], // 2 columns
-            vec![build_tile(3, 5, 0, 1, 2)],                              // 1 column
+            vec![build_tile(3, 5, 0, 1, 2)],                            // 1 column
         ];
         compose_grid(grid, 2);
     }
