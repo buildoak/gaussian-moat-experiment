@@ -82,6 +82,20 @@ struct Args {
     #[arg(long, default_value = "scanline", value_parser = ["scanline", "legacy"])]
     kernel: String,
 
+    /// Override stripe spacing (default: W + 2*collar for tight packing).
+    /// Must be >= W + 2*collar to ensure disjoint expanded regions.
+    #[arg(long)]
+    stripe_stride: Option<i64>,
+
+    /// Curvature-compensated placement: each stripe's shell 0 inner face
+    /// sits at exactly this distance from the origin. Overrides --r-min/--r-max.
+    #[arg(long)]
+    r_target: Option<f64>,
+
+    /// Number of shells per stripe in --r-target mode (default: 20).
+    #[arg(long)]
+    num_shells: Option<u32>,
+
     /// Run validation against known moats.
     #[arg(long)]
     validate: bool,
@@ -129,6 +143,9 @@ fn run_validation() -> bool {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
 
         let result = run_ise(&config);
@@ -158,9 +175,6 @@ fn main() {
     let k_sq = args
         .k_squared
         .expect("--k-squared is required unless --validate is set");
-    let r_max = args
-        .r_max
-        .expect("--r-max is required unless --validate is set");
 
     let (tile_width, tile_height) = resolve_tile_size(&args);
 
@@ -171,6 +185,15 @@ fn main() {
             .build_global()
             .ok();
     }
+
+    // In r_target mode, r_max is not required (r_min/r_max are unused).
+    // In standard mode, r_max is mandatory.
+    let r_max = if args.r_target.is_some() {
+        args.r_max.unwrap_or(0.0)
+    } else {
+        args.r_max
+            .expect("--r-max is required unless --r-target or --validate is set")
+    };
 
     let config = IseConfig {
         k_sq,
@@ -184,6 +207,9 @@ fn main() {
         export_detail: args.export_detail || args.export_primes,
         export_primes: args.export_primes,
         kernel_type: args.kernel,
+        stripe_stride: args.stripe_stride,
+        r_target: args.r_target,
+        num_shells: args.num_shells,
     };
 
     let result = run_ise(&config);

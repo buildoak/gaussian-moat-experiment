@@ -34,6 +34,18 @@ pub struct IseConfig {
     pub export_primes: bool,
     #[serde(default = "default_kernel_type")]
     pub kernel_type: String,
+    /// Override stripe spacing. When None, uses W + 2*collar (tight packing).
+    /// When Some(s), must be >= W + 2*collar for disjoint expanded regions.
+    #[serde(default)]
+    pub stripe_stride: Option<i64>,
+    /// Curvature-compensated placement: each stripe's shell 0 inner face sits
+    /// at exactly this distance from the origin. Per-stripe a_min is computed as
+    /// floor(sqrt(r_target^2 - b_center^2)).
+    #[serde(default)]
+    pub r_target: Option<f64>,
+    /// Number of shells per stripe in r_target mode (default: 20).
+    #[serde(default)]
+    pub num_shells: Option<u32>,
 }
 
 /// A single tile's record within a stripe, including position, dimensions, and results.
@@ -140,11 +152,24 @@ fn shell_bounds(r_min: f64, r_max: f64, tile_height: u32) -> Vec<(i64, i64, f64)
 /// collar) are disjoint. This ensures the per-stripe io_count outcomes are
 /// statistically independent, which is needed for the `p^M` false-positive
 /// bound in Theorem 4.2.
-fn stripe_offsets(tile_width: u32, num_stripes: usize, k_sq: u64) -> Vec<i64> {
+fn stripe_offsets(
+    tile_width: u32,
+    num_stripes: usize,
+    k_sq: u64,
+    stride_override: Option<i64>,
+) -> Vec<i64> {
     let w = tile_width as i64;
     let collar = (k_sq as f64).sqrt().ceil() as i64;
-    // Stride = W + 2*collar for disjoint expanded neighborhoods (LaTeX Sec 4.2)
-    let stride = w + 2 * collar;
+    // Minimum stride = W + 2*collar for disjoint expanded neighborhoods (LaTeX Sec 4.2)
+    let min_stride = w + 2 * collar;
+    let stride = match stride_override {
+        Some(s) if s >= min_stride => s,
+        Some(s) => panic!(
+            "--stripe-stride {} is too small: minimum is {} (W={} + 2*collar={})",
+            s, min_stride, w, collar
+        ),
+        None => min_stride,
+    };
     (0..num_stripes)
         .map(|idx| collar + idx as i64 * stride)
         .collect()
@@ -214,11 +239,314 @@ fn probe_shell_fr(
     }
 }
 
+/// Curvature-compensated tile placement descriptor.
+/// Each entry is one tile to process, with per-stripe a_lo adjusted so the
+/// inner face center sits at distance ~r_target from the origin.
+#[derive(Debug, Clone)]
+struct CompensatedTile {
+    shell_idx: usize,
+    stripe_idx: usize,
+    a_lo: i64,
+    a_hi: i64,
+    b_lo: i64,
+    b_hi: i64,
+}
+
+/// Compute per-stripe compensated a_lo so that the inner face center of
+/// shell 0 sits at distance r_target from the origin.
+///
+/// For stripe j with lateral center b_center:
+///   a_base = floor(sqrt(r_target^2 - b_center^2))
+///
+/// Returns (a_base, b_lo, b_hi) per stripe.
+fn compensated_bases(r_target: f64, offsets: &[i64], tile_width: u32) -> Vec<(i64, i64, i64)> {
+    let w = tile_width as i64;
+    offsets
+        .iter()
+        .map(|&b_lo| {
+            let b_center = b_lo as f64 + w as f64 / 2.0;
+            let a_sq = (r_target * r_target - b_center * b_center).max(0.0);
+            let a_base = a_sq.sqrt().floor() as i64;
+            (a_base, b_lo, b_lo + w)
+        })
+        .collect()
+}
+
+/// Build a flat list of compensated tiles for all shells and stripes.
+fn build_compensated_tiles(
+    r_target: f64,
+    offsets: &[i64],
+    tile_width: u32,
+    tile_height: u32,
+    num_shells: u32,
+) -> Vec<CompensatedTile> {
+    let bases = compensated_bases(r_target, offsets, tile_width);
+    let h = tile_height as i64;
+    let mut tiles = Vec::with_capacity(bases.len() * num_shells as usize);
+
+    for (stripe_idx, &(a_base, b_lo, b_hi)) in bases.iter().enumerate() {
+        for shell_idx in 0..num_shells as usize {
+            let a_lo = a_base + shell_idx as i64 * h;
+            let a_hi = a_lo + h;
+            tiles.push(CompensatedTile {
+                shell_idx,
+                stripe_idx,
+                a_lo,
+                a_hi,
+                b_lo,
+                b_hi,
+            });
+        }
+    }
+    tiles
+}
+
+/// Run the ISE campaign in curvature-compensated mode.
+///
+/// Each stripe gets its own a_lo so that the inner face center sits at
+/// distance r_target from the origin. Shells are numbered 0..num_shells,
+/// where shell N starts at a_base + N*H for each stripe.
+fn run_ise_compensated(config: &IseConfig, r_target: f64) -> IseResult {
+    let started = Instant::now();
+
+    let num_shells = config.num_shells.unwrap_or(20) as usize;
+    let offsets = stripe_offsets(
+        config.tile_width,
+        config.num_stripes,
+        config.k_sq,
+        config.stripe_stride,
+    );
+    let w = config.tile_width;
+    let h = config.tile_height;
+    let num_stripes = config.num_stripes;
+    let export_primes = config.export_primes;
+
+    let tiles = build_compensated_tiles(r_target, &offsets, w, h, num_shells as u32);
+
+    if config.trace {
+        // Print per-stripe a_base for diagnostic visibility
+        let bases = compensated_bases(r_target, &offsets, w);
+        for (i, &(a_base, b_lo, _)) in bases.iter().enumerate() {
+            let b_center = b_lo as f64 + w as f64 / 2.0;
+            let actual_r = ((a_base as f64).powi(2) + b_center.powi(2)).sqrt();
+            eprintln!(
+                "trace compensated stripe {}: b_lo={} b_center={:.0} a_base={} actual_r={:.2} (target={:.2})",
+                i, b_lo, b_center, a_base, actual_r, r_target
+            );
+        }
+    }
+
+    // Process all tiles in a flat par_iter
+    type TileOut = (
+        usize, // shell_idx
+        usize, // stripe_idx
+        i64,   // a_lo
+        TileResult,
+        u64, // time_ms
+        Option<TileDetail>,
+        Option<TileOperator>,
+    );
+
+    let tile_results: Vec<TileOut> = tiles
+        .par_iter()
+        .map(|ct| {
+            let tile_start = Instant::now();
+
+            // Build per-tile sieve (scoped to this tile's bounds)
+            let collar = (config.k_sq as f64).sqrt().ceil() as i64;
+            let max_a = ct.a_hi.abs().max(ct.a_lo.abs()) + collar;
+            let max_b = ct.b_lo.abs().max(ct.b_hi.abs()) + collar;
+            let max_norm = (max_a as u128)
+                .saturating_mul(max_a as u128)
+                .saturating_add((max_b as u128).saturating_mul(max_b as u128))
+                .min(u64::MAX as u128) as u64;
+            let sieve_limit = max_norm.clamp(1000, 10_000_000);
+            let sieve = PrimeSieve::new(sieve_limit);
+
+            if !export_primes {
+                let kernel: Box<dyn TileKernel + '_> = match config.kernel_type.as_str() {
+                    "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
+                        export_detail: false,
+                        use_row_sieve: true,
+                    }),
+                    _ => Box::new(moat_kernel::kernel::CpuKernel::new(&sieve)),
+                };
+                let result = kernel.run_tile(ct.a_lo, ct.a_hi, ct.b_lo, ct.b_hi, config.k_sq);
+                let tile_ms = tile_start.elapsed().as_millis() as u64;
+                (
+                    ct.shell_idx,
+                    ct.stripe_idx,
+                    ct.a_lo,
+                    result,
+                    tile_ms,
+                    None,
+                    None,
+                )
+            } else {
+                // --export-primes: full TileDetail (primes, edges, face_assignments, component_ids)
+                let tile_op = build_tile_with_sieve(
+                    ct.a_lo,
+                    ct.a_hi,
+                    ct.b_lo,
+                    ct.b_hi,
+                    config.k_sq,
+                    &sieve,
+                    true,
+                );
+                let result = TileResult::from_tile_operator(&tile_op);
+                let detail = tile_op.detail.clone();
+                let tile_ms = tile_start.elapsed().as_millis() as u64;
+                (
+                    ct.shell_idx,
+                    ct.stripe_idx,
+                    ct.a_lo,
+                    result,
+                    tile_ms,
+                    detail,
+                    Some(tile_op),
+                )
+            }
+        })
+        .collect();
+
+    // Aggregate into per-shell records and per-stripe tile records
+    // Shell aggregation: group by shell_idx
+    let mut shell_io_counts: Vec<Vec<usize>> = vec![vec![0usize; num_stripes]; num_shells];
+    let mut shell_primes: Vec<usize> = vec![0; num_shells];
+    let mut shell_time_ms: Vec<u64> = vec![0; num_shells];
+    let mut stripe_accumulators: Vec<Vec<TileRecord>> = vec![Vec::new(); num_stripes];
+
+    for (shell_idx, stripe_idx, a_lo, result, tile_ms, detail, tile_op) in tile_results {
+        shell_io_counts[shell_idx][stripe_idx] = result.io_count;
+        shell_primes[shell_idx] += result.num_primes;
+        shell_time_ms[shell_idx] += tile_ms;
+
+        let (connects_below, connects_left, connects_right, face_ports) =
+            if let Some(ref op) = tile_op {
+                let cb = result.io_count > 0;
+                let cl = op.component_faces.iter().any(|&f| f & FACE_LEFT_BIT != 0);
+                let cr = op.component_faces.iter().any(|&f| f & FACE_RIGHT_BIT != 0);
+                let fp = TileRecordFacePorts {
+                    inner: op.face_inner.clone(),
+                    outer: op.face_outer.clone(),
+                    left: op.face_left.clone(),
+                    right: op.face_right.clone(),
+                };
+                (Some(cb), Some(cl), Some(cr), Some(fp))
+            } else {
+                (None, None, None, None)
+            };
+
+        let record = TileRecord {
+            a_lo,
+            b_lo: offsets[stripe_idx],
+            width: w,
+            height: h,
+            result,
+            connects_below,
+            connects_left,
+            connects_right,
+            time_ms: tile_ms,
+            detail,
+            face_ports,
+        };
+        stripe_accumulators[stripe_idx].push(record);
+    }
+
+    // Build shell records
+    let mut shells_out: Vec<ShellRecord> = Vec::with_capacity(num_shells);
+    for shell_idx in 0..num_shells {
+        let io_counts = &shell_io_counts[shell_idx];
+        let connected = io_counts.iter().filter(|&&c| c > 0).count();
+        let f_r = if io_counts.is_empty() {
+            0.0
+        } else {
+            connected as f64 / io_counts.len() as f64
+        };
+
+        // Shell R_center: r_target + shell_idx * H
+        let r_center = r_target + shell_idx as f64 * h as f64;
+
+        // Use the first stripe's a_lo/a_hi as representative (they vary per stripe)
+        let bases = compensated_bases(r_target, &offsets, w);
+        let repr_a_lo = bases[0].0 + shell_idx as i64 * h as i64;
+        let repr_a_hi = repr_a_lo + h as i64;
+
+        if config.trace {
+            eprintln!(
+                "trace shell {}: R~{:.1} f(r)={:.4} io={:?} primes={} {:.0}ms",
+                shell_idx,
+                r_center,
+                f_r,
+                io_counts,
+                shell_primes[shell_idx],
+                shell_time_ms[shell_idx],
+            );
+        }
+
+        shells_out.push(ShellRecord {
+            shell_idx,
+            r_center,
+            a_lo: repr_a_lo,
+            a_hi: repr_a_hi,
+            io_counts: io_counts.clone(),
+            f_r,
+            is_candidate: f_r == 0.0,
+            num_primes: shell_primes[shell_idx],
+            shell_time_ms: shell_time_ms[shell_idx],
+        });
+    }
+
+    // Sort each stripe's tiles by a_lo
+    for tiles in &mut stripe_accumulators {
+        tiles.sort_by_key(|t| t.a_lo);
+    }
+
+    let stripes: Vec<StripeRecord> = stripe_accumulators
+        .into_iter()
+        .enumerate()
+        .map(|(id, tiles)| StripeRecord {
+            stripe_id: id,
+            b_lo: offsets[id],
+            tiles,
+        })
+        .collect();
+
+    let total_tiles: usize = stripes.iter().map(|s| s.tiles.len()).sum();
+    let candidates: Vec<(usize, f64)> = shells_out
+        .iter()
+        .filter(|s| s.is_candidate)
+        .map(|s| (s.shell_idx, s.r_center))
+        .collect();
+
+    let total_time_ms = started.elapsed().as_millis() as u64;
+    let peak_rss_mb = moat_kernel::profile::get_rss_kb() as f64 / 1024.0;
+
+    let summary = IseSummary {
+        total_shells: shells_out.len(),
+        total_tiles,
+        candidates,
+        total_time_ms,
+        peak_rss_mb,
+    };
+
+    IseResult {
+        config: config.clone(),
+        shells: shells_out,
+        stripes,
+        summary,
+    }
+}
+
 /// Run the ISE campaign.
 ///
 /// Uses nested par_iter: outer over shells, inner over stripes.
 /// The sieve is built per shell and shared across all stripes in that shell
 /// via CpuKernel.
+///
+/// When `r_target` is set, delegates to curvature-compensated mode where
+/// each stripe gets its own a_lo so that the inner face center sits at
+/// distance r_target from the origin.
 ///
 /// When `fallback_heights` is non-empty, any shell initially flagged as a
 /// candidate (f(r)=0) is re-probed at each fallback height. The candidate
@@ -226,6 +554,23 @@ fn probe_shell_fr(
 /// fallback height produces f(r)>0, the shell is demoted (no longer a
 /// candidate), meaning the initial result was an artifact of tile height.
 pub fn run_ise(config: &IseConfig) -> IseResult {
+    // Dispatch to compensated mode if r_target is set
+    if let Some(r_target) = config.r_target {
+        assert!(
+            r_target > 0.0,
+            "r_target must be positive, got {}",
+            r_target
+        );
+        assert!(
+            config.num_stripes >= 1,
+            "stripes must be >= 1, got {}",
+            config.num_stripes
+        );
+        assert!(config.tile_width > 0, "tile_width must be > 0");
+        assert!(config.tile_height > 0, "tile_height must be > 0");
+        return run_ise_compensated(config, r_target);
+    }
+
     assert!(
         config.num_stripes >= 1,
         "stripes must be >= 1, got {}",
@@ -243,13 +588,17 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
     let started = Instant::now();
 
     let shells = shell_bounds(config.r_min, config.r_max, config.tile_height);
-    let offsets = stripe_offsets(config.tile_width, config.num_stripes, config.k_sq);
+    let offsets = stripe_offsets(
+        config.tile_width,
+        config.num_stripes,
+        config.k_sq,
+        config.stripe_stride,
+    );
     let w = config.tile_width;
 
     // Per-stripe accumulators: built up as we process shells
     let num_stripes = config.num_stripes;
 
-    let export_detail = config.export_detail;
     let export_primes = config.export_primes;
 
     // Process shells in parallel. Each shell builds its own sieve and kernel.
@@ -263,13 +612,12 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
             let sieve_limit = sieve_limit_for_shell(a_lo, a_hi, &offsets, w, config.k_sq);
             let sieve = PrimeSieve::new(sieve_limit);
 
-            // Three paths:
-            // 1. No flags: selected fast kernel (scanline or legacy) with no detail.
-            // 2. --export-detail only: build_tile_with_sieve(export_detail=false) to
-            //    get TileOperator with face_ports but NO TileDetail (no primes/edges).
-            // 3. --export-primes: build_tile_with_sieve(export_detail=true) to get
+            // Two paths:
+            // 1. Default (incl. --export-detail): fast kernel, no TileOperator.
+            //    face_ports computed from TileOperator only when --export-primes.
+            // 2. --export-primes: build_tile_with_sieve(export_detail=true) to get
             //    full TileDetail (primes, edges, face_assignments, component_ids).
-            let kernel: Option<Box<dyn TileKernel + '_>> = if !export_detail {
+            let kernel: Option<Box<dyn TileKernel + '_>> = if !export_primes {
                 Some(match config.kernel_type.as_str() {
                     "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
                         export_detail: false,
@@ -297,12 +645,12 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                     let tile_start = Instant::now();
                     let b_hi = b_lo + w as i64;
                     if let Some(ref k) = kernel {
-                        // Fast path: no detail, no face_ports
+                        // Fast path: no TileOperator, no face_ports
                         let result = k.run_tile(a_lo, a_hi, b_lo, b_hi, config.k_sq);
                         let tile_ms = tile_start.elapsed().as_millis() as u64;
                         (stripe_idx, result, tile_ms, None, None)
-                    } else if export_primes {
-                        // Heavy path: full TileDetail (primes, edges, etc.)
+                    } else {
+                        // --export-primes: full TileDetail (primes, edges, etc.)
                         let tile_op = build_tile_with_sieve(
                             a_lo,
                             a_hi,
@@ -316,20 +664,6 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
                         let detail = tile_op.detail.clone();
                         let tile_ms = tile_start.elapsed().as_millis() as u64;
                         (stripe_idx, result, tile_ms, detail, Some(tile_op))
-                    } else {
-                        // Lightweight path: face_ports + connectivity, no TileDetail
-                        let tile_op = build_tile_with_sieve(
-                            a_lo,
-                            a_hi,
-                            b_lo,
-                            b_hi,
-                            config.k_sq,
-                            &sieve,
-                            false,
-                        );
-                        let result = TileResult::from_tile_operator(&tile_op);
-                        let tile_ms = tile_start.elapsed().as_millis() as u64;
-                        (stripe_idx, result, tile_ms, None, Some(tile_op))
                     }
                 })
                 .collect();
@@ -538,6 +872,9 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
 
         let result = run_ise(&config);
@@ -590,6 +927,9 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
 
         let result = run_ise(&config);
@@ -633,6 +973,9 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
 
         let result = run_ise(&config);
@@ -668,6 +1011,9 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
 
         let result = run_ise(&config);
@@ -722,6 +1068,9 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
         let result_no_fb = run_ise(&config_no_fb);
         let candidates_no_fb = result_no_fb
@@ -744,6 +1093,9 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
         let result_with_fb = run_ise(&config_with_fb);
         let candidates_with_fb = result_with_fb
@@ -777,6 +1129,9 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
         let result_no_fb = run_ise(&config_no_fb);
 
@@ -792,6 +1147,9 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
         let result_with_same = run_ise(&config_with_same);
 
@@ -830,7 +1188,61 @@ mod tests {
             export_detail: false,
             export_primes: false,
             kernel_type: "scanline".to_string(),
+            stripe_stride: None,
+            r_target: None,
+            num_shells: None,
         };
         run_ise(&config);
+    }
+
+    /// Curvature-compensated mode: different stripes get different a_lo values
+    #[test]
+    fn compensated_mode_produces_varying_a_lo() {
+        let config = IseConfig {
+            k_sq: 2,
+            r_min: 0.0,
+            r_max: 50.0,
+            tile_width: 8,
+            tile_height: 8,
+            num_stripes: 4,
+            fallback_heights: vec![],
+            trace: false,
+            export_detail: false,
+            export_primes: false,
+            kernel_type: "scanline".to_string(),
+            stripe_stride: Some(100),
+            r_target: Some(1000.0),
+            num_shells: Some(3),
+        };
+
+        let result = run_ise(&config);
+
+        // Should have exactly num_shells shells
+        assert_eq!(result.shells.len(), 3, "Should have 3 shells");
+
+        // Should have exactly num_stripes stripes
+        assert_eq!(result.stripes.len(), 4, "Should have 4 stripes");
+
+        // Each stripe should have num_shells tiles
+        for stripe in &result.stripes {
+            assert_eq!(
+                stripe.tiles.len(),
+                3,
+                "Stripe {} should have 3 tiles",
+                stripe.stripe_id
+            );
+        }
+
+        // Verify different stripes have different a_lo for shell 0
+        // (because curvature compensation adjusts per stripe)
+        let shell0_a_lo_values: Vec<i64> = result.stripes.iter().map(|s| s.tiles[0].a_lo).collect();
+
+        // With stride=100, stripes are far apart, so a_lo should differ
+        let all_same = shell0_a_lo_values.windows(2).all(|w| w[0] == w[1]);
+        assert!(
+            !all_same,
+            "Compensated mode should produce different a_lo per stripe, got {:?}",
+            shell0_a_lo_values
+        );
     }
 }
