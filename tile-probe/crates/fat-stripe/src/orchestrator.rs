@@ -50,7 +50,7 @@ pub fn run_campaign(config: &FatStripeConfig, r_min: f64, r_max: f64) -> Campaig
             let diff = r_max_sq - a_lo_f * a_lo_f;
             if diff > 0.0 { diff.sqrt().ceil() as i64 } else { 0 }
         };
-        let b_max_stripe = b_from_radius.min(a_hi);
+        let b_max_stripe = b_from_radius.min(a_hi).min(config.b_max);
 
         let mut stripe_op: Option<TileOperator> = None;
 
