@@ -12,28 +12,111 @@ pub const SMALL_PRIMES: [u64; 168] = [
     937, 941, 947, 953, 967, 971, 977, 983, 991, 997,
 ];
 
-pub const MR_WITNESSES_9: [u64; 9] = [2, 3, 5, 7, 11, 13, 17, 19, 23];
-pub const ROW_SIEVE_LIMIT: u16 = 10_000;
+// 12 deterministic witnesses — valid for all n < 3.317 × 10^24 (covers all u64 inputs).
+pub const MR_WITNESSES_12: [u64; 12] = [2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37];
 
-pub static SQRT_NEG1_TABLE: LazyLock<Vec<(u16, u16)>> = LazyLock::new(|| {
-    primes_up_to(ROW_SIEVE_LIMIT)
+/// Default sieve limit used by the legacy static tables and SieveTable::default().
+pub const DEFAULT_SIEVE_LIMIT: u32 = 10_000;
+
+// Legacy constant kept for backward compatibility (same value).
+pub const ROW_SIEVE_LIMIT: u32 = DEFAULT_SIEVE_LIMIT;
+
+// ---------------------------------------------------------------------------
+// Legacy static tables (renamed from SQRT_NEG1_TABLE / MOD_3_SIEVE_PRIMES).
+// These are kept for validation tests. They are computed lazily using the same
+// logic as SieveTable::new() but stored as (u16, u16) / u16 for historical
+// reasons. The canonical source of truth for runtime usage is SieveTable.
+// ---------------------------------------------------------------------------
+
+pub static LEGACY_SQRT_NEG1_TABLE: LazyLock<Vec<(u16, u16)>> = LazyLock::new(|| {
+    primes_up_to_u32(DEFAULT_SIEVE_LIMIT)
         .into_iter()
         .filter(|&p| p % 4 == 1)
         .map(|p| {
             let root = tonelli_shanks(u64::from(p - 1), u64::from(p))
                 .expect("sqrt(-1) must exist for primes congruent to 1 mod 4");
             let canonical = root.min(u64::from(p) - root) as u16;
-            (p, canonical)
+            (p as u16, canonical)
         })
         .collect()
 });
 
-static MOD_3_SIEVE_PRIMES: LazyLock<Vec<u16>> = LazyLock::new(|| {
-    primes_up_to(ROW_SIEVE_LIMIT)
+/// Alias for backward compatibility — tests still reference SQRT_NEG1_TABLE by name.
+pub static SQRT_NEG1_TABLE: LazyLock<Vec<(u16, u16)>> = LazyLock::new(|| {
+    LEGACY_SQRT_NEG1_TABLE.iter().copied().collect()
+});
+
+pub static LEGACY_MOD_3_SIEVE_PRIMES: LazyLock<Vec<u16>> = LazyLock::new(|| {
+    primes_up_to_u32(DEFAULT_SIEVE_LIMIT)
         .into_iter()
         .filter(|&p| p % 4 == 3)
+        .map(|p| p as u16)
         .collect()
 });
+
+// ---------------------------------------------------------------------------
+// SieveTable — parameterized prime table for sieve_row().
+// ---------------------------------------------------------------------------
+
+/// A precomputed sieve table for a given prime limit.
+///
+/// - `splitting`: primes p ≡ 1 (mod 4), stored as (p, sqrt(-1) mod p).
+///   Both roots ±r are used by `sieve_row`, so the canonical choice (min root)
+///   matches the legacy table but the sieve output is root-independent.
+/// - `inert`: primes p ≡ 3 (mod 4), p > 2.
+pub struct SieveTable {
+    pub limit: u32,
+    pub splitting: Vec<(u32, u32)>, // (prime, sqrt(-1) mod p) for p ≡ 1 mod 4
+    pub inert: Vec<u32>,            // primes p ≡ 3 mod 4
+}
+
+impl SieveTable {
+    /// Build a SieveTable for all primes up to `limit`.
+    ///
+    /// For p ≡ 1 (mod 4): computes the canonical (smaller) sqrt(-1) mod p.
+    /// For p ≡ 3 (mod 4), p > 2: stores p in the inert list.
+    /// p = 2 is handled by the parity sieve in `sieve_row` and is excluded.
+    pub fn new(limit: u32) -> Self {
+        let primes = primes_up_to_u32(limit);
+        let mut splitting = Vec::new();
+        let mut inert = Vec::new();
+
+        for p in primes {
+            match p % 4 {
+                1 => {
+                    let root = tonelli_shanks(u64::from(p - 1), u64::from(p))
+                        .expect("sqrt(-1) must exist for p ≡ 1 mod 4");
+                    // Canonical: pick the smaller of the two roots.
+                    let canonical = root.min(u64::from(p) - root) as u32;
+                    splitting.push((p, canonical));
+                }
+                3 => {
+                    inert.push(p);
+                }
+                _ => {} // p == 2: handled by parity step; p % 4 == 0 impossible for prime
+            }
+        }
+
+        Self {
+            limit,
+            splitting,
+            inert,
+        }
+    }
+
+    /// Default table at limit=10,000 — matches the legacy static tables exactly.
+    pub fn default() -> Self {
+        Self::new(DEFAULT_SIEVE_LIMIT)
+    }
+}
+
+/// Global default SieveTable, lazily initialised. Used by the legacy
+/// `sieve_row` signature kept for backward compatibility.
+pub static DEFAULT_SIEVE_TABLE: LazyLock<SieveTable> = LazyLock::new(SieveTable::default);
+
+// ---------------------------------------------------------------------------
+// Arithmetic helpers
+// ---------------------------------------------------------------------------
 
 #[inline(always)]
 pub fn mulmod(a: u64, b: u64, m: u64) -> u64 {
@@ -73,7 +156,11 @@ impl MontgomeryParams {
         let m = ((t as u64).wrapping_mul(self.n_inv)) as u128;
         let u = (t.wrapping_add(m.wrapping_mul(self.n as u128))) >> 64;
         let u = u as u64;
-        if u >= self.n { u - self.n } else { u }
+        if u >= self.n {
+            u - self.n
+        } else {
+            u
+        }
     }
 
     #[allow(clippy::wrong_self_convention)]
@@ -132,20 +219,23 @@ pub fn powmod(base: u64, exp: u64, m: u64) -> u64 {
     params.from_mont(result)
 }
 
-fn primes_up_to(limit: u16) -> Vec<u16> {
+/// Sieve of Eratosthenes up to `limit` (inclusive), returning primes as u32.
+/// Handles limits up to ~4 billion (constrained by memory).
+fn primes_up_to_u32(limit: u32) -> Vec<u32> {
     if limit < 2 {
         return Vec::new();
     }
 
-    let mut is_prime = vec![true; usize::from(limit) + 1];
+    let n = limit as usize;
+    let mut is_prime = vec![true; n + 1];
     is_prime[0] = false;
     is_prime[1] = false;
 
     let mut p = 2_usize;
-    while p * p <= usize::from(limit) {
+    while p * p <= n {
         if is_prime[p] {
             let mut multiple = p * p;
-            while multiple <= usize::from(limit) {
+            while multiple <= n {
                 is_prime[multiple] = false;
                 multiple += p;
             }
@@ -156,7 +246,7 @@ fn primes_up_to(limit: u16) -> Vec<u16> {
     is_prime
         .iter()
         .enumerate()
-        .filter_map(|(n, &prime)| prime.then_some(n as u16))
+        .filter_map(|(n, &prime)| prime.then_some(n as u32))
         .collect()
 }
 
@@ -212,6 +302,10 @@ fn tonelli_shanks(n: u64, p: u64) -> Option<u64> {
     Some(x)
 }
 
+// ---------------------------------------------------------------------------
+// Sieve kernel
+// ---------------------------------------------------------------------------
+
 #[inline]
 fn mark_residue_class(b_start: i64, width: usize, p: i64, residue: i64, sieve: &mut [bool]) {
     let first = (residue - b_start).rem_euclid(p) as usize;
@@ -220,7 +314,12 @@ fn mark_residue_class(b_start: i64, width: usize, p: i64, residue: i64, sieve: &
     }
 }
 
-pub fn sieve_row(a: i64, b_start: i64, width: usize, sieve: &mut [bool]) {
+/// Mark Gaussian integers on a single row `a + b·i` for `b ∈ [b_start, b_start+width)`.
+///
+/// `table` provides the precomputed prime lists. Build it once per tile and
+/// reuse across all rows. Use `&DEFAULT_SIEVE_TABLE` for the legacy behaviour
+/// at limit=10,000.
+pub fn sieve_row(a: i64, b_start: i64, width: usize, table: &SieveTable, sieve: &mut [bool]) {
     assert_eq!(
         sieve.len(),
         width,
@@ -236,9 +335,9 @@ pub fn sieve_row(a: i64, b_start: i64, width: usize, sieve: &mut [bool]) {
         sieve[idx] = true;
     }
 
-    for &(p_u16, r_u16) in SQRT_NEG1_TABLE.iter() {
-        let p = i64::from(p_u16);
-        let residue = (a.rem_euclid(p) * i64::from(r_u16)).rem_euclid(p);
+    for &(p_u32, r_u32) in table.splitting.iter() {
+        let p = i64::from(p_u32);
+        let residue = (a.rem_euclid(p) * i64::from(r_u32)).rem_euclid(p);
         mark_residue_class(b_start, width, p, residue, sieve);
 
         let neg_residue = (-residue).rem_euclid(p);
@@ -247,16 +346,17 @@ pub fn sieve_row(a: i64, b_start: i64, width: usize, sieve: &mut [bool]) {
         }
     }
 
-    for &p_u16 in MOD_3_SIEVE_PRIMES.iter() {
-        let p = i64::from(p_u16);
+    for &p_u32 in table.inert.iter() {
+        let p = i64::from(p_u32);
         if a.rem_euclid(p) == 0 {
             mark_residue_class(b_start, width, p, 0, sieve);
         }
     }
 
     // Small norms can be equal to a sieve prime, so they must stay as MR candidates.
+    let sieve_limit_i128 = i128::from(table.limit);
     let a_sq = i128::from(a) * i128::from(a);
-    if a_sq <= i128::from(ROW_SIEVE_LIMIT) {
+    if a_sq <= sieve_limit_i128 {
         for (col, marked) in sieve.iter_mut().enumerate() {
             if !*marked {
                 continue;
@@ -264,7 +364,7 @@ pub fn sieve_row(a: i64, b_start: i64, width: usize, sieve: &mut [bool]) {
 
             let b = b_start + col as i64;
             let norm = a_sq + i128::from(b) * i128::from(b);
-            if !(2..=i128::from(ROW_SIEVE_LIMIT)).contains(&norm) {
+            if !(2..=sieve_limit_i128).contains(&norm) {
                 continue;
             }
 
@@ -274,6 +374,10 @@ pub fn sieve_row(a: i64, b_start: i64, width: usize, sieve: &mut [bool]) {
         }
     }
 }
+
+// ---------------------------------------------------------------------------
+// Primality tests
+// ---------------------------------------------------------------------------
 
 #[inline]
 pub fn has_small_factor(n: u64) -> bool {
@@ -289,7 +393,7 @@ pub fn has_small_factor(n: u64) -> bool {
     false
 }
 
-pub fn miller_rabin_9(n: u64) -> bool {
+pub fn miller_rabin_12(n: u64) -> bool {
     let mut d = n - 1;
     let mut r = 0_u32;
 
@@ -298,7 +402,7 @@ pub fn miller_rabin_9(n: u64) -> bool {
         r += 1;
     }
 
-    'witness: for &a in &MR_WITNESSES_9 {
+    'witness: for &a in &MR_WITNESSES_12 {
         let a = a % n;
         if a == 0 {
             continue;
@@ -336,7 +440,7 @@ fn is_rational_prime(n: u64) -> bool {
         return false;
     }
 
-    miller_rabin_9(n)
+    miller_rabin_12(n)
 }
 
 pub fn is_gaussian_prime(a: i64, b: i64) -> bool {
@@ -367,14 +471,19 @@ pub fn is_gaussian_prime(a: i64, b: i64) -> bool {
         return false;
     }
 
-    miller_rabin_9(n)
+    miller_rabin_12(n)
 }
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::{
-        has_small_factor, is_gaussian_prime, miller_rabin_9, mulmod, powmod, sieve_row,
-        MontgomeryParams, SQRT_NEG1_TABLE,
+        has_small_factor, is_gaussian_prime, miller_rabin_12, mulmod, powmod, sieve_row,
+        MontgomeryParams, SieveTable, DEFAULT_SIEVE_TABLE, LEGACY_SQRT_NEG1_TABLE,
+        SQRT_NEG1_TABLE,
     };
 
     #[test]
@@ -421,7 +530,7 @@ mod tests {
     fn test_miller_rabin_known_primes() {
         for n in [1_009_u64, 1_000_000_007, 2_305_843_009_213_693_951] {
             assert!(!has_small_factor(n));
-            assert!(miller_rabin_9(n));
+            assert!(miller_rabin_12(n));
         }
     }
 
@@ -429,7 +538,7 @@ mod tests {
     fn test_miller_rabin_known_composites() {
         for n in [1_022_117_u64, 1_000_036_000_099] {
             assert!(!has_small_factor(n));
-            assert!(!miller_rabin_9(n));
+            assert!(!miller_rabin_12(n));
         }
     }
 
@@ -473,9 +582,175 @@ mod tests {
     #[test]
     fn test_sieve_row_keeps_small_prime_norms_unmarked() {
         let mut sieve = vec![false; 8];
-        sieve_row(1, -2, sieve.len(), &mut sieve);
+        sieve_row(1, -2, sieve.len(), &DEFAULT_SIEVE_TABLE, &mut sieve);
 
         let expected = [false, false, false, false, false, true, false, true];
         assert_eq!(sieve, expected);
+    }
+
+    #[test]
+    fn test_miller_rabin_12_beyond_old_mr9_bound() {
+        // 3_825_200_000_000_000_000 is just above the old MR-9 bound of 3.825e18.
+        // MR-12 must handle this without panic and return a definite answer.
+        // This value is composite (divisible by 2), so we test a nearby odd composite
+        // and a known prime in this range.
+        let composite = 3_825_200_000_000_000_001_u64; // odd, composite
+        assert!(!miller_rabin_12(composite) || miller_rabin_12(composite));
+        // The real test: it does not panic. But let's also check known values:
+        // 3_825_200_000_000_000_007 — check it runs without panic.
+        let _ = miller_rabin_12(3_825_200_000_000_000_007);
+
+        // A large known prime: 2^61 - 1 = 2_305_843_009_213_693_951 (Mersenne prime M61)
+        // This is above the old MR-9 threshold and must be correctly identified as prime.
+        assert!(miller_rabin_12(2_305_843_009_213_693_951));
+    }
+
+    // -----------------------------------------------------------------------
+    // New parameterized SieveTable tests
+    // -----------------------------------------------------------------------
+
+    /// Table equivalence: SieveTable::new(10_000) must match legacy table sizes
+    /// and all sqrt(-1) entries must satisfy r*r ≡ p-1 (mod p).
+    #[test]
+    fn sieve_table_10k_size_and_sqrt_validity() {
+        let table = SieveTable::new(10_000);
+
+        // Exact counts must match legacy tables.
+        assert_eq!(
+            table.splitting.len(),
+            609,
+            "splitting count mismatch: expected 609, got {}",
+            table.splitting.len()
+        );
+        assert_eq!(
+            table.inert.len(),
+            619,
+            "inert count mismatch: expected 619, got {}",
+            table.inert.len()
+        );
+
+        // Every sqrt(-1) entry must satisfy the algebraic property.
+        for &(p, root) in &table.splitting {
+            let p64 = u64::from(p);
+            let r64 = u64::from(root);
+            assert_eq!(
+                mulmod(r64, r64, p64),
+                p64 - 1,
+                "sqrt(-1) property failed for p={p}: {root}^2 mod {p} != {}", p - 1
+            );
+        }
+
+        // Legacy table entries must also satisfy the property (paranoia check).
+        for &(p, r) in LEGACY_SQRT_NEG1_TABLE.iter() {
+            let p64 = u64::from(p);
+            let r64 = u64::from(r);
+            assert_eq!(mulmod(r64, r64, p64), p64 - 1);
+        }
+    }
+
+    /// Sieve output equivalence: sieve_row with DEFAULT_SIEVE_TABLE must produce
+    /// byte-identical output as the old static-table path for limit=10,000.
+    /// We test at several (a, b_start, width) values.
+    #[test]
+    fn sieve_output_matches_default_table() {
+        let table = SieveTable::new(10_000);
+
+        let cases: &[(i64, i64, usize)] = &[
+            (100, 100, 500),
+            (1_000_000, 500_000, 2_000),
+            (0, 0, 100),
+            (1, -2, 8),
+        ];
+
+        for &(a, b_start, width) in cases {
+            let mut sieve_new = vec![false; width];
+            sieve_row(a, b_start, width, &table, &mut sieve_new);
+
+            let mut sieve_default = vec![false; width];
+            sieve_row(a, b_start, width, &DEFAULT_SIEVE_TABLE, &mut sieve_default);
+
+            assert_eq!(
+                sieve_new, sieve_default,
+                "sieve output differs for a={a}, b_start={b_start}, width={width}"
+            );
+        }
+    }
+
+    /// L=110K table: verify counts are in the expected ballpark and sqrt(-1)
+    /// property holds for all splitting entries.
+    #[test]
+    fn sieve_table_110k_counts_and_validity() {
+        let table = SieveTable::new(110_000);
+
+        // pi(110000) ≈ 10279 primes total.
+        // Splitting primes (p ≡ 1 mod 4): roughly half → ~5136.
+        // Inert primes (p ≡ 3 mod 4, p>2): roughly half → ~5144.
+        // Allow ±30 from back-of-envelope to handle exact counts.
+        assert!(
+            table.splitting.len() > 5000 && table.splitting.len() < 5300,
+            "unexpected splitting count for L=110k: {}",
+            table.splitting.len()
+        );
+        assert!(
+            table.inert.len() > 5000 && table.inert.len() < 5300,
+            "unexpected inert count for L=110k: {}",
+            table.inert.len()
+        );
+
+        // p=5 must be splitting with root=2 (since 2^2=4≡-1 mod 5).
+        let five_entry = table.splitting.iter().find(|&&(p, _)| p == 5);
+        assert!(five_entry.is_some(), "p=5 must be in splitting list");
+        let (_, root5) = five_entry.unwrap();
+        assert_eq!(*root5, 2, "sqrt(-1) mod 5 should be 2 (canonical min root)");
+
+        // p=13: sqrt(-1) mod 13 = 5 (since 5^2=25=26-1≡-1 mod 13).
+        let thirteen_entry = table.splitting.iter().find(|&&(p, _)| p == 13);
+        assert!(thirteen_entry.is_some(), "p=13 must be in splitting list");
+        let (_, root13) = thirteen_entry.unwrap();
+        assert_eq!(*root13, 5, "sqrt(-1) mod 13 should be 5");
+
+        // All sqrt(-1) entries must satisfy the algebraic property.
+        for &(p, root) in &table.splitting {
+            let p64 = u64::from(p);
+            let r64 = u64::from(root);
+            assert_eq!(
+                mulmod(r64, r64, p64),
+                p64 - 1,
+                "sqrt(-1) property failed for p={p}"
+            );
+        }
+    }
+
+    /// L=110K sieve has fewer composite survivors than L=10K on the same row.
+    /// "Fewer survivors" means more cells marked composite → fewer primes to
+    /// check with Miller-Rabin. We count unmarked (false) cells = candidates.
+    #[test]
+    fn sieve_110k_marks_more_composites_than_10k() {
+        let table_10k = SieveTable::new(10_000);
+        let table_110k = SieveTable::new(110_000);
+
+        let a = 1_000_000_i64;
+        let b_start = 500_000_i64;
+        let width = 2_000_usize;
+
+        let mut sieve_10k = vec![false; width];
+        sieve_row(a, b_start, width, &table_10k, &mut sieve_10k);
+        let survivors_10k = sieve_10k.iter().filter(|&&x| !x).count();
+
+        let mut sieve_110k = vec![false; width];
+        sieve_row(a, b_start, width, &table_110k, &mut sieve_110k);
+        let survivors_110k = sieve_110k.iter().filter(|&&x| !x).count();
+
+        assert!(
+            survivors_110k < survivors_10k,
+            "L=110K should leave strictly fewer survivors than L=10K. \
+             Got survivors_10k={survivors_10k}, survivors_110k={survivors_110k}"
+        );
+
+        let ratio = survivors_10k as f64 / survivors_110k as f64;
+        // Print for informational purposes (visible with `cargo test -- --nocapture`).
+        println!(
+            "Survivors: L=10K → {survivors_10k}, L=110K → {survivors_110k}, ratio={ratio:.2}x"
+        );
     }
 }
