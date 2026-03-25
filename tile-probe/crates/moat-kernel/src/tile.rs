@@ -163,7 +163,7 @@ pub fn build_tile_with_sieve(
     build_tile_from_primes(a_min, a_max, b_min, b_max, k_sq, primes, export_detail)
 }
 
-pub(crate) fn build_tile_from_primes(
+pub fn build_tile_from_primes(
     a_min: i64,
     a_max: i64,
     b_min: i64,
