@@ -45,16 +45,22 @@ pub fn run_campaign(config: &FatStripeConfig, r_min: f64, r_max: f64) -> Campaig
         // but a varies across the stripe.  Use a_lo (the smallest a in this
         // stripe) to get the most generous b_max, then clamp to a_hi for the
         // first-octant constraint b <= a.
-        let b_from_radius = {
-            let a_lo_f = a_lo as f64;
-            let diff = r_max_sq - a_lo_f * a_lo_f;
-            if diff > 0.0 { diff.sqrt().ceil() as i64 } else { 0 }
+        let b_max_stripe = if config.b_min > 0 {
+            // Off-axis probe: user specified b-range explicitly, skip annular clipping
+            config.b_max
+        } else {
+            // Axis-aligned: clip to annular geometry + first-octant constraint
+            let b_from_radius = {
+                let a_lo_f = a_lo as f64;
+                let diff = r_max_sq - a_lo_f * a_lo_f;
+                if diff > 0.0 { diff.sqrt().ceil() as i64 } else { 0 }
+            };
+            b_from_radius.min(a_hi).min(config.b_max)
         };
-        let b_max_stripe = b_from_radius.min(a_hi).min(config.b_max);
 
         let mut stripe_op: Option<TileOperator> = None;
 
-        let mut b_lo = 0_i64;
+        let mut b_lo = config.b_min.max(0);
         while b_lo < b_max_stripe {
             let b_chunk_hi = (b_lo + chunk_tiles * tile_width).min(b_max_stripe);
 

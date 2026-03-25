@@ -14,6 +14,8 @@ pub struct FatStripeConfig {
     pub sieve_limit: u32,
     /// Collar = ceil(sqrt(k_sq)), computed at construction
     pub collar: u32,
+    /// Minimum b coordinate (angular offset, default 0)
+    pub b_min: i64,
     /// Maximum b coordinate (first octant: b <= a)
     pub b_max: i64,
     /// Number of Rayon threads (0 = all)
@@ -30,6 +32,7 @@ impl FatStripeConfig {
             chunk_size,
             sieve_limit,
             collar,
+            b_min: 0,
             b_max,
             threads: 0,
         }

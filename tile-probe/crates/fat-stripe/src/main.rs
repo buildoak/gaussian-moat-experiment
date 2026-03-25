@@ -41,6 +41,14 @@ struct Args {
     #[arg(long)]
     json_trace: Option<String>,
 
+    /// Minimum b coordinate (angular offset). Defaults to 0.
+    #[arg(long, default_value = "0")]
+    b_min: i64,
+
+    /// Maximum b coordinate (angular width limit). Defaults to r_max (full octant).
+    #[arg(long)]
+    b_max: Option<i64>,
+
     /// Print verbose progress to stderr
     #[arg(long)]
     verbose: bool,
@@ -49,8 +57,9 @@ struct Args {
 fn main() {
     let args = Args::parse();
 
-    // Derive b_max from the outer radius (first octant: b <= a, so b <= r_max)
-    let b_max = args.r_max.ceil() as i64;
+    // b_max: user override or full octant (b <= r_max)
+    let b_min = args.b_min;
+    let b_max = args.b_max.unwrap_or(b_min + 128_000); // default: 128K angular width from b_min
 
     let mut config = FatStripeConfig::new(
         args.k_squared,
@@ -59,6 +68,7 @@ fn main() {
         args.sieve_limit,
         b_max,
     );
+    config.b_min = b_min;
     config.threads = args.threads;
 
     // Configure Rayon thread pool
