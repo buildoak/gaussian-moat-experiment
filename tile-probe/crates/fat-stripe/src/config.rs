@@ -20,6 +20,8 @@ pub struct FatStripeConfig {
     pub b_max: i64,
     /// Number of Rayon threads (0 = all)
     pub threads: usize,
+    /// When true, compute and print degree statistics after the campaign
+    pub degree_stats: bool,
 }
 
 impl FatStripeConfig {
@@ -35,6 +37,7 @@ impl FatStripeConfig {
             b_min: 0,
             b_max,
             threads: 0,
+            degree_stats: false,
         }
     }
 

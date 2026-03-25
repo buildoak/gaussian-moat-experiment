@@ -2,6 +2,7 @@ use clap::Parser;
 
 use fat_stripe::config::FatStripeConfig;
 use fat_stripe::orchestrator;
+use moat_kernel::tile::compute_degree_stats;
 
 #[derive(Parser)]
 #[command(
@@ -52,6 +53,10 @@ struct Args {
     /// Print verbose progress to stderr
     #[arg(long)]
     verbose: bool,
+
+    /// Compute and print degree statistics for the Gaussian prime graph
+    #[arg(long)]
+    degree_stats: bool,
 }
 
 fn main() {
@@ -70,6 +75,7 @@ fn main() {
     );
     config.b_min = b_min;
     config.threads = args.threads;
+    config.degree_stats = args.degree_stats;
 
     // Configure Rayon thread pool
     if args.threads > 0 {
@@ -108,5 +114,55 @@ fn main() {
 
     if let Some(ref path) = args.json_trace {
         eprintln!("(JSON trace output to {path} not yet implemented — Wave 2)");
+    }
+
+    // Degree statistics: compute on the full sieved region if requested
+    if args.degree_stats {
+        let a_start = args.r_min.floor() as i64;
+        let a_end = args.r_max.ceil() as i64;
+        let collar = (config.k_sq as f64).sqrt().ceil() as i64;
+
+        // Sieve expanded region (collar-padded for correct edge detection at boundaries)
+        let sieve_a_lo = a_start - collar;
+        let sieve_a_hi = a_end + collar;
+        let sieve_b_lo = b_min - collar;
+        let sieve_b_hi = b_max + collar;
+
+        eprintln!(
+            "degree-stats: sieving expanded region a=[{}, {}] b=[{}, {}]...",
+            sieve_a_lo, sieve_a_hi, sieve_b_lo, sieve_b_hi
+        );
+
+        let primes = fat_stripe::sieve_ext::sieve_chunk_rows(
+            sieve_a_lo,
+            sieve_a_hi,
+            sieve_b_lo,
+            sieve_b_hi,
+            config.sieve_limit,
+        );
+
+        let stats = compute_degree_stats(
+            a_start,
+            a_end - 1,
+            b_min,
+            b_max - 1,
+            config.k_sq,
+            &primes,
+        );
+
+        // Compact histogram: show only up to last non-zero entry
+        let last_nonzero = stats.degree_histogram.iter().rposition(|&x| x > 0).unwrap_or(0);
+        let hist_compact: Vec<usize> = stats.degree_histogram[..=last_nonzero].to_vec();
+
+        println!(
+            "DEGREE_STATS: primes={} edges={} mean_total={:.2} mean_bwd={:.2} isolated={:.1}% bwd_offsets={} hist={:?}",
+            stats.total_primes,
+            stats.total_edges,
+            stats.mean_degree,
+            stats.mean_bwd_degree,
+            stats.isolated_fraction * 100.0,
+            stats.num_backward_offsets,
+            hist_compact,
+        );
     }
 }
