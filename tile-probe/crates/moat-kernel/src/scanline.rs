@@ -1,7 +1,7 @@
 use fxhash::FxHashMap;
 
 use crate::kernel::{TileKernel, TileResult};
-use crate::primality::{is_gaussian_prime, sieve_row};
+use crate::primality::{is_gaussian_prime, sieve_row, SieveTable, DEFAULT_SIEVE_TABLE};
 use crate::tile::{
     build_tile_from_primes, FacePort, FaceSet, TileOperator, FACE_INNER_BIT, FACE_LEFT_BIT,
     FACE_OUTER_BIT, FACE_RIGHT_BIT,
@@ -81,14 +81,14 @@ fn component_id_for_root(
 /// Run the scanline sieve+MR to produce a compacted list of all Gaussian primes
 /// in the expanded region [ea_lo..ea_hi] × [eb_lo..eb_hi].
 ///
-/// This is the first half of the sparse UF path. The result is fed directly
-/// into `build_tile_from_primes()` which handles UF + face-port extraction.
+/// `table` is shared across all rows — build it once per tile call.
 fn sieve_to_prime_list(
     ea_lo: i64,
     ea_hi: i64,
     eb_lo: i64,
     eb_hi: i64,
     use_row_sieve: bool,
+    table: &SieveTable,
 ) -> Vec<(i64, i64)> {
     let h = usize::try_from(ea_hi - ea_lo + 1).expect("expanded height must fit usize");
     let w = usize::try_from(eb_hi - eb_lo + 1).expect("expanded width must fit usize");
@@ -100,7 +100,7 @@ fn sieve_to_prime_list(
         let a = ea_lo + row as i64;
         if use_row_sieve {
             row_sieve_marks.fill(false);
-            sieve_row(a, eb_lo, w, &mut row_sieve_marks);
+            sieve_row(a, eb_lo, w, table, &mut row_sieve_marks);
 
             for (col, &marked_composite) in row_sieve_marks.iter().enumerate() {
                 let b = eb_lo + col as i64;
@@ -135,6 +135,7 @@ fn run_scanline_rect_dense(
     b_hi: i64,
     k_sq: u64,
     use_row_sieve: bool,
+    table: &SieveTable,
 ) -> TileResult {
     let collar = (k_sq as f64).sqrt().ceil() as i64;
     let ea_lo = a_lo - collar;
@@ -159,7 +160,7 @@ fn run_scanline_rect_dense(
         let a = ea_lo + row as i64;
         if use_row_sieve {
             row_sieve_marks.fill(false);
-            sieve_row(a, eb_lo, w, &mut row_sieve_marks);
+            sieve_row(a, eb_lo, w, table, &mut row_sieve_marks);
 
             for (col, &marked_composite) in row_sieve_marks.iter().enumerate() {
                 let b = eb_lo + col as i64;
@@ -286,6 +287,7 @@ fn run_scanline_rect_sparse(
     k_sq: u64,
     export_detail: bool,
     use_row_sieve: bool,
+    table: &SieveTable,
 ) -> TileResult {
     let collar = (k_sq as f64).sqrt().ceil() as i64;
     let ea_lo = a_lo - collar;
@@ -294,11 +296,9 @@ fn run_scanline_rect_sparse(
     let eb_hi = b_hi + collar;
 
     // Step 1: Sieve → compacted prime list (includes collar region).
-    let primes = sieve_to_prime_list(ea_lo, ea_hi, eb_lo, eb_hi, use_row_sieve);
+    let primes = sieve_to_prime_list(ea_lo, ea_hi, eb_lo, eb_hi, use_row_sieve, table);
 
     // Step 2: Reuse build_tile_from_primes for UF + face-port extraction.
-    // This function already runs SimpleUF over the compacted list and handles
-    // all face-membership logic, component counting, and optional detail export.
     let tile = build_tile_from_primes(a_lo, a_hi, b_lo, b_hi, k_sq, primes, export_detail);
 
     TileResult::from_tile_operator(&tile)
@@ -318,10 +318,13 @@ fn run_scanline_rect(
     use_row_sieve: bool,
     use_sparse_uf: bool,
 ) -> TileResult {
+    // Build the SieveTable once per tile call; share across all rows.
+    let table = &*DEFAULT_SIEVE_TABLE;
+
     if use_sparse_uf {
-        run_scanline_rect_sparse(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, use_row_sieve)
+        run_scanline_rect_sparse(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, use_row_sieve, table)
     } else {
-        run_scanline_rect_dense(a_lo, a_hi, b_lo, b_hi, k_sq, use_row_sieve)
+        run_scanline_rect_dense(a_lo, a_hi, b_lo, b_hi, k_sq, use_row_sieve, table)
     }
 }
 
@@ -376,7 +379,7 @@ mod tests {
         precompute_backward_offsets, run_scanline_rect, run_scanline_tile, ScanlineKernel,
     };
     use crate::kernel::{CpuKernel, TileKernel};
-    use crate::primality::sieve_row;
+    use crate::primality::{sieve_row, DEFAULT_SIEVE_TABLE};
     use crate::primes::PrimeSieve;
 
     fn sieve_for_tile(a_hi: i64, b_hi: i64, k_sq: u64) -> crate::primes::PrimeSieve {
@@ -415,7 +418,7 @@ mod tests {
     fn sieve_row_unit_test() {
         let width = 100;
         let mut marks = vec![false; width];
-        sieve_row(5, 0, width, &mut marks);
+        sieve_row(5, 0, width, &DEFAULT_SIEVE_TABLE, &mut marks);
 
         for (idx, &marked) in marks.iter().enumerate() {
             let b = idx as i64;
@@ -530,8 +533,6 @@ mod tests {
     // ---------------------------------------------------------------------------
 
     /// Helper: compare two TileResults for structural equality.
-    /// Component IDs may differ between paths, so we compare sorted component_sizes
-    /// and face-count histograms rather than raw IDs.
     fn assert_results_structurally_equal(
         sparse: &crate::kernel::TileResult,
         dense: &crate::kernel::TileResult,
@@ -562,7 +563,6 @@ mod tests {
             "{label}: face_count_histogram mismatch"
         );
 
-        // Cross-face component counts must match exactly.
         assert_eq!(
             sparse.io_count, dense.io_count,
             "{label}: io_count mismatch"
@@ -588,7 +588,6 @@ mod tests {
             "{label}: lr_count mismatch"
         );
 
-        // Per-face port counts (number of ports per face, not IDs).
         assert_eq!(
             sparse.i_face_components.len(),
             dense.i_face_components.len(),
@@ -611,8 +610,6 @@ mod tests {
         );
     }
 
-    /// Equivalence test at small scale: k²=2, side=50.
-    /// Verifies that the sparse and dense paths produce structurally identical results.
     #[test]
     fn sparse_dense_equivalence_k2_small() {
         let a_lo = 10_i64;
@@ -627,8 +624,6 @@ mod tests {
         assert_results_structurally_equal(&sparse, &dense, "k2_small(10,10,side=50)");
     }
 
-    /// Equivalence test at larger scale: k²=40, side=200.
-    /// More primes, more components, exercises both paths with non-trivial connectivity.
     #[test]
     fn sparse_dense_equivalence_k40_medium() {
         let a_lo = 1000_i64;
@@ -643,9 +638,6 @@ mod tests {
         assert_results_structurally_equal(&sparse, &dense, "k40_medium(1000,1000,side=200)");
     }
 
-    /// Timing benchmark: k²=40, side=2000.
-    /// Prints wall-clock times to stderr so we can observe the sparse speedup.
-    /// Run with: cargo test -p moat-kernel sparse_dense_timing -- --nocapture --ignored
     #[test]
     #[ignore]
     fn sparse_dense_timing_k40_large() {
@@ -680,7 +672,6 @@ mod tests {
         let speedup = dense_elapsed.as_secs_f64() / sparse_elapsed.as_secs_f64();
         eprintln!("[timing] speedup: {speedup:.1}x");
 
-        // Structural equivalence check even in the benchmark.
         assert_results_structurally_equal(&sparse, &dense, "k40_large_timing");
     }
 }
