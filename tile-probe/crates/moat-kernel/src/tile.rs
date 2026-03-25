@@ -2,6 +2,135 @@ use fxhash::FxHashMap;
 use serde::Serialize;
 
 use crate::primes::{gaussian_primes_in_rect, gaussian_primes_in_rect_with_sieve, PrimeSieve};
+use crate::scanline::precompute_backward_offsets;
+
+/// Degree statistics for the Gaussian prime graph in a tile region.
+/// Counts how many neighbors each prime has within step bound k².
+#[derive(Debug, Clone)]
+pub struct DegreeStats {
+    pub total_primes: usize,
+    /// Total edges (each edge counted once)
+    pub total_edges: usize,
+    /// Mean total degree: total_edges * 2 / total_primes
+    pub mean_degree: f64,
+    /// Mean backward degree: total_edges / total_primes
+    /// (backward = each edge counted once via the backward-offset convention)
+    pub mean_bwd_degree: f64,
+    /// degree_histogram[d] = count of primes with total degree d
+    pub degree_histogram: Vec<usize>,
+    /// Fraction of primes with degree 0 (isolated nodes)
+    pub isolated_fraction: f64,
+    /// Number of backward offsets used for this k²
+    pub num_backward_offsets: usize,
+}
+
+/// Compute degree statistics for Gaussian primes in the given rectangle.
+/// Uses the same spatial cell grid approach as build_tile_from_primes for
+/// neighbor lookup. Only counts primes strictly inside [a_min, a_max] x [b_min, b_max]
+/// but uses the expanded (collar-padded) prime set for correct edge detection.
+pub fn compute_degree_stats(
+    a_min: i64,
+    a_max: i64,
+    b_min: i64,
+    b_max: i64,
+    k_sq: u64,
+    primes: &[(i64, i64)],
+) -> DegreeStats {
+    let collar = (k_sq as f64).sqrt().ceil() as i64;
+    let num_bwd_offsets = precompute_backward_offsets(k_sq).len();
+
+    if primes.is_empty() {
+        return DegreeStats {
+            total_primes: 0,
+            total_edges: 0,
+            mean_degree: 0.0,
+            mean_bwd_degree: 0.0,
+            degree_histogram: vec![0],
+            isolated_fraction: 1.0,
+            num_backward_offsets: num_bwd_offsets,
+        };
+    }
+
+    let cell_size = collar.max(1);
+    let mut cells: FxHashMap<(i64, i64), Vec<usize>> = FxHashMap::default();
+    for (idx, &(a, b)) in primes.iter().enumerate() {
+        cells
+            .entry(cell_key(a, b, cell_size))
+            .or_default()
+            .push(idx);
+    }
+
+    // Count degree for each in-bounds prime
+    let mut degrees: Vec<usize> = Vec::new();
+    let mut in_bounds_indices: Vec<usize> = Vec::new();
+
+    for (idx, &(a, b)) in primes.iter().enumerate() {
+        if a < a_min || a > a_max || b < b_min || b > b_max {
+            continue;
+        }
+        in_bounds_indices.push(idx);
+
+        let mut degree = 0usize;
+        let (cx, cy) = cell_key(a, b, cell_size);
+        for dcx in -2..=2 {
+            for dcy in -2..=2 {
+                if let Some(neighbors) = cells.get(&(cx + dcx, cy + dcy)) {
+                    for &other in neighbors {
+                        if other == idx {
+                            continue;
+                        }
+                        let (oa, ob) = primes[other];
+                        let da = oa - a;
+                        let db = ob - b;
+                        let dist_sq = (da as i128 * da as i128 + db as i128 * db as i128) as u64;
+                        if dist_sq <= k_sq {
+                            degree += 1;
+                        }
+                    }
+                }
+            }
+        }
+        degrees.push(degree);
+    }
+
+    let total_primes = degrees.len();
+    if total_primes == 0 {
+        return DegreeStats {
+            total_primes: 0,
+            total_edges: 0,
+            mean_degree: 0.0,
+            mean_bwd_degree: 0.0,
+            degree_histogram: vec![0],
+            isolated_fraction: 1.0,
+            num_backward_offsets: num_bwd_offsets,
+        };
+    }
+
+    let total_degree: usize = degrees.iter().sum();
+    // Each edge is counted twice in total_degree (once from each endpoint)
+    let total_edges = total_degree / 2;
+    let mean_degree = total_degree as f64 / total_primes as f64;
+    let mean_bwd_degree = total_edges as f64 / total_primes as f64;
+
+    let max_degree = *degrees.iter().max().unwrap_or(&0);
+    let mut degree_histogram = vec![0usize; max_degree + 1];
+    for &d in &degrees {
+        degree_histogram[d] += 1;
+    }
+
+    let isolated_count = degree_histogram.get(0).copied().unwrap_or(0);
+    let isolated_fraction = isolated_count as f64 / total_primes as f64;
+
+    DegreeStats {
+        total_primes,
+        total_edges,
+        mean_degree,
+        mean_bwd_degree,
+        degree_histogram,
+        isolated_fraction,
+        num_backward_offsets: num_bwd_offsets,
+    }
+}
 
 pub const FACE_INNER_BIT: FaceSet = 1 << 0;
 pub const FACE_OUTER_BIT: FaceSet = 1 << 1;
