@@ -3,8 +3,8 @@ use fxhash::FxHashMap;
 use crate::kernel::{TileKernel, TileResult};
 use crate::primality::{is_gaussian_prime, sieve_row, SieveTable, DEFAULT_SIEVE_TABLE};
 use crate::tile::{
-    build_tile_from_primes, FacePort, FaceSet, TileOperator, FACE_INNER_BIT, FACE_LEFT_BIT,
-    FACE_OUTER_BIT, FACE_RIGHT_BIT,
+    build_tile_from_primes, FacePort, FaceSet, SimpleUF, TileOperator, FACE_INNER_BIT,
+    FACE_LEFT_BIT, FACE_OUTER_BIT, FACE_RIGHT_BIT,
 };
 
 pub fn precompute_backward_offsets(k_sq: u64) -> Vec<(i32, i32)> {
@@ -305,8 +305,226 @@ fn run_scanline_rect_sparse(
 }
 
 // ---------------------------------------------------------------------------
+// Bitmap + rank path: O(1) neighbor lookup, O(1) prime-to-index mapping
+// ---------------------------------------------------------------------------
+
+/// Pack a row-major bool bitmap into u64 words (1 bit per point).
+#[inline]
+fn pack_bitmap(bool_bitmap: &[bool]) -> Vec<u64> {
+    let total = bool_bitmap.len();
+    let num_words = (total + 63) / 64;
+    let mut packed = vec![0u64; num_words];
+    for i in 0..total {
+        if bool_bitmap[i] {
+            packed[i / 64] |= 1u64 << (i % 64);
+        }
+    }
+    packed
+}
+
+/// Build cumulative popcount table. rank_table[i] = total set bits in bitmap[0..=i].
+#[inline]
+fn build_rank_table(bitmap: &[u64]) -> Vec<u32> {
+    let mut rank = Vec::with_capacity(bitmap.len());
+    let mut cumulative = 0u32;
+    for &word in bitmap {
+        cumulative += word.count_ones();
+        rank.push(cumulative);
+    }
+    rank
+}
+
+/// Test whether the point at (row, col) is set in the packed bitmap.
+#[inline(always)]
+fn bitmap_test(bitmap: &[u64], w: usize, row: usize, col: usize) -> bool {
+    let bit_idx = row * w + col;
+    let word = bitmap[bit_idx / 64];
+    (word >> (bit_idx % 64)) & 1 == 1
+}
+
+/// Get the rank (0-based index among set bits) for a known-set bit at (row, col).
+/// Caller must ensure the bit is actually set.
+#[inline(always)]
+fn rank_query(bitmap: &[u64], rank_table: &[u32], w: usize, row: usize, col: usize) -> u32 {
+    let bit_idx = row * w + col;
+    let word_idx = bit_idx / 64;
+    let bit_pos = bit_idx % 64;
+    // Cumulative count up to (but not including) this word
+    let base = if word_idx > 0 {
+        rank_table[word_idx - 1]
+    } else {
+        0
+    };
+    // Count bits in current word strictly below bit_pos
+    let mask = if bit_pos > 0 {
+        (1u64 << bit_pos) - 1
+    } else {
+        0
+    };
+    base + (bitmap[word_idx] & mask).count_ones()
+}
+
+fn run_scanline_rect_bitmap_rank(
+    a_lo: i64,
+    a_hi: i64,
+    b_lo: i64,
+    b_hi: i64,
+    k_sq: u64,
+    use_row_sieve: bool,
+    table: &SieveTable,
+) -> TileResult {
+    let collar = (k_sq as f64).sqrt().ceil() as i64;
+    let ea_lo = a_lo - collar;
+    let ea_hi = a_hi + collar;
+    let eb_lo = b_lo - collar;
+    let eb_hi = b_hi + collar;
+
+    let h = usize::try_from(ea_hi - ea_lo + 1).expect("expanded height must fit usize");
+    let w = usize::try_from(eb_hi - eb_lo + 1).expect("expanded width must fit usize");
+
+    // Phase 1: Sieve to bool bitmap (same as dense path), then pack + rank.
+    let mut bool_bitmap = vec![false; h * w];
+    let mut row_sieve_marks = vec![false; w];
+
+    for row in 0..h {
+        let a = ea_lo + row as i64;
+        if use_row_sieve {
+            row_sieve_marks.fill(false);
+            sieve_row(a, eb_lo, w, table, &mut row_sieve_marks);
+            for (col, &marked_composite) in row_sieve_marks.iter().enumerate() {
+                let b = eb_lo + col as i64;
+                if marked_composite && a != 0 && b != 0 {
+                    continue;
+                }
+                if is_gaussian_prime(a, b) {
+                    bool_bitmap[row * w + col] = true;
+                }
+            }
+        } else {
+            for col in 0..w {
+                let b = eb_lo + col as i64;
+                if is_gaussian_prime(a, b) {
+                    bool_bitmap[row * w + col] = true;
+                }
+            }
+        }
+    }
+
+    let bitmap = pack_bitmap(&bool_bitmap);
+    let rank_table = build_rank_table(&bitmap);
+
+    // Phase 2: Build prime_list in row-major order (matching rank ordering).
+    let mut prime_list: Vec<(i64, i64)> = Vec::new();
+    for row in 0..h {
+        for col in 0..w {
+            if bool_bitmap[row * w + col] {
+                let a = ea_lo + row as i64;
+                let b = eb_lo + col as i64;
+                prime_list.push((a, b));
+            }
+        }
+    }
+    let num_primes = prime_list.len();
+
+    // Phase 3: Union-Find with bitmap_test + rank_query for neighbor resolution.
+    let offsets = precompute_backward_offsets(k_sq);
+    let mut uf = SimpleUF::new(num_primes);
+
+    for (prime_idx, &(a, b)) in prime_list.iter().enumerate() {
+        for &(da, db) in &offsets {
+            let na = a + i64::from(da);
+            let nb = b + i64::from(db);
+            // Bounds check against expanded region
+            if na < ea_lo || na > ea_hi || nb < eb_lo || nb > eb_hi {
+                continue;
+            }
+            let row = (na - ea_lo) as usize;
+            let col = (nb - eb_lo) as usize;
+            // Neighbor exists?
+            if !bitmap_test(&bitmap, w, row, col) {
+                continue;
+            }
+            // Neighbor's index via rank query
+            let neighbor_idx = rank_query(&bitmap, &rank_table, w, row, col) as usize;
+            uf.union(prime_idx, neighbor_idx);
+        }
+    }
+
+    // Phase 4: Extract face ports, component_faces, component_sizes.
+    // Only count primes within the non-expanded tile region [a_lo..a_hi] x [b_lo..b_hi].
+    let mut face_inner = Vec::new();
+    let mut face_outer = Vec::new();
+    let mut face_left = Vec::new();
+    let mut face_right = Vec::new();
+    let mut component_faces: Vec<FaceSet> = Vec::new();
+    let mut component_sizes: Vec<u32> = Vec::new();
+    let mut root_map: FxHashMap<usize, usize> = FxHashMap::default();
+
+    for (idx, &(a, b)) in prime_list.iter().enumerate() {
+        // Skip primes outside the non-expanded tile
+        if a < a_lo || a > a_hi || b < b_lo || b > b_hi {
+            continue;
+        }
+
+        let root = uf.find(idx);
+        let component = component_id_for_root(root, &mut root_map, &mut component_faces);
+        if component_sizes.len() < component_faces.len() {
+            component_sizes.resize(component_faces.len(), 0);
+        }
+        component_sizes[component] += 1;
+
+        if a - a_lo <= collar {
+            face_inner.push(FacePort { a, b, component });
+            component_faces[component] |= FACE_INNER_BIT;
+        }
+        if a_hi - a <= collar {
+            face_outer.push(FacePort { a, b, component });
+            component_faces[component] |= FACE_OUTER_BIT;
+        }
+        if b - b_lo <= collar {
+            face_left.push(FacePort { a, b, component });
+            component_faces[component] |= FACE_LEFT_BIT;
+        }
+        if b_hi - b <= collar {
+            face_right.push(FacePort { a, b, component });
+            component_faces[component] |= FACE_RIGHT_BIT;
+        }
+    }
+
+    let tile = TileOperator {
+        a_min: a_lo,
+        a_max: a_hi,
+        b_min: b_lo,
+        b_max: b_hi,
+        face_inner,
+        face_outer,
+        face_left,
+        face_right,
+        num_components: component_faces.len(),
+        component_faces,
+        component_sizes,
+        origin_component: None,
+        num_primes,
+        detail: None,
+    };
+
+    TileResult::from_tile_operator(&tile)
+}
+
+// ---------------------------------------------------------------------------
 // Public entry points
 // ---------------------------------------------------------------------------
+
+/// Which union-find strategy to use for the scanline kernel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UfStrategy {
+    /// Dense UF over the full h*w expanded grid (original path, kept for benchmarking).
+    Dense,
+    /// Sparse UF via HashMap cell grid (build_tile_from_primes). Slow due to hash probes.
+    SparseHashMap,
+    /// Bitmap + popcount rank table: O(1) neighbor test, O(1) prime-to-index. Default.
+    BitmapRank,
+}
 
 fn run_scanline_rect(
     a_lo: i64,
@@ -316,15 +534,23 @@ fn run_scanline_rect(
     k_sq: u64,
     export_detail: bool,
     use_row_sieve: bool,
-    use_sparse_uf: bool,
+    uf_strategy: UfStrategy,
 ) -> TileResult {
     // Build the SieveTable once per tile call; share across all rows.
     let table = &*DEFAULT_SIEVE_TABLE;
 
-    if use_sparse_uf {
-        run_scanline_rect_sparse(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, use_row_sieve, table)
-    } else {
-        run_scanline_rect_dense(a_lo, a_hi, b_lo, b_hi, k_sq, use_row_sieve, table)
+    match uf_strategy {
+        UfStrategy::Dense => {
+            run_scanline_rect_dense(a_lo, a_hi, b_lo, b_hi, k_sq, use_row_sieve, table)
+        }
+        UfStrategy::SparseHashMap => {
+            run_scanline_rect_sparse(
+                a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, use_row_sieve, table,
+            )
+        }
+        UfStrategy::BitmapRank => {
+            run_scanline_rect_bitmap_rank(a_lo, a_hi, b_lo, b_hi, k_sq, use_row_sieve, table)
+        }
     }
 }
 
@@ -337,7 +563,16 @@ pub fn run_scanline_tile(
 ) -> TileResult {
     let a_hi = a_lo + i64::from(side);
     let b_hi = b_lo + i64::from(side);
-    run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, true, true)
+    run_scanline_rect(
+        a_lo,
+        a_hi,
+        b_lo,
+        b_hi,
+        k_sq,
+        export_detail,
+        true,
+        UfStrategy::BitmapRank,
+    )
 }
 
 pub struct ScanlineKernel {
@@ -346,6 +581,8 @@ pub struct ScanlineKernel {
     /// If true (default), use sparse UF over compacted primes via build_tile_from_primes.
     /// If false, use the original dense UF over the full h*w grid (kept for benchmarking).
     pub use_sparse_uf: bool,
+    /// Union-find strategy. Overrides use_sparse_uf when set explicitly.
+    pub uf_strategy: Option<UfStrategy>,
 }
 
 impl ScanlineKernel {
@@ -354,6 +591,18 @@ impl ScanlineKernel {
             export_detail,
             use_row_sieve: true,
             use_sparse_uf: true,
+            uf_strategy: None,
+        }
+    }
+
+    fn resolved_strategy(&self) -> UfStrategy {
+        if let Some(s) = self.uf_strategy {
+            return s;
+        }
+        if self.use_sparse_uf {
+            UfStrategy::BitmapRank
+        } else {
+            UfStrategy::Dense
         }
     }
 }
@@ -368,7 +617,7 @@ impl TileKernel for ScanlineKernel {
             k_sq,
             self.export_detail,
             self.use_row_sieve,
-            self.use_sparse_uf,
+            self.resolved_strategy(),
         )
     }
 }
@@ -377,6 +626,7 @@ impl TileKernel for ScanlineKernel {
 mod tests {
     use super::{
         precompute_backward_offsets, run_scanline_rect, run_scanline_tile, ScanlineKernel,
+        UfStrategy,
     };
     use crate::kernel::{CpuKernel, TileKernel};
     use crate::primality::{sieve_row, DEFAULT_SIEVE_TABLE};
@@ -476,6 +726,7 @@ mod tests {
             export_detail: false,
             use_row_sieve: true,
             use_sparse_uf: true,
+            uf_strategy: None,
         };
 
         let via_wrapper = run_scanline_tile(0, 0, 10, 2, false);
@@ -496,11 +747,13 @@ mod tests {
             export_detail: false,
             use_row_sieve: true,
             use_sparse_uf: true,
+            uf_strategy: None,
         };
         let pointwise_kernel = ScanlineKernel {
             export_detail: false,
             use_row_sieve: false,
             use_sparse_uf: true,
+            uf_strategy: None,
         };
 
         let sieve_result = sieve_kernel.run_tile(0, 12, 0, 12, 2);
@@ -515,11 +768,13 @@ mod tests {
             export_detail: false,
             use_row_sieve: true,
             use_sparse_uf: true,
+            uf_strategy: None,
         };
         let pointwise_kernel = ScanlineKernel {
             export_detail: false,
             use_row_sieve: false,
             use_sparse_uf: true,
+            uf_strategy: None,
         };
 
         let sieve_result = sieve_kernel.run_tile(0, 24, 0, 24, 26);
@@ -529,113 +784,173 @@ mod tests {
     }
 
     // ---------------------------------------------------------------------------
-    // Sparse vs dense equivalence tests
+    // Three-way equivalence tests: bitmap_rank vs dense vs sparse_hashmap
     // ---------------------------------------------------------------------------
 
     /// Helper: compare two TileResults for structural equality.
     fn assert_results_structurally_equal(
-        sparse: &crate::kernel::TileResult,
-        dense: &crate::kernel::TileResult,
+        a: &crate::kernel::TileResult,
+        b: &crate::kernel::TileResult,
         label: &str,
     ) {
         assert_eq!(
-            sparse.num_primes, dense.num_primes,
-            "{label}: num_primes mismatch: sparse={} dense={}",
-            sparse.num_primes, dense.num_primes
+            a.num_primes, b.num_primes,
+            "{label}: num_primes mismatch: a={} b={}",
+            a.num_primes, b.num_primes
         );
         assert_eq!(
-            sparse.num_components, dense.num_components,
-            "{label}: num_components mismatch: sparse={} dense={}",
-            sparse.num_components, dense.num_components
+            a.num_components, b.num_components,
+            "{label}: num_components mismatch: a={} b={}",
+            a.num_components, b.num_components
         );
 
-        let mut sparse_sizes = sparse.component_sizes.clone();
-        sparse_sizes.sort_unstable();
-        let mut dense_sizes = dense.component_sizes.clone();
-        dense_sizes.sort_unstable();
+        let mut a_sizes = a.component_sizes.clone();
+        a_sizes.sort_unstable();
+        let mut b_sizes = b.component_sizes.clone();
+        b_sizes.sort_unstable();
         assert_eq!(
-            sparse_sizes, dense_sizes,
+            a_sizes, b_sizes,
             "{label}: sorted component_sizes mismatch"
         );
 
         assert_eq!(
-            sparse.face_count_histogram, dense.face_count_histogram,
+            a.face_count_histogram, b.face_count_histogram,
             "{label}: face_count_histogram mismatch"
         );
 
-        assert_eq!(
-            sparse.io_count, dense.io_count,
-            "{label}: io_count mismatch"
-        );
-        assert_eq!(
-            sparse.il_count, dense.il_count,
-            "{label}: il_count mismatch"
-        );
-        assert_eq!(
-            sparse.ir_count, dense.ir_count,
-            "{label}: ir_count mismatch"
-        );
-        assert_eq!(
-            sparse.ol_count, dense.ol_count,
-            "{label}: ol_count mismatch"
-        );
-        assert_eq!(
-            sparse.or_count, dense.or_count,
-            "{label}: or_count mismatch"
-        );
-        assert_eq!(
-            sparse.lr_count, dense.lr_count,
-            "{label}: lr_count mismatch"
-        );
+        assert_eq!(a.io_count, b.io_count, "{label}: io_count mismatch");
+        assert_eq!(a.il_count, b.il_count, "{label}: il_count mismatch");
+        assert_eq!(a.ir_count, b.ir_count, "{label}: ir_count mismatch");
+        assert_eq!(a.ol_count, b.ol_count, "{label}: ol_count mismatch");
+        assert_eq!(a.or_count, b.or_count, "{label}: or_count mismatch");
+        assert_eq!(a.lr_count, b.lr_count, "{label}: lr_count mismatch");
 
         assert_eq!(
-            sparse.i_face_components.len(),
-            dense.i_face_components.len(),
+            a.i_face_components.len(),
+            b.i_face_components.len(),
             "{label}: i_face component count mismatch"
         );
         assert_eq!(
-            sparse.o_face_components.len(),
-            dense.o_face_components.len(),
+            a.o_face_components.len(),
+            b.o_face_components.len(),
             "{label}: o_face component count mismatch"
         );
         assert_eq!(
-            sparse.l_face_components.len(),
-            dense.l_face_components.len(),
+            a.l_face_components.len(),
+            b.l_face_components.len(),
             "{label}: l_face component count mismatch"
         );
         assert_eq!(
-            sparse.r_face_components.len(),
-            dense.r_face_components.len(),
+            a.r_face_components.len(),
+            b.r_face_components.len(),
             "{label}: r_face component count mismatch"
         );
     }
 
     #[test]
-    fn sparse_dense_equivalence_k2_small() {
+    fn bitmap_rank_dense_equivalence_k2_small() {
         let a_lo = 10_i64;
         let b_lo = 10_i64;
         let a_hi = a_lo + 50;
         let b_hi = b_lo + 50;
         let k_sq = 2_u64;
 
-        let sparse = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, true);
-        let dense = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, false);
+        let bitmap_rank = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::BitmapRank,
+        );
+        let dense = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::Dense,
+        );
+        let hashmap = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::SparseHashMap,
+        );
 
-        assert_results_structurally_equal(&sparse, &dense, "k2_small(10,10,side=50)");
+        assert_results_structurally_equal(
+            &bitmap_rank,
+            &dense,
+            "bitmap_rank vs dense: k2_small(10,10,side=50)",
+        );
+        assert_results_structurally_equal(
+            &bitmap_rank,
+            &hashmap,
+            "bitmap_rank vs hashmap: k2_small(10,10,side=50)",
+        );
     }
 
     #[test]
-    fn sparse_dense_equivalence_k40_medium() {
+    fn bitmap_rank_dense_equivalence_k40_medium() {
         let a_lo = 1000_i64;
         let b_lo = 1000_i64;
         let a_hi = a_lo + 200;
         let b_hi = b_lo + 200;
         let k_sq = 40_u64;
 
-        let sparse = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, true);
-        let dense = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, false);
+        let bitmap_rank = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::BitmapRank,
+        );
+        let dense = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::Dense,
+        );
+        let hashmap = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::SparseHashMap,
+        );
 
-        assert_results_structurally_equal(&sparse, &dense, "k40_medium(1000,1000,side=200)");
+        assert_results_structurally_equal(
+            &bitmap_rank,
+            &dense,
+            "bitmap_rank vs dense: k40_medium(1000,1000,side=200)",
+        );
+        assert_results_structurally_equal(
+            &bitmap_rank,
+            &hashmap,
+            "bitmap_rank vs hashmap: k40_medium(1000,1000,side=200)",
+        );
+    }
+
+    /// Perfect-square k^2=4 regression: boundary primes must be included.
+    #[test]
+    fn bitmap_rank_dense_equivalence_k4_perfect_square() {
+        let a_lo = 0_i64;
+        let b_lo = 0_i64;
+        let a_hi = 20;
+        let b_hi = 20;
+        let k_sq = 4_u64;
+
+        let bitmap_rank = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::BitmapRank,
+        );
+        let dense = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::Dense,
+        );
+
+        assert_results_structurally_equal(
+            &bitmap_rank,
+            &dense,
+            "bitmap_rank vs dense: k4_perfect_square(0,0,side=20)",
+        );
+    }
+
+    /// Perfect-square k^2=9 regression: boundary primes must be included.
+    #[test]
+    fn bitmap_rank_dense_equivalence_k9_perfect_square() {
+        let a_lo = 0_i64;
+        let b_lo = 0_i64;
+        let a_hi = 30;
+        let b_hi = 30;
+        let k_sq = 9_u64;
+
+        let bitmap_rank = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::BitmapRank,
+        );
+        let dense = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::Dense,
+        );
+
+        assert_results_structurally_equal(
+            &bitmap_rank,
+            &dense,
+            "bitmap_rank vs dense: k9_perfect_square(0,0,side=30)",
+        );
     }
 
     #[test]
@@ -653,25 +968,112 @@ mod tests {
             "\n[timing] k²={k_sq}, region=[{a_lo},{a_hi}]×[{b_lo},{b_hi}]"
         );
 
+        // --- Dense UF ---
         let t0 = Instant::now();
-        let sparse = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, true);
-        let sparse_elapsed = t0.elapsed();
-        eprintln!(
-            "[timing] sparse UF: {:?}  (primes={}, components={})",
-            sparse_elapsed, sparse.num_primes, sparse.num_components
+        let dense = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::Dense,
         );
-
-        let t1 = Instant::now();
-        let dense = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, false);
-        let dense_elapsed = t1.elapsed();
+        let dense_elapsed = t0.elapsed();
         eprintln!(
-            "[timing] dense  UF: {:?}  (primes={}, components={})",
+            "[timing] dense  UF:        {:?}  (primes={}, components={})",
             dense_elapsed, dense.num_primes, dense.num_components
         );
 
-        let speedup = dense_elapsed.as_secs_f64() / sparse_elapsed.as_secs_f64();
-        eprintln!("[timing] speedup: {speedup:.1}x");
+        // --- Sparse HashMap UF ---
+        let t1 = Instant::now();
+        let hashmap = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::SparseHashMap,
+        );
+        let hashmap_elapsed = t1.elapsed();
+        eprintln!(
+            "[timing] sparse HashMap:   {:?}  (primes={}, components={})",
+            hashmap_elapsed, hashmap.num_primes, hashmap.num_components
+        );
 
-        assert_results_structurally_equal(&sparse, &dense, "k40_large_timing");
+        // --- Bitmap + Rank UF ---
+        let t2 = Instant::now();
+        let bitmap_rank = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::BitmapRank,
+        );
+        let bitmap_elapsed = t2.elapsed();
+        eprintln!(
+            "[timing] bitmap+rank UF:   {:?}  (primes={}, components={})",
+            bitmap_elapsed, bitmap_rank.num_primes, bitmap_rank.num_components
+        );
+
+        eprintln!(
+            "[timing] bitmap_rank vs dense:   {:.2}x",
+            dense_elapsed.as_secs_f64() / bitmap_elapsed.as_secs_f64()
+        );
+        eprintln!(
+            "[timing] bitmap_rank vs hashmap: {:.2}x",
+            hashmap_elapsed.as_secs_f64() / bitmap_elapsed.as_secs_f64()
+        );
+
+        assert_results_structurally_equal(&bitmap_rank, &dense, "k40_large_timing: bitmap vs dense");
+        assert_results_structurally_equal(&bitmap_rank, &hashmap, "k40_large_timing: bitmap vs hashmap");
+    }
+
+    /// Larger-scale benchmark at a_lo=1_000_000, side=2000, k²=40.
+    /// At this radius the cache pressure on dense UF should be higher.
+    #[test]
+    #[ignore]
+    fn sparse_dense_timing_k40_large_farfield() {
+        use std::time::Instant;
+
+        let a_lo = 1_000_000_i64;
+        let b_lo = 1_000_000_i64;
+        let a_hi = a_lo + 2000;
+        let b_hi = b_lo + 2000;
+        let k_sq = 40_u64;
+
+        eprintln!(
+            "\n[timing-farfield] k²={k_sq}, region=[{a_lo},{a_hi}]×[{b_lo},{b_hi}]"
+        );
+
+        // --- Dense UF ---
+        let t0 = Instant::now();
+        let dense = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::Dense,
+        );
+        let dense_elapsed = t0.elapsed();
+        eprintln!(
+            "[timing-farfield] dense  UF:        {:?}  (primes={}, components={})",
+            dense_elapsed, dense.num_primes, dense.num_components
+        );
+
+        // --- Sparse HashMap UF ---
+        let t1 = Instant::now();
+        let hashmap = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::SparseHashMap,
+        );
+        let hashmap_elapsed = t1.elapsed();
+        eprintln!(
+            "[timing-farfield] sparse HashMap:   {:?}  (primes={}, components={})",
+            hashmap_elapsed, hashmap.num_primes, hashmap.num_components
+        );
+
+        // --- Bitmap + Rank UF ---
+        let t2 = Instant::now();
+        let bitmap_rank = run_scanline_rect(
+            a_lo, a_hi, b_lo, b_hi, k_sq, false, true, UfStrategy::BitmapRank,
+        );
+        let bitmap_elapsed = t2.elapsed();
+        eprintln!(
+            "[timing-farfield] bitmap+rank UF:   {:?}  (primes={}, components={})",
+            bitmap_elapsed, bitmap_rank.num_primes, bitmap_rank.num_components
+        );
+
+        eprintln!(
+            "[timing-farfield] bitmap_rank vs dense:   {:.2}x",
+            dense_elapsed.as_secs_f64() / bitmap_elapsed.as_secs_f64()
+        );
+        eprintln!(
+            "[timing-farfield] bitmap_rank vs hashmap: {:.2}x",
+            hashmap_elapsed.as_secs_f64() / bitmap_elapsed.as_secs_f64()
+        );
+
+        assert_results_structurally_equal(&bitmap_rank, &dense, "k40_farfield: bitmap vs dense");
+        assert_results_structurally_equal(&bitmap_rank, &hashmap, "k40_farfield: bitmap vs hashmap");
     }
 }
