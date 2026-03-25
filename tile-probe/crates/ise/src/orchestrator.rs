@@ -211,10 +211,7 @@ fn probe_shell_fr(
     let sieve_limit = sieve_limit_for_shell(a_lo, a_hi, offsets, tile_width, k_sq);
     let sieve = PrimeSieve::new(sieve_limit);
     let kernel: Box<dyn TileKernel + '_> = match kernel_type {
-        "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
-            export_detail: false,
-            use_row_sieve: true,
-        }),
+        "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel::new(false)),
         _ => Box::new(moat_kernel::kernel::CpuKernel::new(&sieve)),
     };
     let w = tile_width;
@@ -365,10 +362,7 @@ fn run_ise_compensated(config: &IseConfig, r_target: f64) -> IseResult {
 
             if !export_primes {
                 let kernel: Box<dyn TileKernel + '_> = match config.kernel_type.as_str() {
-                    "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
-                        export_detail: false,
-                        use_row_sieve: true,
-                    }),
+                    "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel::new(false)),
                     _ => Box::new(moat_kernel::kernel::CpuKernel::new(&sieve)),
                 };
                 let result = kernel.run_tile(ct.a_lo, ct.a_hi, ct.b_lo, ct.b_hi, config.k_sq);
@@ -619,10 +613,7 @@ pub fn run_ise(config: &IseConfig) -> IseResult {
             //    full TileDetail (primes, edges, face_assignments, component_ids).
             let kernel: Option<Box<dyn TileKernel + '_>> = if !export_primes {
                 Some(match config.kernel_type.as_str() {
-                    "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel {
-                        export_detail: false,
-                        use_row_sieve: true,
-                    }),
+                    "scanline" => Box::new(moat_kernel::kernel::ScanlineKernel::new(false)),
                     _ => Box::new(moat_kernel::kernel::CpuKernel::new(&sieve)),
                 })
             } else {
