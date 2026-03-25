@@ -38,8 +38,8 @@ CHECKPOINT_FILE = os.path.expanduser("~/k40-verify-checkpoint.json")
 PROGRESS_FILE = os.path.expanduser("~/k40-verify-progress.txt")
 
 K_SQUARED = 40
-B_HALF_WIDTH = 64_000  # half of 128K strip
-RADIAL_HALF_WIDTH = 1000  # ±1000 around center
+B_HALF_WIDTH = 64_000  # half of 128K strip → 128K total b-width
+RADIAL_HALF_WIDTH = 64_000  # ±64K around center → 128K total radial width (64 tiles × 2K)
 
 
 # ---------------------------------------------------------------------------
