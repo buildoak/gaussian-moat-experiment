@@ -3,7 +3,8 @@ use fxhash::FxHashMap;
 use crate::kernel::{TileKernel, TileResult};
 use crate::primality::{is_gaussian_prime, sieve_row};
 use crate::tile::{
-    FacePort, FaceSet, TileOperator, FACE_INNER_BIT, FACE_LEFT_BIT, FACE_OUTER_BIT, FACE_RIGHT_BIT,
+    build_tile_from_primes, FacePort, FaceSet, TileOperator, FACE_INNER_BIT, FACE_LEFT_BIT,
+    FACE_OUTER_BIT, FACE_RIGHT_BIT,
 };
 
 pub fn precompute_backward_offsets(k_sq: u64) -> Vec<(i32, i32)> {
@@ -27,6 +28,10 @@ pub fn precompute_backward_offsets(k_sq: u64) -> Vec<(i32, i32)> {
 
     offsets
 }
+
+// ---------------------------------------------------------------------------
+// Dense union-find helpers (used by the dense path)
+// ---------------------------------------------------------------------------
 
 fn find(parent: &mut [u32], mut x: usize) -> usize {
     while parent[x] as usize != x {
@@ -69,13 +74,66 @@ fn component_id_for_root(
     }
 }
 
-fn run_scanline_rect(
+// ---------------------------------------------------------------------------
+// Sparse path: sieve rows → compact primes list → reuse build_tile_from_primes
+// ---------------------------------------------------------------------------
+
+/// Run the scanline sieve+MR to produce a compacted list of all Gaussian primes
+/// in the expanded region [ea_lo..ea_hi] × [eb_lo..eb_hi].
+///
+/// This is the first half of the sparse UF path. The result is fed directly
+/// into `build_tile_from_primes()` which handles UF + face-port extraction.
+fn sieve_to_prime_list(
+    ea_lo: i64,
+    ea_hi: i64,
+    eb_lo: i64,
+    eb_hi: i64,
+    use_row_sieve: bool,
+) -> Vec<(i64, i64)> {
+    let h = usize::try_from(ea_hi - ea_lo + 1).expect("expanded height must fit usize");
+    let w = usize::try_from(eb_hi - eb_lo + 1).expect("expanded width must fit usize");
+
+    let mut primes: Vec<(i64, i64)> = Vec::new();
+    let mut row_sieve_marks = vec![false; w];
+
+    for row in 0..h {
+        let a = ea_lo + row as i64;
+        if use_row_sieve {
+            row_sieve_marks.fill(false);
+            sieve_row(a, eb_lo, w, &mut row_sieve_marks);
+
+            for (col, &marked_composite) in row_sieve_marks.iter().enumerate() {
+                let b = eb_lo + col as i64;
+                if marked_composite && a != 0 && b != 0 {
+                    continue;
+                }
+                if is_gaussian_prime(a, b) {
+                    primes.push((a, b));
+                }
+            }
+        } else {
+            for col in 0..w {
+                let b = eb_lo + col as i64;
+                if is_gaussian_prime(a, b) {
+                    primes.push((a, b));
+                }
+            }
+        }
+    }
+
+    primes
+}
+
+// ---------------------------------------------------------------------------
+// Dense path (kept for benchmarking / regression)
+// ---------------------------------------------------------------------------
+
+fn run_scanline_rect_dense(
     a_lo: i64,
     a_hi: i64,
     b_lo: i64,
     b_hi: i64,
     k_sq: u64,
-    _export_detail: bool,
     use_row_sieve: bool,
 ) -> TileResult {
     let collar = (k_sq as f64).sqrt().ceil() as i64;
@@ -216,6 +274,57 @@ fn run_scanline_rect(
     TileResult::from_tile_operator(&tile)
 }
 
+// ---------------------------------------------------------------------------
+// Sparse path: compact primes → build_tile_from_primes (max code reuse)
+// ---------------------------------------------------------------------------
+
+fn run_scanline_rect_sparse(
+    a_lo: i64,
+    a_hi: i64,
+    b_lo: i64,
+    b_hi: i64,
+    k_sq: u64,
+    export_detail: bool,
+    use_row_sieve: bool,
+) -> TileResult {
+    let collar = (k_sq as f64).sqrt().ceil() as i64;
+    let ea_lo = a_lo - collar;
+    let ea_hi = a_hi + collar;
+    let eb_lo = b_lo - collar;
+    let eb_hi = b_hi + collar;
+
+    // Step 1: Sieve → compacted prime list (includes collar region).
+    let primes = sieve_to_prime_list(ea_lo, ea_hi, eb_lo, eb_hi, use_row_sieve);
+
+    // Step 2: Reuse build_tile_from_primes for UF + face-port extraction.
+    // This function already runs SimpleUF over the compacted list and handles
+    // all face-membership logic, component counting, and optional detail export.
+    let tile = build_tile_from_primes(a_lo, a_hi, b_lo, b_hi, k_sq, primes, export_detail);
+
+    TileResult::from_tile_operator(&tile)
+}
+
+// ---------------------------------------------------------------------------
+// Public entry points
+// ---------------------------------------------------------------------------
+
+fn run_scanline_rect(
+    a_lo: i64,
+    a_hi: i64,
+    b_lo: i64,
+    b_hi: i64,
+    k_sq: u64,
+    export_detail: bool,
+    use_row_sieve: bool,
+    use_sparse_uf: bool,
+) -> TileResult {
+    if use_sparse_uf {
+        run_scanline_rect_sparse(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, use_row_sieve)
+    } else {
+        run_scanline_rect_dense(a_lo, a_hi, b_lo, b_hi, k_sq, use_row_sieve)
+    }
+}
+
 pub fn run_scanline_tile(
     a_lo: i64,
     b_lo: i64,
@@ -225,12 +334,15 @@ pub fn run_scanline_tile(
 ) -> TileResult {
     let a_hi = a_lo + i64::from(side);
     let b_hi = b_lo + i64::from(side);
-    run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, true)
+    run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, export_detail, true, true)
 }
 
 pub struct ScanlineKernel {
     pub export_detail: bool,
     pub use_row_sieve: bool,
+    /// If true (default), use sparse UF over compacted primes via build_tile_from_primes.
+    /// If false, use the original dense UF over the full h*w grid (kept for benchmarking).
+    pub use_sparse_uf: bool,
 }
 
 impl ScanlineKernel {
@@ -238,6 +350,7 @@ impl ScanlineKernel {
         Self {
             export_detail,
             use_row_sieve: true,
+            use_sparse_uf: true,
         }
     }
 }
@@ -252,13 +365,16 @@ impl TileKernel for ScanlineKernel {
             k_sq,
             self.export_detail,
             self.use_row_sieve,
+            self.use_sparse_uf,
         )
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{precompute_backward_offsets, run_scanline_tile, ScanlineKernel};
+    use super::{
+        precompute_backward_offsets, run_scanline_rect, run_scanline_tile, ScanlineKernel,
+    };
     use crate::kernel::{CpuKernel, TileKernel};
     use crate::primality::sieve_row;
     use crate::primes::PrimeSieve;
@@ -356,6 +472,7 @@ mod tests {
         let kernel = ScanlineKernel {
             export_detail: false,
             use_row_sieve: true,
+            use_sparse_uf: true,
         };
 
         let via_wrapper = run_scanline_tile(0, 0, 10, 2, false);
@@ -375,10 +492,12 @@ mod tests {
         let sieve_kernel = ScanlineKernel {
             export_detail: false,
             use_row_sieve: true,
+            use_sparse_uf: true,
         };
         let pointwise_kernel = ScanlineKernel {
             export_detail: false,
             use_row_sieve: false,
+            use_sparse_uf: true,
         };
 
         let sieve_result = sieve_kernel.run_tile(0, 12, 0, 12, 2);
@@ -392,15 +511,176 @@ mod tests {
         let sieve_kernel = ScanlineKernel {
             export_detail: false,
             use_row_sieve: true,
+            use_sparse_uf: true,
         };
         let pointwise_kernel = ScanlineKernel {
             export_detail: false,
             use_row_sieve: false,
+            use_sparse_uf: true,
         };
 
         let sieve_result = sieve_kernel.run_tile(0, 24, 0, 24, 26);
         let pointwise_result = pointwise_kernel.run_tile(0, 24, 0, 24, 26);
 
         assert_eq!(sieve_result, pointwise_result);
+    }
+
+    // ---------------------------------------------------------------------------
+    // Sparse vs dense equivalence tests
+    // ---------------------------------------------------------------------------
+
+    /// Helper: compare two TileResults for structural equality.
+    /// Component IDs may differ between paths, so we compare sorted component_sizes
+    /// and face-count histograms rather than raw IDs.
+    fn assert_results_structurally_equal(
+        sparse: &crate::kernel::TileResult,
+        dense: &crate::kernel::TileResult,
+        label: &str,
+    ) {
+        assert_eq!(
+            sparse.num_primes, dense.num_primes,
+            "{label}: num_primes mismatch: sparse={} dense={}",
+            sparse.num_primes, dense.num_primes
+        );
+        assert_eq!(
+            sparse.num_components, dense.num_components,
+            "{label}: num_components mismatch: sparse={} dense={}",
+            sparse.num_components, dense.num_components
+        );
+
+        let mut sparse_sizes = sparse.component_sizes.clone();
+        sparse_sizes.sort_unstable();
+        let mut dense_sizes = dense.component_sizes.clone();
+        dense_sizes.sort_unstable();
+        assert_eq!(
+            sparse_sizes, dense_sizes,
+            "{label}: sorted component_sizes mismatch"
+        );
+
+        assert_eq!(
+            sparse.face_count_histogram, dense.face_count_histogram,
+            "{label}: face_count_histogram mismatch"
+        );
+
+        // Cross-face component counts must match exactly.
+        assert_eq!(
+            sparse.io_count, dense.io_count,
+            "{label}: io_count mismatch"
+        );
+        assert_eq!(
+            sparse.il_count, dense.il_count,
+            "{label}: il_count mismatch"
+        );
+        assert_eq!(
+            sparse.ir_count, dense.ir_count,
+            "{label}: ir_count mismatch"
+        );
+        assert_eq!(
+            sparse.ol_count, dense.ol_count,
+            "{label}: ol_count mismatch"
+        );
+        assert_eq!(
+            sparse.or_count, dense.or_count,
+            "{label}: or_count mismatch"
+        );
+        assert_eq!(
+            sparse.lr_count, dense.lr_count,
+            "{label}: lr_count mismatch"
+        );
+
+        // Per-face port counts (number of ports per face, not IDs).
+        assert_eq!(
+            sparse.i_face_components.len(),
+            dense.i_face_components.len(),
+            "{label}: i_face component count mismatch"
+        );
+        assert_eq!(
+            sparse.o_face_components.len(),
+            dense.o_face_components.len(),
+            "{label}: o_face component count mismatch"
+        );
+        assert_eq!(
+            sparse.l_face_components.len(),
+            dense.l_face_components.len(),
+            "{label}: l_face component count mismatch"
+        );
+        assert_eq!(
+            sparse.r_face_components.len(),
+            dense.r_face_components.len(),
+            "{label}: r_face component count mismatch"
+        );
+    }
+
+    /// Equivalence test at small scale: k²=2, side=50.
+    /// Verifies that the sparse and dense paths produce structurally identical results.
+    #[test]
+    fn sparse_dense_equivalence_k2_small() {
+        let a_lo = 10_i64;
+        let b_lo = 10_i64;
+        let a_hi = a_lo + 50;
+        let b_hi = b_lo + 50;
+        let k_sq = 2_u64;
+
+        let sparse = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, true);
+        let dense = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, false);
+
+        assert_results_structurally_equal(&sparse, &dense, "k2_small(10,10,side=50)");
+    }
+
+    /// Equivalence test at larger scale: k²=40, side=200.
+    /// More primes, more components, exercises both paths with non-trivial connectivity.
+    #[test]
+    fn sparse_dense_equivalence_k40_medium() {
+        let a_lo = 1000_i64;
+        let b_lo = 1000_i64;
+        let a_hi = a_lo + 200;
+        let b_hi = b_lo + 200;
+        let k_sq = 40_u64;
+
+        let sparse = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, true);
+        let dense = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, false);
+
+        assert_results_structurally_equal(&sparse, &dense, "k40_medium(1000,1000,side=200)");
+    }
+
+    /// Timing benchmark: k²=40, side=2000.
+    /// Prints wall-clock times to stderr so we can observe the sparse speedup.
+    /// Run with: cargo test -p moat-kernel sparse_dense_timing -- --nocapture --ignored
+    #[test]
+    #[ignore]
+    fn sparse_dense_timing_k40_large() {
+        use std::time::Instant;
+
+        let a_lo = 100_000_i64;
+        let b_lo = 100_000_i64;
+        let a_hi = a_lo + 2000;
+        let b_hi = b_lo + 2000;
+        let k_sq = 40_u64;
+
+        eprintln!(
+            "\n[timing] k²={k_sq}, region=[{a_lo},{a_hi}]×[{b_lo},{b_hi}]"
+        );
+
+        let t0 = Instant::now();
+        let sparse = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, true);
+        let sparse_elapsed = t0.elapsed();
+        eprintln!(
+            "[timing] sparse UF: {:?}  (primes={}, components={})",
+            sparse_elapsed, sparse.num_primes, sparse.num_components
+        );
+
+        let t1 = Instant::now();
+        let dense = run_scanline_rect(a_lo, a_hi, b_lo, b_hi, k_sq, false, true, false);
+        let dense_elapsed = t1.elapsed();
+        eprintln!(
+            "[timing] dense  UF: {:?}  (primes={}, components={})",
+            dense_elapsed, dense.num_primes, dense.num_components
+        );
+
+        let speedup = dense_elapsed.as_secs_f64() / sparse_elapsed.as_secs_f64();
+        eprintln!("[timing] speedup: {speedup:.1}x");
+
+        // Structural equivalence check even in the benchmark.
+        assert_results_structurally_equal(&sparse, &dense, "k40_large_timing");
     }
 }
