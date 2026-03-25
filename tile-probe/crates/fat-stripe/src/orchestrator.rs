@@ -105,10 +105,42 @@ pub fn run_campaign(config: &FatStripeConfig, r_min: f64, r_max: f64) -> Campaig
     // port with radius <= r_min + collar_f AND at least one port with
     // radius >= r_max - collar_f.
     let collar_f = (k_sq as f64).sqrt().ceil();
-    let r_inner_thresh = r_min + collar_f;
-    let r_outer_thresh = (r_max - collar_f).max(0.0);
+
+    // Spanning thresholds depend on whether this is an annular (on-axis) or
+    // rectangular (off-axis) probe.
+    //
+    // On-axis (b_min=0): tiled region is an annular sector clipped to
+    //   [r_min, r_max].  Thresholds use r_min / r_max directly (original
+    //   behavior).
+    //
+    // Off-axis (b_min>0): tiled region is the rectangle
+    //   [a_start..a_end] x [b_min..b_max].  Every point has radius
+    //   sqrt(a² + b²) >> r_min, so thresholds must use actual corner radii:
+    //   inner = sqrt(a_start² + b_min²), outer = sqrt(a_end² + b_max²).
+    let a_start_f = a_start as f64;
+    let a_end_f = a_end as f64;
+
+    let (r_inner_geom, r_outer_geom) = if config.b_min > 0 {
+        let b_min_f = config.b_min as f64;
+        let b_max_f = config.b_max as f64;
+        (
+            (a_start_f * a_start_f + b_min_f * b_min_f).sqrt(),
+            (a_end_f * a_end_f + b_max_f * b_max_f).sqrt(),
+        )
+    } else {
+        // Annular: closest-to-origin point is at r_min, farthest at r_max
+        (r_min, r_max)
+    };
+
+    let r_inner_thresh = config.spanning_r_min.unwrap_or(r_inner_geom + collar_f);
+    let r_outer_thresh = config.spanning_r_max.unwrap_or((r_outer_geom - collar_f).max(0.0));
     let r_inner_sq = r_inner_thresh * r_inner_thresh;
     let r_outer_sq = r_outer_thresh * r_outer_thresh;
+
+    eprintln!(
+        "  spanning thresholds: r_inner_geom={:.1} r_outer_geom={:.1} -> r_in={:.1} r_out={:.1}",
+        r_inner_geom, r_outer_geom, r_inner_thresh, r_outer_thresh,
+    );
 
     let blocked = if let Some(ref full_op) = composed_full {
         let nc = full_op.num_components;
