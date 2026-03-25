@@ -57,6 +57,14 @@ struct Args {
     /// Compute and print degree statistics for the Gaussian prime graph
     #[arg(long)]
     degree_stats: bool,
+
+    /// Override inner spanning threshold radius (default: computed from tiled geometry)
+    #[arg(long)]
+    spanning_r_min: Option<f64>,
+
+    /// Override outer spanning threshold radius (default: computed from tiled geometry)
+    #[arg(long)]
+    spanning_r_max: Option<f64>,
 }
 
 fn main() {
@@ -76,6 +84,8 @@ fn main() {
     config.b_min = b_min;
     config.threads = args.threads;
     config.degree_stats = args.degree_stats;
+    config.spanning_r_min = args.spanning_r_min;
+    config.spanning_r_max = args.spanning_r_max;
 
     // Configure Rayon thread pool
     if args.threads > 0 {
@@ -97,6 +107,12 @@ fn main() {
     eprintln!("  num_chunks  = {}", config.num_chunks());
     eprintln!("  total_tiles = {}", config.total_tiles());
     eprintln!("  threads     = {}", config.threads);
+    if let Some(v) = config.spanning_r_min {
+        eprintln!("  spanning_r_min = {v}");
+    }
+    if let Some(v) = config.spanning_r_max {
+        eprintln!("  spanning_r_max = {v}");
+    }
     if let Some(ref path) = args.json_trace {
         eprintln!("  json_trace  = {path}");
     }

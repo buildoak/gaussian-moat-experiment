@@ -22,6 +22,10 @@ pub struct FatStripeConfig {
     pub threads: usize,
     /// When true, compute and print degree statistics after the campaign
     pub degree_stats: bool,
+    /// Optional override for inner spanning threshold radius
+    pub spanning_r_min: Option<f64>,
+    /// Optional override for outer spanning threshold radius
+    pub spanning_r_max: Option<f64>,
 }
 
 impl FatStripeConfig {
@@ -38,6 +42,8 @@ impl FatStripeConfig {
             b_max,
             threads: 0,
             degree_stats: false,
+            spanning_r_min: None,
+            spanning_r_max: None,
         }
     }
 
