@@ -103,6 +103,7 @@ fn main() {
     eprintln!("  tile_width  = {}", config.tile_width);
     eprintln!("  chunk_size  = {}", config.chunk_size);
     eprintln!("  sieve_limit = {}", config.sieve_limit);
+    eprintln!("  b_min       = {}", config.b_min);
     eprintln!("  b_max       = {}", config.b_max);
     eprintln!("  num_chunks  = {}", config.num_chunks());
     eprintln!("  total_tiles = {}", config.total_tiles());

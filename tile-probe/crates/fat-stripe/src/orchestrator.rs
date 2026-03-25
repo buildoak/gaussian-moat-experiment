@@ -137,9 +137,27 @@ pub fn run_campaign(config: &FatStripeConfig, r_min: f64, r_max: f64) -> Campaig
     let r_inner_sq = r_inner_thresh * r_inner_thresh;
     let r_outer_sq = r_outer_thresh * r_outer_thresh;
 
+    if config.b_min > 0 {
+        eprintln!(
+            "  spanning [off-axis]: a_start={} a_end={} b_min={} b_max={} -> r_inner_geom=sqrt({}^2+{}^2)={:.2} r_outer_geom=sqrt({}^2+{}^2)={:.2}",
+            a_start, a_end, config.b_min, config.b_max,
+            a_start, config.b_min, r_inner_geom,
+            a_end, config.b_max, r_outer_geom,
+        );
+    } else {
+        eprintln!(
+            "  spanning [on-axis]: r_inner_geom=r_min={:.2} r_outer_geom=r_max={:.2}",
+            r_inner_geom, r_outer_geom,
+        );
+    }
     eprintln!(
-        "  spanning thresholds: r_inner_geom={:.1} r_outer_geom={:.1} -> r_in={:.1} r_out={:.1}",
-        r_inner_geom, r_outer_geom, r_inner_thresh, r_outer_thresh,
+        "  spanning thresholds: collar={:.0} r_in={:.2} r_out={:.2}{}",
+        collar_f, r_inner_thresh, r_outer_thresh,
+        if config.spanning_r_min.is_some() || config.spanning_r_max.is_some() {
+            " (manual override active)"
+        } else {
+            ""
+        },
     );
 
     let blocked = if let Some(ref full_op) = composed_full {
