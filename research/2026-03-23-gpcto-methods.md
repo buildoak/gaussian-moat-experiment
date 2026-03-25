@@ -7,7 +7,7 @@
 
 ## Abstract
 
-The Gaussian moat problem asks whether, for each fixed step bound $k$, the connected component of the origin in the Gaussian prime proximity graph $G_k$ is finite. We develop two complementary methods for investigating this question at radii far beyond current computational records. The **tile operator** compresses the connectivity of a rectangular region of the Gaussian lattice into boundary data -- which connected components touch which faces -- and admits a natural composition algebra. The **Independent Strip Ensemble (ISE)** deploys many collar-disjoint tile probes at the same radial distance; it is provably conservative (zero false negatives) with false-positive probability decaying exponentially in the number of strips. For rigorous proof, a **tile-based upper bound (UB)** method tiles the first-octant annulus gaplessly and checks global disconnection through composition. We further develop a **fat-stripe** method -- a concrete realization of the UB approach -- that tiles an annular strip in the first octant, processes each tile independently via row sieve and sparse union-find, composes all tiles via the GPCTO algebra, and delivers a definitive verdict on whether any connected component spans the annulus radially. Calibration against the known Tsuchimura moats at $k^2 = 26$ and $k^2 = 32$ confirms correct detection. At $k^2 = 36$, the ISE locates a percolation transition near $R \approx 80.4\text{M}$; at $k^2 = 40$, results through $R = 3.5\text{B}$ show a sigmoid collapse with $R_{0.5} \approx 839\text{M}$. Fat-stripe calibration confirms total annular barriers at $k^2 = 32$ ($R \approx 2.82\text{M}$) and $k^2 = 36$ ($R \approx 80\text{M}$), with cross-validation against ISE establishing consistency between the two methods.
+The Gaussian moat problem asks whether, for each fixed step bound $k$, the connected component of the origin in the Gaussian prime proximity graph $G_k$ is finite. We develop two complementary methods for investigating this question at radii far beyond current computational records. The **tile operator** compresses the connectivity of a rectangular region of the Gaussian lattice into boundary data -- which connected components touch which faces -- and admits a natural composition algebra. The **Independent Strip Ensemble (ISE)** deploys many collar-disjoint tile probes at the same radial distance; it is provably conservative (zero false negatives) with false-positive probability decaying exponentially in the number of strips. For rigorous proof, a **tile-based upper bound (UB)** method tiles the first-octant annulus gaplessly and checks global disconnection through composition. We further develop a **fat-stripe** method -- a concrete realization of the UB approach -- that tiles an annular strip in the first octant, processes each tile independently via row sieve and sparse union-find, composes all tiles via the GPCTO algebra, and delivers a definitive verdict on whether any connected component spans the annulus radially. Calibration against the known Tsuchimura moats at $k^2 = 26$ and $k^2 = 32$ confirms correct detection. At $k^2 = 36$, the ISE locates a percolation transition near $R \approx 80.4\text{M}$; at $k^2 = 40$, results through $R = 3.5\text{B}$ show a sigmoid collapse with $R_{0.5} \approx 839\text{M}$. Fat-stripe calibration confirms total annular barriers at $k^2 = 32$ ($R \approx 2.82\text{M}$) and $k^2 = 36$ ($R \approx 80\text{M}$), with cross-validation against ISE establishing consistency between the two methods. At $k^2 = 40$, five fat-stripe probes across $R \in [1.03\text{B}, 1.09\text{B}]$ detect total annular blockage — the first such detection at a $k^2$ value where no moat was previously known. Angular coverage is 128K lattice units ($\sim 0.007°$); full-octant tiling is needed for rigorous proof.
 
 ---
 
@@ -526,7 +526,29 @@ The known Tsuchimura upper bound for $k^2 = 36$ is $R_{\text{moat}} < 80{,}015{,
 
 Both calibration runs confirm that at the known moat radii for $k^2 = 32$ and $k^2 = 36$, the annular strip is a total barrier: no connected component of $G_k$ spans from the inner to the outer radius within the tiled first-octant region.
 
-**6.6.3 Cross-validation with ISE at $k^2 = 32$**
+**6.6.3 $k^2 = 40$ at $R \in [1.03\text{B},\ 1.09\text{B}]$**
+
+No moat at $k^2 = 40$ was previously known. The ISE sigmoid (Section 7.3) with $R_{0.5} \approx 839\text{M}$ and the percolation parameter analysis (Section 6.8) predicted that the candidate moat radius lies near $R \approx 1.05\text{B}$ in the same fragmentation regime as $k^2 = 36$. Five fat-stripe probes were run across a 60M radial band to test this prediction.
+
+Each probe covers a $128{,}000 \times 128{,}000$ annular strip ($64 \times 64$ tiles at $W = 2000$), with angular width $b_{\max} = 128{,}000$.
+
+| Probe | $R$ | Spanning components | Tiles | Time (Mac) |
+|-------|-----|---------------------|-------|------------|
+| 1 | $1.03\text{B}$ | 0 | 4{,}096 | 5m 15s |
+| 2 | $1.04\text{B}$ | 0 | 4{,}096 | 5m 15s |
+| 3 | $1.05\text{B}$ | 0 | 4{,}096 | 5m 13s |
+| 4 | $1.07\text{B}$ | 0 | 4{,}096 | 5m 12s |
+| 5 | $1.09\text{B}$ | 0 | 4{,}096 | 5m 9s |
+
+**Verdict: BLOCKED -- 0 spanning components** at all five radial positions.
+
+Per-tile throughput: $\sim 0.076\text{s/tile}$ on Mac (M-series), comparable to the $k^2 = 36$ calibration run.
+
+**Angular coverage.** At $R = 1\text{B}$, the 128K angular width subtends $\sim 0.007°$, or $\sim 0.016\%$ of the first octant. This is a narrow-wedge probe -- sufficient to detect the fragmentation regime and confirm methodological consistency with $k^2 = 32$ and $k^2 = 36$, but far below the full-octant coverage (Lemma 6.1) required for a rigorous moat proof.
+
+**Significance.** This is the first detection of total annular blockage at $k^2 = 40$. Unlike $k^2 = 32$ and $k^2 = 36$, where the moat was independently known from Tsuchimura's exhaustive method, $k^2 = 40$ has no prior moat result. The fat-stripe probes advance from calibration (confirming known results) to discovery (detecting a new candidate moat region).
+
+**6.6.4 Cross-validation with ISE at $k^2 = 32$**
 
 ISE probes with $200 \times 200$ tiles and 32 strips at the same radial location show per-tile $f(r)$ values ranging from 0.31 to 0.78 -- individual small tiles have 31--78% inner-to-outer connectivity. This is *not* contradictory with the fat-stripe "blocked" verdict. Individual tiles are well-connected *locally* (most components within a single tile span its 200-unit radial extent), but *long-range* radial connectivity through the full 10,000-unit composed strip breaks down at the moat distance. The moat is a large-scale fragmentation phenomenon, not a local one: components that bridge a single tile's height become disconnected from one another when the full angular extent is considered.
 
@@ -536,7 +558,7 @@ ISE probes with $200 \times 200$ tiles and 32 strips at the same radial location
 
 **Lemma 6.1** (Octant symmetry for total barriers). *Let $\mathcal{A}_\theta$ denote the first-octant annular strip restricted to angular positions $[0, \theta]$. If no component of $G_k$ restricted to $\mathcal{A}_\theta$ spans from $r_{\min}$ to $r_{\max}$, this does not immediately imply a full-annulus barrier. However, by the 8-fold dihedral symmetry of $\mathbb{Z}[i]$, an identical argument applies to each of the 8 octant copies of $\mathcal{A}_\theta$. A total annular barrier is proven if and only if: (a) the tiled region covers the full first-octant angular extent ($0 \le b \le a$), or (b) separate fat-stripe runs cover complementary angular sectors whose union tiles the full octant gaplessly.*
 
-**Remark 6.4** (Calibration vs. proof). The calibration results of Section 6.6 demonstrate that fat stripe correctly identifies total barriers at known moat radii, but they tile only a sub-sector of the first octant. A rigorous moat proof requires full-octant coverage (Lemma 6.1). For the calibration runs, the sub-sector verdicts are sufficient because the known moats at $k^2 = 32$ and $k^2 = 36$ have been independently verified by Tsuchimura's exhaustive method; the fat-stripe calibration confirms methodological correctness, not new moat existence. For future UB campaigns at $k^2 = 40$, full-octant tiling is required.
+**Remark 6.4** (Calibration vs. proof). The calibration results of Section 6.6 demonstrate that fat stripe correctly identifies total barriers at known moat radii ($k^2 = 32, 36$) and detects a new candidate barrier ($k^2 = 40$), but all probes tile only a sub-sector of the first octant. A rigorous moat proof requires full-octant coverage (Lemma 6.1). For $k^2 = 32$ and $k^2 = 36$, the sub-sector verdicts confirm methodological correctness against independently verified Tsuchimura moats. For $k^2 = 40$, the narrow-wedge probes ($\sim 0.007°$) demonstrate that total blockage occurs in the predicted fragmentation regime, but full-octant tiling is required for a rigorous moat claim.
 
 ### 6.8 Implications for $k^2 = 40$
 
@@ -548,7 +570,7 @@ The percolation parameters at the expected moat radius for $k^2 = 40$ ($R \appro
 | $E[\text{backward degree}]$ | 0.89 | 0.90 |
 | $E[\text{total degree}]$ | 1.79 | 1.81 |
 
-The near-identical total degree ($1.79$ vs. $1.81$) and similar backward degree suggest that $k^2 = 40$ at its moat radius occupies the same percolation regime as $k^2 = 36$: sufficiently sparse for large-scale fragmentation to create a total barrier. If an annular gap exists at $k^2 = 40$ (the ISE sigmoid with $R_{0.5} \approx 839\text{M}$ provides strong evidence), fat stripe should detect it as a total barrier via the same mechanism confirmed at $k^2 = 32$ and $k^2 = 36$.
+The near-identical total degree ($1.79$ vs. $1.81$) and similar backward degree suggest that $k^2 = 40$ at its moat radius occupies the same percolation regime as $k^2 = 36$: sufficiently sparse for large-scale fragmentation to create a total barrier. This prediction is now confirmed by the fat-stripe probes of Section 6.6.3: five probes across $R \in [1.03\text{B}, 1.09\text{B}]$ show zero spanning components, consistent with the ISE sigmoid ($R_{0.5} \approx 839\text{M}$) predicting complete fragmentation by $R \approx 1\text{B}$.
 
 **Scaling considerations.** A full-octant fat-stripe campaign at $R \approx 1.05\text{B}$ with $\Delta r = 10{,}000$ requires approximately $J = \lceil 1.05 \times 10^9 / 2000 \rceil = 525{,}000$ tiles per stripe and $N_r = 5$ radial stripes, totaling $\sim 2.6\text{M}$ tiles. At the calibrated throughput of $\sim 0.5\text{s/tile}$ (Mac Mini), this amounts to approximately $360$ hours serial. With Rayon parallelism across 8--64 cores and the double-buffered pipeline described in the tile algorithm spec, wall-clock time reduces to 6--45 hours depending on hardware. Cloud deployment on multi-core instances makes a single-day campaign feasible.
 
