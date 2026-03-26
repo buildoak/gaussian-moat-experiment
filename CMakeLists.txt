@@ -43,6 +43,8 @@ endif()
 # --maxrregcount: tuned per device (48 Jetson, 64 A100)
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math -lineinfo --ptxas-options=-v --maxrregcount=${GM_MAXRREGCOUNT}")
 
+find_package(OpenMP REQUIRED)
+
 # --- Main target ---
 add_executable(gm_cuda_primes
     src/main.cu
@@ -83,3 +85,9 @@ add_executable(tile_cuda
     src/tile_main.cu
 )
 target_include_directories(tile_cuda PRIVATE src/)
+
+add_executable(fat_stripe_cuda
+    src/fat_stripe_cuda.cu
+)
+target_include_directories(fat_stripe_cuda PRIVATE src/)
+target_link_libraries(fat_stripe_cuda PRIVATE OpenMP::OpenMP_CXX)
