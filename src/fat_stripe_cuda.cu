@@ -16,6 +16,7 @@
 #include "batch_dispatch.cuh"
 #include "face_extract.cuh"
 #include "face_port_io.h"
+#include "gpu_uf.cuh"
 #include "row_sieve.cuh"
 #include "tile_kernel.cuh"
 #include "types.h"
@@ -48,6 +49,7 @@ struct Config {
     int device = 0;
     bool have_jobs = false;
     bool have_output = false;
+    bool gpu_uf = false;  // --gpu-uf: run UF on GPU, skip D2H bitmap transfer
 };
 
 struct FileHandle {
@@ -149,6 +151,8 @@ Config parse_args(int argc, char** argv) {
             cfg.batch_size = static_cast<uint32_t>(value);
         } else if (std::strcmp(argv[i], "--device") == 0 && i + 1 < argc) {
             cfg.device = parse_int(argv[++i], "--device");
+        } else if (std::strcmp(argv[i], "--gpu-uf") == 0) {
+            cfg.gpu_uf = true;
         } else if (std::strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             std::exit(kExitSuccess);
@@ -315,6 +319,34 @@ void write_tile_result(
     write_exact_array(output, ports.face_right, "right face ports");
 }
 
+// Build a TileFacePorts from GPU UF host-mirror results for one tile.
+// Defined here (not in gpu_uf.cu) to avoid pulling tile_kernel.cuh into
+// that translation unit a second time.
+gm::TileFacePorts tile_face_ports_from_gpu_uf(
+    const gm::GpuUfContext& ctx,
+    uint32_t                tile_idx,
+    const TileJob&          job,
+    uint32_t                tile_side,
+    int64_t                 collar
+) {
+    const uint32_t* fc  = ctx.h_face_counts + tile_idx * 4u;
+    const uint64_t  off = static_cast<uint64_t>(tile_idx) * gm::kMaxFacePortsPerFace;
+
+    gm::TileFacePorts result;
+    result.num_components   = ctx.h_num_components[tile_idx];
+    result.num_primes       = ctx.h_num_primes[tile_idx];
+    result.origin_component = ctx.h_origin_component[tile_idx];
+
+    auto copy_vec = [](const FacePortRecord* src, uint32_t count) {
+        return std::vector<FacePortRecord>(src, src + static_cast<size_t>(count));
+    };
+    result.face_inner = copy_vec(ctx.h_face_inner + off, fc[0]);
+    result.face_outer = copy_vec(ctx.h_face_outer + off, fc[1]);
+    result.face_left  = copy_vec(ctx.h_face_left  + off, fc[2]);
+    result.face_right = copy_vec(ctx.h_face_right + off, fc[3]);
+    return result;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -344,6 +376,15 @@ int main(int argc, char** argv) {
         gm::BatchContext batch_ctx;
         CUDA_CHECK(gm::create_batch_context(cfg.batch_size, sample_geom.side_exp, &batch_ctx));
 
+        // Optional GPU UF context (allocated only when --gpu-uf is passed)
+        gm::GpuUfContext gpu_uf_ctx{};
+        if (cfg.gpu_uf) {
+            CUDA_CHECK(gm::create_gpu_uf_context(
+                batch_ctx.batch_capacity,
+                sample_geom.total_points,
+                &gpu_uf_ctx));
+        }
+
         FileHandle output = open_output_file(cfg.output_path);
         const FacePortStreamHeader stream_header{
             {'G', 'M', 'F', 'P'},
@@ -367,18 +408,41 @@ int main(int argc, char** argv) {
                 batch_count,
                 manifest.tile_side,
                 collar));
-            CUDA_CHECK(gm::transfer_batch_bitmaps(batch_ctx, batch_count));
 
             std::vector<gm::TileFacePorts> batch_results(static_cast<size_t>(batch_count));
+
+            if (cfg.gpu_uf) {
+                // GPU UF path: bitmaps stay on device, only face ports come back
+                CUDA_CHECK(gm::run_gpu_uf(
+                    gpu_uf_ctx,
+                    batch_ctx.d_bitmaps,
+                    batch_ctx.d_jobs,
+                    batch_count,
+                    manifest.tile_side,
+                    collar,
+                    manifest.k_sq,
+                    sample_geom.side_exp,
+                    batch_ctx.bitmap_words));
+
+                for (uint32_t i = 0; i < batch_count; ++i) {
+                    const TileJob& job = jobs[static_cast<size_t>(batch_start) + static_cast<size_t>(i)];
+                    batch_results[static_cast<size_t>(i)] =
+                        tile_face_ports_from_gpu_uf(gpu_uf_ctx, i, job, manifest.tile_side, collar);
+                }
+            } else {
+                // CPU UF path (original): transfer bitmaps to host, then classify
+                CUDA_CHECK(gm::transfer_batch_bitmaps(batch_ctx, batch_count));
+
 #if defined(_OPENMP)
 #pragma omp parallel for schedule(dynamic)
 #endif
-            for (int64_t i = 0; i < static_cast<int64_t>(batch_count); ++i) {
-                const TileJob& job = jobs[static_cast<size_t>(batch_start) + static_cast<size_t>(i)];
-                const TileGeometry geom =
-                    make_tile_geometry(manifest.k_sq, job.a_lo, job.b_lo, manifest.tile_side);
-                batch_results[static_cast<size_t>(i)] =
-                    gm::extract_face_ports(geom, gm::host_bitmap_slice(batch_ctx, static_cast<uint32_t>(i)), manifest.k_sq);
+                for (int64_t i = 0; i < static_cast<int64_t>(batch_count); ++i) {
+                    const TileJob& job = jobs[static_cast<size_t>(batch_start) + static_cast<size_t>(i)];
+                    const TileGeometry geom =
+                        make_tile_geometry(manifest.k_sq, job.a_lo, job.b_lo, manifest.tile_side);
+                    batch_results[static_cast<size_t>(i)] =
+                        gm::extract_face_ports(geom, gm::host_bitmap_slice(batch_ctx, static_cast<uint32_t>(i)), manifest.k_sq);
+                }
             }
 
             for (uint32_t i = 0; i < batch_count; ++i) {
@@ -394,6 +458,9 @@ int main(int argc, char** argv) {
             fail(kExitIoError, "failed to flush output stream");
         }
 
+        if (cfg.gpu_uf) {
+            gm::destroy_gpu_uf_context(&gpu_uf_ctx);
+        }
         gm::destroy_batch_context(&batch_ctx);
         return kExitSuccess;
     } catch (const AppError& error) {
