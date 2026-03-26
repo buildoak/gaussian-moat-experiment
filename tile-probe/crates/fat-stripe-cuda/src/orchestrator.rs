@@ -66,15 +66,19 @@ pub fn run_campaign(config: &CudaFatStripeConfig) -> Result<CampaignResult, Cuda
     let session_work_dir = session_work_dir(&config.work_dir);
     fs::create_dir_all(&session_work_dir)?;
 
-    let result = run_campaign_batched(
-        config,
-        &driver,
-        &session_work_dir,
-        &all_specs,
-        &positions,
-        &cols_per_stripe,
-        num_stripes,
-    );
+    let result = if config.gpu_boundary_merge {
+        run_campaign_gpu_merge(config, &driver, &session_work_dir, &all_specs)
+    } else {
+        run_campaign_batched(
+            config,
+            &driver,
+            &session_work_dir,
+            &all_specs,
+            &positions,
+            &cols_per_stripe,
+            num_stripes,
+        )
+    };
     let cleanup = cleanup_dir(&session_work_dir);
 
     match (result, cleanup) {
@@ -82,6 +86,44 @@ pub fn run_campaign(config: &CudaFatStripeConfig) -> Result<CampaignResult, Cuda
         (Err(err), _) => Err(err),
         (Ok(_), Err(err)) => Err(err),
     }
+}
+
+fn run_campaign_gpu_merge(
+    config: &CudaFatStripeConfig,
+    driver: &CudaDriver,
+    session_work_dir: &Path,
+    all_specs: &[TileSpec],
+) -> Result<CampaignResult, CudaError> {
+    let jobs = tile_jobs_global(all_specs, 0)?;
+    let batch_dir = session_work_dir.join("gpu-merge");
+    let t0 = Instant::now();
+    let summary = driver.process_campaign_merge(
+        &batch_dir,
+        config.k_sq,
+        config.tile_side,
+        &jobs,
+        config.gpu_uf || config.gpu_boundary_merge,
+    )?;
+    let elapsed = t0.elapsed();
+    let cleanup = cleanup_dir(&batch_dir);
+    if let Err(err) = cleanup {
+        return Err(err);
+    }
+
+    eprintln!(
+        "CUDA merged campaign: {} tiles, {} components, {} primes, {:.1}s",
+        summary.num_tiles,
+        summary.num_components,
+        summary.total_primes,
+        elapsed.as_secs_f64()
+    );
+
+    Ok(CampaignResult {
+        blocked: summary.spanning_component.is_none(),
+        num_tiles: summary.num_tiles,
+        total_primes: summary.total_primes,
+        spanning_component: summary.spanning_component,
+    })
 }
 
 fn run_campaign_batched(
@@ -130,8 +172,13 @@ fn run_campaign_batched(
         let batch_dir = session_work_dir.join(format!("batch-{:06}", call_idx + 1));
 
         let t0 = Instant::now();
-        let batch_result =
-            driver.process_batch(&batch_dir, config.k_sq, config.tile_side, &jobs);
+        let batch_result = driver.process_batch(
+            &batch_dir,
+            config.k_sq,
+            config.tile_side,
+            &jobs,
+            config.gpu_uf,
+        );
         let cuda_elapsed = t0.elapsed();
         let cleanup = cleanup_dir(&batch_dir);
         let operators = match (batch_result, cleanup) {

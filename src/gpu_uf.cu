@@ -42,10 +42,7 @@ struct TileSharedView {
     uint32_t* bitmap;
     uint32_t* prefix;
     uint32_t* prime_pos;
-    uint32_t* parent;
-    uint32_t* root_component;
     TileSharedScalars* scalars;
-    uint8_t* rank;
 };
 
 inline size_t align_up(size_t value, size_t alignment) {
@@ -64,17 +61,8 @@ size_t tile_shared_bytes(uint32_t bitmap_words) {
     offset = align_up(offset, alignof(uint32_t));
     offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint32_t);
 
-    offset = align_up(offset, alignof(uint32_t));
-    offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint32_t);
-
-    offset = align_up(offset, alignof(uint32_t));
-    offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint32_t);
-
     offset = align_up(offset, alignof(TileSharedScalars));
     offset += sizeof(TileSharedScalars);
-
-    offset = align_up(offset, alignof(uint8_t));
-    offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint8_t);
 
     return offset;
 }
@@ -186,20 +174,10 @@ TileSharedView shared_view(char* base, uint32_t bitmap_words) {
     view.prime_pos = reinterpret_cast<uint32_t*>(base + offset);
     offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint32_t);
 
-    offset = align_up_dev(offset, alignof(uint32_t));
-    view.parent = reinterpret_cast<uint32_t*>(base + offset);
-    offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint32_t);
-
-    offset = align_up_dev(offset, alignof(uint32_t));
-    view.root_component = reinterpret_cast<uint32_t*>(base + offset);
-    offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint32_t);
-
     offset = align_up_dev(offset, alignof(TileSharedScalars));
     view.scalars = reinterpret_cast<TileSharedScalars*>(base + offset);
     offset += sizeof(TileSharedScalars);
 
-    offset = align_up_dev(offset, alignof(uint8_t));
-    view.rank = reinterpret_cast<uint8_t*>(base + offset);
     return view;
 }
 
@@ -304,6 +282,9 @@ void gpu_uf_tile_kernel(
     uint32_t collar,
     uint64_t k_sq,
     const TileJob* __restrict__ d_jobs,
+    uint32_t* __restrict__ d_g_parent,
+    uint32_t* __restrict__ d_g_root_comp,
+    uint8_t*  __restrict__ d_g_rank,
     FacePortRecord* __restrict__ d_face_inner,
     FacePortRecord* __restrict__ d_face_outer,
     FacePortRecord* __restrict__ d_face_left,
@@ -319,6 +300,10 @@ void gpu_uf_tile_kernel(
     extern __shared__ char s_mem[];
     TileSharedView shared = shared_view(s_mem, bitmap_words);
     TileSharedScalars& scalars = *shared.scalars;
+    // Global memory UF arrays for this tile (moved out of shared to save shmem)
+    uint32_t* g_parent    = d_g_parent    + static_cast<size_t>(tile_idx) * total_points;
+    uint32_t* g_root_comp = d_g_root_comp + static_cast<size_t>(tile_idx) * total_points;
+    uint8_t*  g_rank      = d_g_rank      + static_cast<size_t>(tile_idx) * total_points;
 
     if (tid == 0u) {
         scalars.num_primes = 0u;
@@ -392,11 +377,11 @@ void gpu_uf_tile_kernel(
         }
     }
 
-    // Phase 4: initialize the in-shared-memory union-find arrays.
+    // Phase 4: initialize the global-memory union-find arrays.
     for (uint32_t i = tid; i < scalars.num_primes; i += blockDim.x) {
-        shared.parent[i] = i;
-        shared.rank[i] = 0u;
-        shared.root_component[i] = gm::kNoComponent;
+        g_parent[i] = i;
+        g_rank[i] = 0u;
+        g_root_comp[i] = gm::kNoComponent;
     }
     __syncthreads();
 
@@ -422,7 +407,7 @@ void gpu_uf_tile_kernel(
             }
 
             const uint32_t neighbor_idx = prefix_rank_dev(shared.prefix, shared.bitmap, neighbor_pos);
-            uf_union_dev(shared.parent, shared.rank, i, neighbor_idx);
+            uf_union_dev(g_parent, g_rank, i, neighbor_idx);
         }
     }
     __syncthreads();
@@ -464,7 +449,7 @@ void gpu_uf_tile_kernel(
                 const int64_t a = expanded_a_lo + row;
                 const int64_t b = expanded_b_lo + col;
                 if (gaussian_norm_dev(a, b) <= k_sq && i != scalars.origin_anchor) {
-                    uf_union_dev(shared.parent, shared.rank, scalars.origin_anchor, i);
+                    uf_union_dev(g_parent, g_rank, scalars.origin_anchor, i);
                 }
             }
             __syncthreads();
@@ -475,7 +460,7 @@ void gpu_uf_tile_kernel(
     // union already uses path splitting and the trees are shallow.
     for (int pass = 0; pass < 3; ++pass) {
         for (uint32_t i = tid; i < scalars.num_primes; i += blockDim.x) {
-            shared.parent[i] = uf_find_dev(shared.parent, i);
+            g_parent[i] = uf_find_dev(g_parent, i);
         }
         __syncthreads();
     }
@@ -496,11 +481,11 @@ void gpu_uf_tile_kernel(
                 continue;
             }
 
-            const uint32_t root = shared.parent[i];
-            uint32_t component = shared.root_component[root];
+            const uint32_t root = g_parent[i];
+            uint32_t component = g_root_comp[root];
             if (component == gm::kNoComponent) {
                 component = scalars.num_components++;
-                shared.root_component[root] = component;
+                g_root_comp[root] = component;
             }
 
             const FacePortRecord record{
@@ -548,8 +533,8 @@ void gpu_uf_tile_kernel(
         }
 
         if (tile_contains_origin && scalars.origin_anchor != kInvalidPrime) {
-            const uint32_t origin_root = shared.parent[scalars.origin_anchor];
-            const uint32_t component = shared.root_component[origin_root];
+            const uint32_t origin_root = g_parent[scalars.origin_anchor];
+            const uint32_t component = g_root_comp[origin_root];
             if (component != gm::kNoComponent) {
                 scalars.origin_component = static_cast<int32_t>(component);
             }
@@ -624,6 +609,10 @@ cudaError_t create_gpu_uf_context(
         goto cleanup;
     }
     status = cudaMalloc(&next.d_comp_counter, tile_count * sizeof(uint32_t));
+    if (status != cudaSuccess) {
+        goto cleanup;
+    }
+    status = cudaMalloc(&next.d_rank, tile_count * point_count * sizeof(uint8_t));
     if (status != cudaSuccess) {
         goto cleanup;
     }
@@ -723,6 +712,9 @@ void destroy_gpu_uf_context(GpuUfContext* ctx) {
     }
     if (ctx->d_comp_counter != nullptr) {
         cudaFree(ctx->d_comp_counter);
+    }
+    if (ctx->d_rank != nullptr) {
+        cudaFree(ctx->d_rank);
     }
     if (ctx->d_face_inner != nullptr) {
         cudaFree(ctx->d_face_inner);
@@ -863,6 +855,9 @@ cudaError_t run_gpu_uf(
         static_cast<uint32_t>(collar),
         k_sq,
         d_jobs,
+        ctx.d_parent,
+        ctx.d_comp_id,
+        ctx.d_rank,
         ctx.d_face_inner,
         ctx.d_face_outer,
         ctx.d_face_left,

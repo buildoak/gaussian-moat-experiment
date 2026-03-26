@@ -19,3 +19,5 @@ solver/target/
 tile-probe/target/
 __pycache__/
 data/
+build-3090/
+build-fresh/
