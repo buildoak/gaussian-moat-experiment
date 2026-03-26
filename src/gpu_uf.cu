@@ -7,9 +7,11 @@
 
 #include <cuda_runtime.h>
 
-#include "face_extract.cuh"
+// IMPORTANT: do NOT include face_extract.cuh or tile_kernel.cuh here.
+// Those headers define non-inline __global__ kernels.  Including them in
+// both this TU and fat_stripe_cuda.cu causes duplicate-symbol link errors.
+// Only face_port_io.h (structs) and types.h (TileGeometry) are safe to include.
 #include "face_port_io.h"
-#include "tile_kernel.cuh"
 #include "types.h"
 
 // ---------------------------------------------------------------------------
@@ -65,10 +67,21 @@ void uf_union_dev(uint32_t* parent, uint32_t a, uint32_t b) {
 // in the k²=40 set and fall back to per-point inline checking for other values.
 // ---------------------------------------------------------------------------
 
-// Gaussian norm: a²+b² using unsigned arithmetic (no overflow for |a|,|b| < 2^31)
+// Absolute value: int64 → uint64 without overflow
+__device__ __forceinline__
+uint64_t abs_i64_u64(int64_t v) {
+    return v < 0 ? static_cast<uint64_t>(-(v + 1)) + 1ULL : static_cast<uint64_t>(v);
+}
+
+// Gaussian norm a²+b² using 128-bit intermediate (no overflow)
 __device__ __forceinline__
 uint64_t gnorm(int64_t a, int64_t b) {
-    return gm::gaussian_norm_u64(a, b);
+    const uint64_t ua = abs_i64_u64(a);
+    const uint64_t ub = abs_i64_u64(b);
+    const unsigned __int128 n =
+        static_cast<unsigned __int128>(ua) * ua +
+        static_cast<unsigned __int128>(ub) * ub;
+    return static_cast<uint64_t>(n);
 }
 
 } // anonymous namespace
@@ -673,37 +686,6 @@ cudaError_t run_gpu_uf(
     }
 
     return cudaSuccess;
-}
-
-// -----------------------------------------------------------------------
-// tile_face_ports_from_gpu_uf
-// -----------------------------------------------------------------------
-
-TileFacePorts tile_face_ports_from_gpu_uf(
-    const GpuUfContext& ctx,
-    uint32_t            tile_idx,
-    const TileJob&      job,
-    uint32_t            tile_side,
-    int64_t             collar
-) {
-    const uint32_t* fc  = ctx.h_face_counts + tile_idx * 4u;
-    const uint64_t  off = static_cast<uint64_t>(tile_idx) * kMaxFacePortsPerFace;
-
-    TileFacePorts result;
-    result.num_components   = ctx.h_num_components[tile_idx];
-    result.num_primes       = ctx.h_num_primes[tile_idx];
-    result.origin_component = ctx.h_origin_component[tile_idx];
-
-    auto copy_vec = [](const FacePortRecord* src, uint32_t count) {
-        return std::vector<FacePortRecord>(src, src + count);
-    };
-
-    result.face_inner = copy_vec(ctx.h_face_inner + off, fc[0]);
-    result.face_outer = copy_vec(ctx.h_face_outer + off, fc[1]);
-    result.face_left  = copy_vec(ctx.h_face_left  + off, fc[2]);
-    result.face_right = copy_vec(ctx.h_face_right + off, fc[3]);
-
-    return result;
 }
 
 } // namespace gm

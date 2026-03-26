@@ -319,6 +319,34 @@ void write_tile_result(
     write_exact_array(output, ports.face_right, "right face ports");
 }
 
+// Build a TileFacePorts from GPU UF host-mirror results for one tile.
+// Defined here (not in gpu_uf.cu) to avoid pulling tile_kernel.cuh into
+// that translation unit a second time.
+gm::TileFacePorts tile_face_ports_from_gpu_uf(
+    const gm::GpuUfContext& ctx,
+    uint32_t                tile_idx,
+    const TileJob&          job,
+    uint32_t                tile_side,
+    int64_t                 collar
+) {
+    const uint32_t* fc  = ctx.h_face_counts + tile_idx * 4u;
+    const uint64_t  off = static_cast<uint64_t>(tile_idx) * gm::kMaxFacePortsPerFace;
+
+    gm::TileFacePorts result;
+    result.num_components   = ctx.h_num_components[tile_idx];
+    result.num_primes       = ctx.h_num_primes[tile_idx];
+    result.origin_component = ctx.h_origin_component[tile_idx];
+
+    auto copy_vec = [](const FacePortRecord* src, uint32_t count) {
+        return std::vector<FacePortRecord>(src, src + static_cast<size_t>(count));
+    };
+    result.face_inner = copy_vec(ctx.h_face_inner + off, fc[0]);
+    result.face_outer = copy_vec(ctx.h_face_outer + off, fc[1]);
+    result.face_left  = copy_vec(ctx.h_face_left  + off, fc[2]);
+    result.face_right = copy_vec(ctx.h_face_right + off, fc[3]);
+    return result;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -399,7 +427,7 @@ int main(int argc, char** argv) {
                 for (uint32_t i = 0; i < batch_count; ++i) {
                     const TileJob& job = jobs[static_cast<size_t>(batch_start) + static_cast<size_t>(i)];
                     batch_results[static_cast<size_t>(i)] =
-                        gm::tile_face_ports_from_gpu_uf(gpu_uf_ctx, i, job, manifest.tile_side, collar);
+                        tile_face_ports_from_gpu_uf(gpu_uf_ctx, i, job, manifest.tile_side, collar);
                 }
             } else {
                 // CPU UF path (original): transfer bitmaps to host, then classify

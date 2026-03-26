@@ -5,8 +5,12 @@
 #include <cuda_runtime.h>
 
 #include "face_port_io.h"
-#include "face_extract.cuh"
 #include "types.h"
+// NOTE: face_extract.cuh (which defines TileFacePorts) is intentionally NOT
+// included here, because it pulls in tile_kernel.cuh which defines non-inline
+// __global__ kernels.  Including it from two translation units would cause
+// linker duplicate-symbol errors.  fat_stripe_cuda.cu includes face_extract.cuh
+// directly; the tile_face_ports_from_gpu_uf helper is declared there.
 
 // GPU Union-Find for connected component labelling on device bitmaps.
 //
@@ -112,23 +116,9 @@ cudaError_t run_gpu_uf(
     size_t          bitmap_words
 );
 
-// -----------------------------------------------------------------------
-// Result accessor
-// -----------------------------------------------------------------------
-
-// Build a TileFacePorts from the downloaded host mirrors for one tile.
-// Equivalent to extract_face_ports() output, with the same semantic guarantees:
-//  - same (a,b) coordinates in each face list
-//  - same num_primes count
-//  - component_ids are internally consistent (same root → same ID)
-//  - origin_component is the component of the first prime with norm ≤ k_sq
-gm::TileFacePorts tile_face_ports_from_gpu_uf(
-    const GpuUfContext& ctx,
-    uint32_t            tile_idx,
-    const TileJob&      job,
-    uint32_t            tile_side,
-    int64_t             collar
-);
+// NOTE: tile_face_ports_from_gpu_uf() is defined as a static helper in
+// fat_stripe_cuda.cu (the only caller) to avoid pulling face_extract.cuh
+// (and thus tile_kernel.cuh) into this translation unit.
 
 } // namespace gm
 
