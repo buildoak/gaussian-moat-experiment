@@ -378,9 +378,31 @@ int main(int argc, char** argv) {
 
         // Optional GPU UF context (allocated only when --gpu-uf is passed)
         gm::GpuUfContext gpu_uf_ctx{};
-        if (cfg.gpu_uf) {
-            CUDA_CHECK(gm::create_gpu_uf_context(
+        uint32_t effective_batch_capacity = batch_ctx.batch_capacity;
+        if (cfg.gpu_uf && manifest.num_jobs > 0u) {
+            size_t free_mem = 0;
+            size_t total_mem = 0;
+            CUDA_CHECK(cudaMemGetInfo(&free_mem, &total_mem));
+            (void)total_mem;
+
+            const size_t bytes_per_tile =
+                static_cast<size_t>(sample_geom.total_points) * 2u * sizeof(uint32_t);
+            const size_t uf_budget_bytes = free_mem / 2u;
+
+            uint32_t max_batch_by_vram = 1u;
+            if (bytes_per_tile > 0u) {
+                const size_t tiles_by_vram = uf_budget_bytes / bytes_per_tile;
+                if (tiles_by_vram > 0u) {
+                    max_batch_by_vram = static_cast<uint32_t>(
+                        std::min<size_t>(tiles_by_vram, std::numeric_limits<uint32_t>::max()));
+                }
+            }
+
+            effective_batch_capacity = std::min(
                 batch_ctx.batch_capacity,
+                std::min(manifest.num_jobs, max_batch_by_vram));
+            CUDA_CHECK(gm::create_gpu_uf_context(
+                effective_batch_capacity,
                 sample_geom.total_points,
                 &gpu_uf_ctx));
         }
@@ -398,9 +420,11 @@ int main(int argc, char** argv) {
         write_exact(output.file, stream_header, "face port stream header");
 
         const int64_t collar = sample_geom.collar;
-        for (uint32_t batch_start = 0; batch_start < manifest.num_jobs; batch_start += batch_ctx.batch_capacity) {
+        for (uint32_t batch_start = 0;
+             batch_start < manifest.num_jobs;
+             batch_start += effective_batch_capacity) {
             const uint32_t batch_count =
-                std::min(batch_ctx.batch_capacity, manifest.num_jobs - batch_start);
+                std::min(effective_batch_capacity, manifest.num_jobs - batch_start);
 
             CUDA_CHECK(gm::launch_batch_sieve(
                 batch_ctx,

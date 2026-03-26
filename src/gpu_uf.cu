@@ -22,7 +22,7 @@
 namespace {
 
 constexpr uint32_t kBlockSize = 256u;
-constexpr uint32_t kMaxPrimesPerTile = 2048u;
+constexpr uint32_t kMaxPrimesPerTile = 8192u;
 constexpr uint32_t kMaxOffsets = 128u;
 constexpr uint32_t kInvalidPrime = 0xFFFFFFFFu;
 
@@ -277,6 +277,7 @@ __device__
 void write_empty_tile(
     uint32_t tile_idx,
     uint32_t num_primes,
+    int32_t origin_component,
     uint32_t* d_face_counts,
     uint32_t* d_num_components,
     uint32_t* d_num_primes,
@@ -284,7 +285,7 @@ void write_empty_tile(
 ) {
     d_num_primes[tile_idx] = num_primes;
     d_num_components[tile_idx] = 0u;
-    d_origin_component[tile_idx] = -1;
+    d_origin_component[tile_idx] = origin_component;
 
     uint32_t* tile_face_counts = d_face_counts + tile_idx * 4u;
     tile_face_counts[0] = 0u;
@@ -369,6 +370,7 @@ void gpu_uf_tile_kernel(
             write_empty_tile(
                 tile_idx,
                 scalars.num_primes,
+                -2,
                 d_face_counts,
                 d_num_components,
                 d_num_primes,
@@ -812,13 +814,27 @@ cudaError_t run_gpu_uf(
     int shared_limit = 0;
     status = cudaDeviceGetAttribute(
         &shared_limit,
-        cudaDevAttrMaxSharedMemoryPerBlock,
+        cudaDevAttrMaxSharedMemoryPerBlockOptin,
         current_device);
-    if (status != cudaSuccess) {
-        return status;
+    if (status != cudaSuccess || shared_limit == 0) {
+        status = cudaDeviceGetAttribute(
+            &shared_limit,
+            cudaDevAttrMaxSharedMemoryPerBlock,
+            current_device);
+        if (status != cudaSuccess) {
+            return status;
+        }
     }
     if (shared_bytes > static_cast<size_t>(shared_limit)) {
         return cudaErrorInvalidValue;
+    }
+
+    status = cudaFuncSetAttribute(
+        gpu_uf_tile_kernel,
+        cudaFuncAttributeMaxDynamicSharedMemorySize,
+        static_cast<int>(shared_bytes));
+    if (status != cudaSuccess) {
+        return status;
     }
 
     status = cudaMemset(ctx.d_face_counts, 0, static_cast<size_t>(num_tiles) * 4u * sizeof(uint32_t));
