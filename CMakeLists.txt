@@ -88,6 +88,7 @@ target_include_directories(tile_cuda PRIVATE src/)
 
 add_executable(fat_stripe_cuda
     src/fat_stripe_cuda.cu
+    src/gpu_uf.cu
 )
 target_include_directories(fat_stripe_cuda PRIVATE src/)
 target_link_libraries(fat_stripe_cuda PRIVATE OpenMP::OpenMP_CXX)
