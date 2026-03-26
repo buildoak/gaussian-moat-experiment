@@ -2,7 +2,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use moat_kernel::compose::{compose_horizontal, compose_vertical};
 use moat_kernel::tile::{TileOperator, FACE_INNER_BIT, FACE_OUTER_BIT};
@@ -26,10 +26,19 @@ struct TileSpec {
     b_lo: i64,
 }
 
+/// Tracks the grid position of each tile so we can reconstruct
+/// composition order after a single batched CUDA call.
+#[derive(Debug, Clone, Copy)]
+struct TilePosition {
+    stripe_idx: usize,
+    col_idx: usize,
+}
+
 pub fn run_campaign(config: &CudaFatStripeConfig) -> Result<CampaignResult, CudaError> {
     validate_config(config)?;
 
     let stripes = enumerate_stripes(config)?;
+    let num_stripes = stripes.len();
     let num_tiles: usize = stripes.iter().map(Vec::len).sum();
     if num_tiles == 0 {
         return Ok(CampaignResult {
@@ -40,11 +49,14 @@ pub fn run_campaign(config: &CudaFatStripeConfig) -> Result<CampaignResult, Cuda
         });
     }
 
-    let batch_limit = batch_limit(config.cuda_batch_size);
-    let total_batches = stripes
-        .iter()
-        .map(|stripe| stripe.len().div_ceil(batch_limit))
-        .sum();
+    // Flatten all tiles into a single list, recording grid positions.
+    let (all_specs, positions) = flatten_tiles(&stripes);
+    let cols_per_stripe: Vec<usize> = stripes.iter().map(Vec::len).collect();
+
+    eprintln!(
+        "Campaign: {} stripes, {} total tiles, batching into single CUDA call",
+        num_stripes, num_tiles
+    );
 
     let driver = CudaDriver {
         binary_path: config.cuda_binary.clone(),
@@ -54,7 +66,15 @@ pub fn run_campaign(config: &CudaFatStripeConfig) -> Result<CampaignResult, Cuda
     let session_work_dir = session_work_dir(&config.work_dir);
     fs::create_dir_all(&session_work_dir)?;
 
-    let result = run_campaign_inner(config, &driver, &session_work_dir, &stripes, total_batches);
+    let result = run_campaign_batched(
+        config,
+        &driver,
+        &session_work_dir,
+        &all_specs,
+        &positions,
+        &cols_per_stripe,
+        num_stripes,
+    );
     let cleanup = cleanup_dir(&session_work_dir);
 
     match (result, cleanup) {
@@ -64,54 +84,110 @@ pub fn run_campaign(config: &CudaFatStripeConfig) -> Result<CampaignResult, Cuda
     }
 }
 
-fn run_campaign_inner(
+fn run_campaign_batched(
     config: &CudaFatStripeConfig,
     driver: &CudaDriver,
     session_work_dir: &Path,
-    stripes: &[Vec<TileSpec>],
-    total_batches: usize,
+    all_specs: &[TileSpec],
+    positions: &[TilePosition],
+    cols_per_stripe: &[usize],
+    num_stripes: usize,
 ) -> Result<CampaignResult, CudaError> {
     let batch_limit = batch_limit(config.cuda_batch_size);
-    let mut global_batch_idx = 0usize;
+    let num_tiles = all_specs.len();
+
+    // Split into CUDA calls if we exceed the batch limit.
+    let chunks: Vec<(usize, usize)> = {
+        let mut c = Vec::new();
+        let mut start = 0;
+        while start < num_tiles {
+            let end = (start + batch_limit).min(num_tiles);
+            c.push((start, end));
+            start = end;
+        }
+        c
+    };
+    let num_cuda_calls = chunks.len();
+
+    eprintln!(
+        "Dispatching {} tile(s) in {} CUDA call(s) (batch limit: {})",
+        num_tiles,
+        num_cuda_calls,
+        if batch_limit == usize::MAX {
+            "unlimited".to_string()
+        } else {
+            batch_limit.to_string()
+        }
+    );
+
+    // Collect all operators indexed by their global tile index.
+    let mut all_operators: Vec<Option<TileOperator>> = vec![None; num_tiles];
     let mut total_primes = 0u64;
+
+    for (call_idx, &(start, end)) in chunks.iter().enumerate() {
+        let chunk_specs = &all_specs[start..end];
+        let jobs = tile_jobs_global(chunk_specs, start)?;
+        let batch_dir = session_work_dir.join(format!("batch-{:06}", call_idx + 1));
+
+        let t0 = Instant::now();
+        let batch_result =
+            driver.process_batch(&batch_dir, config.k_sq, config.tile_side, &jobs);
+        let cuda_elapsed = t0.elapsed();
+        let cleanup = cleanup_dir(&batch_dir);
+        let operators = match (batch_result, cleanup) {
+            (Ok(operators), Ok(())) => operators,
+            (Err(err), _) => return Err(err),
+            (Ok(_), Err(err)) => return Err(err),
+        };
+
+        let batch_primes = operators.iter().map(|op| op.num_primes as u64).sum::<u64>();
+        total_primes += batch_primes;
+
+        eprintln!(
+            "CUDA call {}/{}: {} tiles, {} primes, {:.1}s",
+            call_idx + 1,
+            num_cuda_calls,
+            operators.len(),
+            batch_primes,
+            cuda_elapsed.as_secs_f64()
+        );
+
+        for (local_idx, op) in operators.into_iter().enumerate() {
+            all_operators[start + local_idx] = Some(op);
+        }
+    }
+
+    // Compose: group by stripe, horizontal within stripe, vertical across stripes.
+    let t_compose = Instant::now();
     let mut full_op: Option<TileOperator> = None;
 
-    for (stripe_idx, stripe) in stripes.iter().enumerate() {
-        let mut stripe_op: Option<TileOperator> = None;
-
-        for jobs_in_batch in stripe.chunks(batch_limit) {
-            let jobs = tile_jobs(jobs_in_batch)?;
-            let batch_dir = session_work_dir.join(format!("batch-{:06}", global_batch_idx + 1));
-
-            let batch_result =
-                driver.process_batch(&batch_dir, config.k_sq, config.tile_side, &jobs);
-            let cleanup = cleanup_dir(&batch_dir);
-            let operators = match (batch_result, cleanup) {
-                (Ok(operators), Ok(())) => operators,
-                (Err(err), _) => return Err(err),
-                (Ok(_), Err(err)) => return Err(err),
-            };
-
-            let batch_primes = operators.iter().map(|op| op.num_primes as u64).sum::<u64>();
-            total_primes += batch_primes;
-
-            for tile_op in operators {
-                stripe_op = Some(match stripe_op {
-                    None => tile_op,
-                    Some(acc) => compose_horizontal(&acc, &tile_op, config.k_sq),
-                });
-            }
-
-            global_batch_idx += 1;
-            eprintln!(
-                "Batch {}/{}: processed {} tiles, {} primes",
-                global_batch_idx,
-                total_batches,
-                jobs_in_batch.len(),
-                batch_primes
-            );
+    for stripe_idx in 0..num_stripes {
+        let num_cols = cols_per_stripe[stripe_idx];
+        if num_cols == 0 {
+            continue;
         }
 
+        // Find the global tile indices for this stripe by scanning positions.
+        // They are contiguous in the flattened array because we flatten stripe-by-stripe.
+        let mut stripe_ops: Vec<Option<&TileOperator>> = vec![None; num_cols];
+        for (global_idx, pos) in positions.iter().enumerate() {
+            if pos.stripe_idx == stripe_idx {
+                stripe_ops[pos.col_idx] = all_operators[global_idx].as_ref();
+            }
+        }
+
+        // Horizontal composition (left to right within stripe).
+        let mut stripe_op: Option<TileOperator> = None;
+        for col_idx in 0..num_cols {
+            if let Some(tile_op) = stripe_ops[col_idx] {
+                stripe_op = Some(match stripe_op {
+                    None => tile_op.clone(),
+                    Some(acc) => compose_horizontal(&acc, tile_op, config.k_sq),
+                });
+            }
+        }
+
+        // Vertical composition (top to bottom across stripes).
         if let Some(stripe_op) = stripe_op {
             full_op = Some(match full_op {
                 None => stripe_op,
@@ -122,10 +198,13 @@ fn run_campaign_inner(
         eprintln!(
             "Stripe {}/{}: composed {} tiles",
             stripe_idx + 1,
-            stripes.len(),
-            stripe.len()
+            num_stripes,
+            num_cols
         );
     }
+
+    let compose_elapsed = t_compose.elapsed();
+    eprintln!("Composition: {:.1}s", compose_elapsed.as_secs_f64());
 
     let spanning_component = full_op
         .as_ref()
@@ -133,10 +212,30 @@ fn run_campaign_inner(
 
     Ok(CampaignResult {
         blocked: spanning_component.is_none(),
-        num_tiles: stripes.iter().map(Vec::len).sum(),
+        num_tiles: all_specs.len(),
         total_primes,
         spanning_component,
     })
+}
+
+/// Flatten the stripe-based tile grid into a single contiguous list,
+/// returning both the specs and each tile's grid position.
+fn flatten_tiles(stripes: &[Vec<TileSpec>]) -> (Vec<TileSpec>, Vec<TilePosition>) {
+    let total: usize = stripes.iter().map(Vec::len).sum();
+    let mut specs = Vec::with_capacity(total);
+    let mut positions = Vec::with_capacity(total);
+
+    for (stripe_idx, stripe) in stripes.iter().enumerate() {
+        for (col_idx, spec) in stripe.iter().enumerate() {
+            specs.push(*spec);
+            positions.push(TilePosition {
+                stripe_idx,
+                col_idx,
+            });
+        }
+    }
+
+    (specs, positions)
 }
 
 fn validate_config(config: &CudaFatStripeConfig) -> Result<(), CudaError> {
@@ -177,15 +276,18 @@ fn enumerate_stripes(config: &CudaFatStripeConfig) -> Result<Vec<Vec<TileSpec>>,
     Ok(stripes)
 }
 
-fn tile_jobs(specs: &[TileSpec]) -> Result<Vec<TileJob>, CudaError> {
+/// Build TileJob records with globally unique tile_ids.
+/// `global_offset` is the index of the first tile in this chunk.
+fn tile_jobs_global(specs: &[TileSpec], global_offset: usize) -> Result<Vec<TileJob>, CudaError> {
     specs
         .iter()
         .enumerate()
         .map(|(idx, spec)| {
+            let global_idx = global_offset + idx;
             Ok(TileJob {
-                tile_id: u32::try_from(idx).map_err(|_| ProtocolError::CountTooLarge {
+                tile_id: u32::try_from(global_idx).map_err(|_| ProtocolError::CountTooLarge {
                     field: "tile_id",
-                    value: idx as u64,
+                    value: global_idx as u64,
                 })?,
                 a_lo: checked_i32(spec.a_lo, "a_lo")?,
                 b_lo: checked_i32(spec.b_lo, "b_lo")?,
