@@ -93,33 +93,49 @@ uint64_t gnorm(int64_t a, int64_t b) {
 namespace gm {
 
 // -----------------------------------------------------------------------
-// K1: init_parent
+// K1: init_label
 //   One thread per point per tile.
-//   Sets parent[tile_offset + i] = tile_offset + i  for ALL positions.
-//   We initialise every position (not just set bits) to avoid stale values
-//   when the batch_capacity > num_tiles.
+//   For set bits: label[i] = i (self-label, the global position index).
+//   For unset bits: label[i] = UINT32_MAX (never participates).
+//   We use "label" stored in the parent[] array for reuse of the same
+//   device memory.  After convergence, label[i] = minimum-index prime
+//   in the connected component containing i.
 // -----------------------------------------------------------------------
 __global__
 void gpu_uf_init_kernel(
-    uint32_t* parent,
-    uint64_t  total_points,   // per tile
-    uint32_t  num_tiles
+    uint32_t*       parent,   // used as label array
+    const uint32_t* bitmaps,
+    uint64_t        total_points,
+    uint32_t        num_tiles
 ) {
     const uint64_t gid = static_cast<uint64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
     if (gid >= static_cast<uint64_t>(num_tiles) * total_points) return;
-    parent[gid] = static_cast<uint32_t>(gid);
+
+    const uint64_t tile_idx  = gid / total_points;
+    const uint64_t local_idx = gid % total_points;
+    const uint32_t* bmap = bitmaps + tile_idx * ((total_points + 31u) / 32u);
+
+    parent[gid] = bitmap_test_dev(bmap, local_idx)
+                  ? static_cast<uint32_t>(gid)
+                  : 0xFFFFFFFFu;
 }
 
 // -----------------------------------------------------------------------
-// K2: union_pass
-//   One thread per point in the expanded tile.
-//   For each set bit, iterate over all BACKWARD (da ≤ 0) neighbours with
-//   dist² ≤ k_sq and union if the neighbour is also set.
-//   Must be launched multiple times (kNumUnionPasses).
+// K2: label_propagation_pass
+//   One thread per set bit per tile.
+//   Uses atomicMin to propagate the minimum label across ALL neighbours
+//   (forward + backward) within dist² ≤ k_sq.
+//
+//   Each pass propagates labels by one hop.  After enough passes (≥ graph
+//   diameter), label[i] equals the global minimum index in the component.
+//   This is equivalent to parallel BFS from all sources simultaneously.
+//
+//   Using ALL offsets (not just backward) is essential for correctness:
+//   backward-only passes can miss paths that run forward.
 // -----------------------------------------------------------------------
 __global__
-void gpu_uf_union_kernel(
-    uint32_t*       parent,
+void gpu_uf_union_kernel(   // kept same name to avoid changing the call site
+    uint32_t*       parent,   // label array
     const uint32_t* bitmaps,
     uint64_t        total_points,
     uint64_t        side_exp,
@@ -136,16 +152,16 @@ void gpu_uf_union_kernel(
     if (!bitmap_test_dev(bmap, local_idx)) return;
 
     uint32_t* tile_parent = parent + tile_idx * total_points;
+    const uint32_t my_label = tile_parent[local_idx];
 
     const int64_t row = static_cast<int64_t>(local_idx / side_exp);
     const int64_t col = static_cast<int64_t>(local_idx % side_exp);
 
-    // Iterate backward offsets: da ≤ 0, (da < 0) or (da == 0 and db < 0)
+    // ALL offsets (da,db) with dist² ≤ k_sq, excluding (0,0)
     const int64_t c = collar;
-    for (int64_t da = -c; da <= 0; ++da) {
+    for (int64_t da = -c; da <= c; ++da) {
         for (int64_t db = -c; db <= c; ++db) {
-            // Backward half-plane only
-            if (da == 0 && db >= 0) continue;
+            if (da == 0 && db == 0) continue;
             const uint64_t dist_sq = static_cast<uint64_t>(da * da + db * db);
             if (dist_sq > k_sq) continue;
 
@@ -158,19 +174,28 @@ void gpu_uf_union_kernel(
             const uint64_t nidx = static_cast<uint64_t>(nr) * side_exp + static_cast<uint64_t>(nc);
             if (!bitmap_test_dev(bmap, nidx)) continue;
 
-            uf_union_dev(tile_parent, static_cast<uint32_t>(local_idx), static_cast<uint32_t>(nidx));
+            // Propagate: pull the neighbour's label (atomicMin into our slot)
+            const uint32_t nb_label = tile_parent[nidx];
+            if (nb_label < my_label) {
+                atomicMin(&tile_parent[local_idx], nb_label);
+            }
         }
     }
 }
 
 // -----------------------------------------------------------------------
-// K3: compress
-//   One thread per point per tile.
-//   Full path compression: walk to root, then rewalk setting every node
-//   directly to the root.  Only meaningful for set bits, but safe on all.
+// K3: flatten_labels
+//   One thread per set bit per tile.
+//   After all propagation passes, label[i] already holds the minimum index
+//   in the component (because atomicMin propagated it).  But due to async
+//   updates there may still be indirect paths.  One extra chasing pass
+//   replaces label[i] with label[label[i]] until stable.
+//
+//   Run this kernel 2× to handle two-hop indirect paths left after
+//   propagation converges.
 // -----------------------------------------------------------------------
 __global__
-void gpu_uf_compress_kernel(
+void gpu_uf_compress_kernel(  // kept same name to avoid changing the call site
     uint32_t*       parent,
     const uint32_t* bitmaps,
     uint64_t        total_points,
@@ -181,19 +206,19 @@ void gpu_uf_compress_kernel(
     if (tile_idx >= static_cast<uint64_t>(num_tiles)) return;
 
     const uint64_t local_idx = gid % total_points;
+    const uint32_t* bmap = bitmaps + tile_idx * ((total_points + 31u) / 32u);
+    if (!bitmap_test_dev(bmap, local_idx)) return;
+
     uint32_t* tile_parent = parent + tile_idx * total_points;
 
-    // Find root
-    uint32_t root = static_cast<uint32_t>(local_idx);
-    while (tile_parent[root] != root) {
-        root = tile_parent[root];
-    }
-    // Path compress
-    uint32_t x = static_cast<uint32_t>(local_idx);
-    while (tile_parent[x] != root) {
-        uint32_t next = tile_parent[x];
-        tile_parent[x] = root;
-        x = next;
+    // Chase: label[i] = label[label[i]] (one hop of indirection removal)
+    uint32_t lbl = tile_parent[local_idx];
+    while (lbl != 0xFFFFFFFFu) {
+        const uint32_t next = tile_parent[lbl];
+        if (next == lbl || next == 0xFFFFFFFFu) break;
+        // Try to shorten: point directly to next
+        atomicMin(&tile_parent[local_idx], next);
+        lbl = next;
     }
 }
 
@@ -565,26 +590,40 @@ cudaError_t run_gpu_uf(
     const uint32_t grid_init   = static_cast<uint32_t>((total_work + block - 1) / block);
 
     gpu_uf_init_kernel<<<grid_init, block>>>(
-        ctx.d_parent, total_points, num_tiles);
+        ctx.d_parent, d_bitmaps, total_points, num_tiles);
     s = cudaGetLastError();
     if (s != cudaSuccess) return s;
 
-    // -- K2: union_pass (repeated) --------------------------------------
+    // -- K2+K3: union rounds (union_pass × N + compress) × M_rounds ------
+    // Dynamic pass count: worst case = component spans full tile diagonal.
+    // Each pass propagates labels by one hop of ≤ sqrt(k_sq) cells.
+    // passes_needed = ceil(tile_side * sqrt(2) / sqrt(k_sq)) + safety margin.
+    const uint32_t sqrt_k = static_cast<uint32_t>(ceil(sqrt(static_cast<double>(k_sq))));
+    const uint32_t min_passes = (sqrt_k > 0) ? (tile_side * 3u / (sqrt_k * 2u)) + 15u : 100u;
+    const uint32_t num_rounds = 3u;
+    const uint32_t passes_per_round = (min_passes + num_rounds - 1u) / num_rounds;
+
     const uint32_t grid_union = grid_init;
-    for (uint32_t pass = 0; pass < kNumUnionPasses; ++pass) {
-        gpu_uf_union_kernel<<<grid_union, block>>>(
-            ctx.d_parent,
-            d_bitmaps,
-            total_points,
-            side_exp,
-            k_sq,
-            collar,
-            num_tiles);
+    for (uint32_t round = 0; round < num_rounds; ++round) {
+        for (uint32_t pass = 0; pass < passes_per_round; ++pass) {
+            gpu_uf_union_kernel<<<grid_union, block>>>(
+                ctx.d_parent,
+                d_bitmaps,
+                total_points,
+                side_exp,
+                k_sq,
+                collar,
+                num_tiles);
+            s = cudaGetLastError();
+            if (s != cudaSuccess) return s;
+        }
+        // Compress after each round to shorten parent chains
+        gpu_uf_compress_kernel<<<grid_init, block>>>(
+            ctx.d_parent, d_bitmaps, total_points, num_tiles);
         s = cudaGetLastError();
         if (s != cudaSuccess) return s;
     }
-
-    // -- K3: compress ---------------------------------------------------
+    // Final compress pass to fully flatten any remaining indirections
     gpu_uf_compress_kernel<<<grid_init, block>>>(
         ctx.d_parent, d_bitmaps, total_points, num_tiles);
     s = cudaGetLastError();

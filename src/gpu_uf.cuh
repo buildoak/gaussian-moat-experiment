@@ -40,10 +40,14 @@ namespace gm {
 // so ≤ ceil(7 × 271 × 0.012) ≈ 23 per face.  2048 gives a 90× safety margin.
 constexpr uint32_t kMaxFacePortsPerFace = 2048;
 
-// Number of union passes.  Convergence is guaranteed in ≤ 2*collar passes
-// because the diameter of any connected component is bounded by 2*collar.
-// Use 16 to handle k²=40 (collar=7) with a comfortable margin.
-constexpr uint32_t kNumUnionPasses = 16;
+// Number of union passes per round.
+// Worst case: a connected component spans the full tile width (256 cells).
+// Each union pass propagates connectivity by one hop of ≤ sqrt(k_sq) ≈ 6.3 cells.
+// For a 256-cell wide tile: ⌈256/6.3⌉ ≈ 41 passes needed.
+// We run 3 rounds of (union × 25 passes + compress) = 75 union passes total,
+// which is conservative enough for any tile_side ≤ 512 with k²=40.
+constexpr uint32_t kNumUnionPassesPerRound = 25;
+constexpr uint32_t kNumRounds = 3;
 
 // Sentinel used during component-ID assignment: means "not yet claimed".
 constexpr uint32_t kNoComponent = 0xFFFFFFFFu;
