@@ -74,7 +74,7 @@ fn assert_case_matches(driver: &CudaDriver, case: TileCase) {
     }];
 
     let mut gpu_tiles = driver
-        .process_batch(work_dir.path(), case.k_sq, case.side, &jobs)
+        .process_batch(work_dir.path(), case.k_sq, case.side, &jobs, false)
         .unwrap_or_else(|err| panic!("CUDA batch failed for {}: {err}", case.name));
     assert_eq!(gpu_tiles.len(), 1, "expected one CUDA tile for {}", case.name);
     let gpu = gpu_tiles.pop().unwrap();

@@ -60,6 +60,7 @@ struct GpuUfContext {
     uint32_t* d_parent       = nullptr; // UF parent array
     uint32_t* d_comp_id      = nullptr; // component ID per point (kNoComponent initially)
     uint32_t* d_comp_counter = nullptr; // per-tile atomic counters for component IDs [batch_cap]
+    uint8_t*  d_rank         = nullptr; // UF rank array [batch_cap * total_points]
 
     // Per-face output buffers – sized [batch_cap * kMaxFacePortsPerFace]
     FacePortRecord* d_face_inner = nullptr;

@@ -7,6 +7,7 @@ use bytemuck::{bytes_of, cast_slice, cast_slice_mut, pod_read_unaligned, Pod, Ze
 pub const JOB_MAGIC: [u8; 4] = *b"GMTJ";
 pub const STREAM_MAGIC: [u8; 4] = *b"GMFP";
 pub const PROTOCOL_VERSION: u16 = 1;
+pub const STREAM_FLAG_CAMPAIGN_SUMMARY: u16 = 1u16 << 0;
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
@@ -62,6 +63,16 @@ pub struct FacePortRecord {
     pub a: i32,
     pub b: i32,
     pub component_id: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+pub struct CampaignSummary {
+    pub total_primes: u64,
+    pub num_tiles: u32,
+    pub num_components: u32,
+    pub spanning_component: i32,
+    pub reserved: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -200,11 +211,29 @@ pub fn read_tile_result(reader: &mut impl Read) -> Result<RawTileResult, Protoco
 
 pub fn read_all_tiles(reader: &mut impl Read) -> Result<FacePortStream, ProtocolError> {
     let header = read_stream_header(reader)?;
+    if header.flags & STREAM_FLAG_CAMPAIGN_SUMMARY != 0 {
+        return Err(ProtocolError::InvalidData(
+            "stream is a campaign summary, not tile results".to_string(),
+        ));
+    }
     let mut tiles = Vec::with_capacity(usize_from_u32("num_tiles", header.num_tiles)?);
     for _ in 0..header.num_tiles {
         tiles.push(read_tile_result(reader)?);
     }
     Ok(FacePortStream { header, tiles })
+}
+
+pub fn read_campaign_summary(
+    reader: &mut impl Read,
+) -> Result<(FacePortStreamHeader, CampaignSummary), ProtocolError> {
+    let header = read_stream_header(reader)?;
+    if header.flags & STREAM_FLAG_CAMPAIGN_SUMMARY == 0 {
+        return Err(ProtocolError::InvalidData(
+            "stream does not contain campaign summary flag".to_string(),
+        ));
+    }
+    let summary = read_pod::<CampaignSummary>(reader)?;
+    Ok((header, summary))
 }
 
 fn read_ports(reader: &mut impl Read, count: u32) -> Result<Vec<FacePortRecord>, ProtocolError> {
@@ -307,8 +336,9 @@ mod tests {
 
     use super::{
         read_all_tiles, read_job_manifest, read_stream_header, read_tile_result,
-        write_job_manifest, FacePortRecord, FacePortStreamHeader, FatStripeJobHeader, TileJob,
-        TilePorts, TileResultHeader, JOB_MAGIC, PROTOCOL_VERSION, STREAM_MAGIC,
+        write_job_manifest, CampaignSummary, FacePortRecord, FacePortStreamHeader,
+        FatStripeJobHeader, TileJob, TilePorts, TileResultHeader, JOB_MAGIC, PROTOCOL_VERSION,
+        STREAM_MAGIC,
     };
 
     #[test]
@@ -318,6 +348,7 @@ mod tests {
         assert_eq!(size_of::<FacePortStreamHeader>(), 32);
         assert_eq!(size_of::<TileResultHeader>(), 44);
         assert_eq!(size_of::<FacePortRecord>(), 12);
+        assert_eq!(size_of::<CampaignSummary>(), 24);
     }
 
     #[test]

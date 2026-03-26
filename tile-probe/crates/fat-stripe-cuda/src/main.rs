@@ -38,6 +38,12 @@ struct Cli {
 
     #[arg(long, default_value = "0")]
     cuda_batch_size: u32,
+
+    #[arg(long, default_value = "false")]
+    gpu_uf: bool,
+
+    #[arg(long, default_value = "false")]
+    gpu_boundary_merge: bool,
 }
 
 fn main() -> ExitCode {
@@ -53,6 +59,8 @@ fn main() -> ExitCode {
         args.cuda_binary,
         args.cuda_device,
         args.cuda_batch_size,
+        args.gpu_uf,
+        args.gpu_boundary_merge,
     );
 
     match run_campaign(&config) {
