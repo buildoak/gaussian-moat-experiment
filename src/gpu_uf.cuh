@@ -35,10 +35,12 @@
 
 namespace gm {
 
+constexpr uint32_t kMaxPrimesPerTile = 8192u;
+
 // Conservative upper bound on face ports per face per tile.
 // For k²=40 collar=7: each face strip is 7 × side_exp cells, ~1.2% are prime,
-// so ≤ ceil(7 × 271 × 0.012) ≈ 23 per face.  2048 gives a 90× safety margin.
-constexpr uint32_t kMaxFacePortsPerFace = 2048;
+// so ≤ ceil(7 × 271 × 0.012) ≈ 23 per face.  256 gives an 11× safety margin.
+constexpr uint32_t kMaxFacePortsPerFace = 256u;
 
 // Number of union passes per round.
 // Worst case: a connected component spans the full tile width (256 cells).
@@ -56,11 +58,11 @@ constexpr uint32_t kNoComponent = 0xFFFFFFFFu;
 // Per-batch GPU workspace
 // -----------------------------------------------------------------------
 struct GpuUfContext {
-    // Device allocations – sized [batch_cap * total_points]
+    // Device allocations – sized [batch_cap * kMaxPrimesPerTile]
     uint32_t* d_parent       = nullptr; // UF parent array
     uint32_t* d_comp_id      = nullptr; // component ID per point (kNoComponent initially)
     uint32_t* d_comp_counter = nullptr; // per-tile atomic counters for component IDs [batch_cap]
-    uint8_t*  d_rank         = nullptr; // UF rank array [batch_cap * total_points]
+    uint8_t*  d_rank         = nullptr; // UF rank array [batch_cap * kMaxPrimesPerTile]
 
     // Per-face output buffers – sized [batch_cap * kMaxFacePortsPerFace]
     FacePortRecord* d_face_inner = nullptr;

@@ -22,9 +22,11 @@
 namespace {
 
 constexpr uint32_t kBlockSize = 256u;
-constexpr uint32_t kMaxPrimesPerTile = 8192u;
 constexpr uint32_t kMaxOffsets = 128u;
 constexpr uint32_t kInvalidPrime = 0xFFFFFFFFu;
+constexpr int32_t kOriginComponentNotPresent = -1;
+constexpr int32_t kOriginComponentPrimeOverflow = -2;
+constexpr int32_t kOriginComponentFaceOverflow = -3;
 
 __constant__ int2 c_offsets[kMaxOffsets];
 __constant__ int c_num_offsets;
@@ -59,7 +61,7 @@ size_t tile_shared_bytes(uint32_t bitmap_words) {
     offset += static_cast<size_t>(bitmap_words) * sizeof(uint32_t);
 
     offset = align_up(offset, alignof(uint32_t));
-    offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint32_t);
+    offset += static_cast<size_t>(gm::kMaxPrimesPerTile) * sizeof(uint32_t);
 
     offset = align_up(offset, alignof(TileSharedScalars));
     offset += sizeof(TileSharedScalars);
@@ -172,7 +174,7 @@ TileSharedView shared_view(char* base, uint32_t bitmap_words) {
 
     offset = align_up_dev(offset, alignof(uint32_t));
     view.prime_pos = reinterpret_cast<uint32_t*>(base + offset);
-    offset += static_cast<size_t>(kMaxPrimesPerTile) * sizeof(uint32_t);
+    offset += static_cast<size_t>(gm::kMaxPrimesPerTile) * sizeof(uint32_t);
 
     offset = align_up_dev(offset, alignof(TileSharedScalars));
     view.scalars = reinterpret_cast<TileSharedScalars*>(base + offset);
@@ -301,16 +303,19 @@ void gpu_uf_tile_kernel(
     TileSharedView shared = shared_view(s_mem, bitmap_words);
     TileSharedScalars& scalars = *shared.scalars;
     // Global memory UF arrays for this tile (moved out of shared to save shmem)
-    uint32_t* g_parent    = d_g_parent    + static_cast<size_t>(tile_idx) * total_points;
-    uint32_t* g_root_comp = d_g_root_comp + static_cast<size_t>(tile_idx) * total_points;
-    uint8_t*  g_rank      = d_g_rank      + static_cast<size_t>(tile_idx) * total_points;
+    uint32_t* g_parent =
+        d_g_parent + static_cast<size_t>(tile_idx) * static_cast<size_t>(gm::kMaxPrimesPerTile);
+    uint32_t* g_root_comp =
+        d_g_root_comp + static_cast<size_t>(tile_idx) * static_cast<size_t>(gm::kMaxPrimesPerTile);
+    uint8_t* g_rank =
+        d_g_rank + static_cast<size_t>(tile_idx) * static_cast<size_t>(gm::kMaxPrimesPerTile);
 
     if (tid == 0u) {
         scalars.num_primes = 0u;
         scalars.num_components = 0u;
         scalars.overflow = 0u;
         scalars.origin_anchor = kInvalidPrime;
-        scalars.origin_component = -1;
+        scalars.origin_component = kOriginComponentNotPresent;
         scalars.face_counts[0] = 0u;
         scalars.face_counts[1] = 0u;
         scalars.face_counts[2] = 0u;
@@ -341,7 +346,7 @@ void gpu_uf_tile_kernel(
             running += static_cast<uint32_t>(__popc(shared.bitmap[word_idx]));
         }
         scalars.num_primes = running;
-        scalars.overflow = running > kMaxPrimesPerTile ? 1u : 0u;
+        scalars.overflow = running > gm::kMaxPrimesPerTile ? 1u : 0u;
     }
     __syncthreads();
 
@@ -351,11 +356,11 @@ void gpu_uf_tile_kernel(
                 "gpu_uf_tile_kernel: tile %u has %u primes; max supported is %u\n",
                 tile_idx,
                 scalars.num_primes,
-                kMaxPrimesPerTile);
+                gm::kMaxPrimesPerTile);
             write_empty_tile(
                 tile_idx,
                 scalars.num_primes,
-                -2,
+                kOriginComponentPrimeOverflow,
                 d_face_counts,
                 d_num_components,
                 d_num_primes,
@@ -499,36 +504,28 @@ void gpu_uf_tile_kernel(
                 if (out < gm::kMaxFacePortsPerFace) {
                     d_face_inner[tile_face_off + out] = record;
                 }
-                if (scalars.face_counts[0] < gm::kMaxFacePortsPerFace) {
-                    ++scalars.face_counts[0];
-                }
+                ++scalars.face_counts[0];
             }
             if (static_cast<uint64_t>(a_hi - a) <= collar) {
                 const uint32_t out = scalars.face_counts[1];
                 if (out < gm::kMaxFacePortsPerFace) {
                     d_face_outer[tile_face_off + out] = record;
                 }
-                if (scalars.face_counts[1] < gm::kMaxFacePortsPerFace) {
-                    ++scalars.face_counts[1];
-                }
+                ++scalars.face_counts[1];
             }
             if (static_cast<uint64_t>(b - b_lo) <= collar) {
                 const uint32_t out = scalars.face_counts[2];
                 if (out < gm::kMaxFacePortsPerFace) {
                     d_face_left[tile_face_off + out] = record;
                 }
-                if (scalars.face_counts[2] < gm::kMaxFacePortsPerFace) {
-                    ++scalars.face_counts[2];
-                }
+                ++scalars.face_counts[2];
             }
             if (static_cast<uint64_t>(b_hi - b) <= collar) {
                 const uint32_t out = scalars.face_counts[3];
                 if (out < gm::kMaxFacePortsPerFace) {
                     d_face_right[tile_face_off + out] = record;
                 }
-                if (scalars.face_counts[3] < gm::kMaxFacePortsPerFace) {
-                    ++scalars.face_counts[3];
-                }
+                ++scalars.face_counts[3];
             }
         }
 
@@ -538,6 +535,13 @@ void gpu_uf_tile_kernel(
             if (component != gm::kNoComponent) {
                 scalars.origin_component = static_cast<int32_t>(component);
             }
+        }
+
+        if (scalars.face_counts[0] > gm::kMaxFacePortsPerFace ||
+            scalars.face_counts[1] > gm::kMaxFacePortsPerFace ||
+            scalars.face_counts[2] > gm::kMaxFacePortsPerFace ||
+            scalars.face_counts[3] > gm::kMaxFacePortsPerFace) {
+            scalars.origin_component = kOriginComponentFaceOverflow;
         }
 
         d_num_primes[tile_idx] = scalars.num_primes;
@@ -595,16 +599,16 @@ cudaError_t create_gpu_uf_context(
     next.total_points = total_points;
 
     const size_t tile_count = static_cast<size_t>(batch_cap);
-    const size_t point_count = static_cast<size_t>(total_points);
-    const size_t face_cap = static_cast<size_t>(kMaxFacePortsPerFace);
+    const size_t uf_point_count = static_cast<size_t>(gm::kMaxPrimesPerTile);
+    const size_t face_cap = static_cast<size_t>(gm::kMaxFacePortsPerFace);
 
     cudaError_t status = cudaSuccess;
 
-    status = cudaMalloc(&next.d_parent, tile_count * point_count * sizeof(uint32_t));
+    status = cudaMalloc(&next.d_parent, tile_count * uf_point_count * sizeof(uint32_t));
     if (status != cudaSuccess) {
         goto cleanup;
     }
-    status = cudaMalloc(&next.d_comp_id, tile_count * point_count * sizeof(uint32_t));
+    status = cudaMalloc(&next.d_comp_id, tile_count * uf_point_count * sizeof(uint32_t));
     if (status != cudaSuccess) {
         goto cleanup;
     }
@@ -612,7 +616,7 @@ cudaError_t create_gpu_uf_context(
     if (status != cudaSuccess) {
         goto cleanup;
     }
-    status = cudaMalloc(&next.d_rank, tile_count * point_count * sizeof(uint8_t));
+    status = cudaMalloc(&next.d_rank, tile_count * uf_point_count * sizeof(uint8_t));
     if (status != cudaSuccess) {
         goto cleanup;
     }
@@ -915,6 +919,25 @@ cudaError_t run_gpu_uf(
     for (uint32_t tile_idx = 0; tile_idx < num_tiles; ++tile_idx) {
         const uint32_t* face_counts = ctx.h_face_counts + tile_idx * 4u;
         const uint64_t tile_face_off = static_cast<uint64_t>(tile_idx) * face_cap;
+
+        if (face_counts[0] > gm::kMaxFacePortsPerFace ||
+            face_counts[1] > gm::kMaxFacePortsPerFace ||
+            face_counts[2] > gm::kMaxFacePortsPerFace ||
+            face_counts[3] > gm::kMaxFacePortsPerFace ||
+            ctx.h_origin_component[tile_idx] == kOriginComponentFaceOverflow) {
+            std::fprintf(
+                stderr,
+                "gpu-uf: tile %u face port overflow "
+                "(inner=%u outer=%u left=%u right=%u, cap=%u)\n",
+                tile_idx,
+                face_counts[0],
+                face_counts[1],
+                face_counts[2],
+                face_counts[3],
+                gm::kMaxFacePortsPerFace);
+            ctx.h_origin_component[tile_idx] = kOriginComponentFaceOverflow;
+            return cudaErrorInvalidValue;
+        }
 
         if (face_counts[0] > 0u) {
             status = cudaMemcpy(
