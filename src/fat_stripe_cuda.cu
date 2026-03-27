@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -56,6 +57,7 @@ struct Config {
     bool have_output = false;
     bool gpu_uf = false;  // --gpu-uf: run UF on GPU, skip D2H bitmap transfer
     bool gpu_boundary_merge = false; // --gpu-boundary-merge: compose campaign on GPU
+    bool compact_merge = false; // --compact-merge: compose from compact blob
 };
 
 struct FileHandle {
@@ -113,7 +115,7 @@ void check_cuda(cudaError_t status, const char* expr, const char* file, int line
 void print_usage(const char* program) {
     std::fprintf(
         stderr,
-        "Usage: %s --jobs PATH --output PATH [--batch-size N] [--device N] [--gpu-uf] [--gpu-boundary-merge]\n",
+        "Usage: %s --jobs PATH --output PATH [--batch-size N] [--device N] [--gpu-uf] [--gpu-boundary-merge] [--compact-merge]\n",
         program);
 }
 
@@ -161,6 +163,8 @@ Config parse_args(int argc, char** argv) {
             cfg.gpu_uf = true;
         } else if (std::strcmp(argv[i], "--gpu-boundary-merge") == 0) {
             cfg.gpu_boundary_merge = true;
+        } else if (std::strcmp(argv[i], "--compact-merge") == 0) {
+            cfg.compact_merge = true;
         } else if (std::strcmp(argv[i], "--help") == 0) {
             print_usage(argv[0]);
             std::exit(kExitSuccess);
@@ -360,6 +364,7 @@ struct CompactAccumulator {
     std::vector<uint64_t> tile_offsets;
     std::vector<uint32_t> component_counts;
     uint32_t total_components = 0;
+    uint64_t total_primes = 0;
 };
 
 struct CampaignTopology {
@@ -595,6 +600,57 @@ void finalize_compact_accumulator(CompactAccumulator& accumulator) {
     }
 
     accumulator.total_components = component_base;
+}
+
+void validate_finalized_compact_blob(const CompactAccumulator& accumulator) {
+    if (accumulator.tile_offsets.size() != accumulator.component_counts.size()) {
+        fail(kExitIoError, "compact accumulator tile_offsets/component_counts size mismatch");
+    }
+
+    uint32_t expected_component_base = 0u;
+    for (size_t tile_idx = 0; tile_idx < accumulator.tile_offsets.size(); ++tile_idx) {
+        const uint64_t tile_offset = accumulator.tile_offsets[tile_idx];
+        if (tile_offset > static_cast<uint64_t>(accumulator.blob.size())) {
+            fail(kExitIoError, "finalized compact tile offset exceeds blob size");
+        }
+
+        const auto* header = reinterpret_cast<const gm::CompactTileHeader*>(
+            accumulator.blob.data() + static_cast<size_t>(tile_offset));
+        const uint32_t tile_bytes = checked_compact_tile_size(*header);
+        if (tile_offset + tile_bytes > accumulator.blob.size()) {
+            fail(kExitIoError, "finalized compact tile extends past blob end");
+        }
+        if (header->tile_idx != static_cast<uint32_t>(tile_idx)) {
+            fail(kExitIoError, "finalized compact tile_idx mismatch");
+        }
+        if (header->num_components != accumulator.component_counts[tile_idx]) {
+            fail(kExitIoError, "finalized compact component count mismatch");
+        }
+        if (header->component_base != expected_component_base) {
+            fail(kExitIoError, "finalized compact component_base prefix mismatch");
+        }
+
+        const gm::CompactPortRecord* ports = gm::compact_ports(
+            const_cast<void*>(static_cast<const void*>(header)),
+            header->num_components);
+        for (uint32_t p = 0; p < header->num_ports; ++p) {
+            const uint32_t comp_id = ports[p].comp_id;
+            if (comp_id < header->component_base ||
+                comp_id >= header->component_base + header->num_components) {
+                fail(kExitIoError, "finalized compact port comp_id is not globalized");
+            }
+        }
+
+        if (expected_component_base >
+            std::numeric_limits<uint32_t>::max() - header->num_components) {
+            fail(kExitIoError, "finalized compact blob exceeds uint32_t component space");
+        }
+        expected_component_base += header->num_components;
+    }
+
+    if (expected_component_base != accumulator.total_components) {
+        fail(kExitIoError, "finalized compact total_components mismatch");
+    }
 }
 
 struct TileFaceSpan {
@@ -914,6 +970,362 @@ void merge_flatten_kernel(uint32_t* parent, uint32_t count) {
     }
 }
 
+__device__ __forceinline__
+uint32_t compact_merge_collar(uint32_t k_sq) {
+    uint32_t collar = static_cast<uint32_t>(sqrt(static_cast<double>(k_sq)));
+    while (static_cast<uint64_t>(collar) * static_cast<uint64_t>(collar) < k_sq) {
+        ++collar;
+    }
+    while (collar > 0u &&
+           static_cast<uint64_t>(collar - 1u) * static_cast<uint64_t>(collar - 1u) >= k_sq) {
+        --collar;
+    }
+    return collar;
+}
+
+__device__ __forceinline__
+bool compact_port_on_face(
+    const gm::CompactPortRecord& port,
+    uint8_t face,
+    int64_t tile_side,
+    uint32_t collar
+) {
+    switch (face) {
+        case gm::FACE_INNER:
+            return static_cast<uint64_t>(port.x) <= static_cast<uint64_t>(collar);
+        case gm::FACE_OUTER:
+            return tile_side >= static_cast<int64_t>(port.x) &&
+                   static_cast<uint64_t>(tile_side - static_cast<int64_t>(port.x)) <=
+                       static_cast<uint64_t>(collar);
+        case gm::FACE_LEFT:
+            return static_cast<uint64_t>(port.y) <= static_cast<uint64_t>(collar);
+        case gm::FACE_RIGHT:
+            return tile_side >= static_cast<int64_t>(port.y) &&
+                   static_cast<uint64_t>(tile_side - static_cast<int64_t>(port.y)) <=
+                       static_cast<uint64_t>(collar);
+        default:
+            return false;
+    }
+}
+
+__global__
+void merge_seams_compact_kernel(
+    const uint8_t* __restrict__ compact_blob,
+    const uint64_t* __restrict__ tile_offsets,
+    const gm::SeamPair* __restrict__ seam_pairs,
+    const gm::TileOrigin* __restrict__ tile_origins,
+    uint32_t num_seams,
+    uint32_t* __restrict__ merge_parent,
+    uint32_t k_sq
+) {
+    const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
+    if (idx >= num_seams) {
+        return;
+    }
+
+    const gm::SeamPair seam = seam_pairs[idx];
+    const uint8_t* tile_a_data = compact_blob + tile_offsets[seam.tile_a];
+    const auto* hdr_a = reinterpret_cast<const gm::CompactTileHeader*>(tile_a_data);
+    const gm::CompactPortRecord* ports_a = gm::compact_ports(
+        const_cast<void*>(static_cast<const void*>(tile_a_data)),
+        hdr_a->num_components);
+
+    const uint8_t* tile_b_data = compact_blob + tile_offsets[seam.tile_b];
+    const auto* hdr_b = reinterpret_cast<const gm::CompactTileHeader*>(tile_b_data);
+    const gm::CompactPortRecord* ports_b = gm::compact_ports(
+        const_cast<void*>(static_cast<const void*>(tile_b_data)),
+        hdr_b->num_components);
+
+    const gm::TileOrigin origin_a = tile_origins[seam.tile_a];
+    const gm::TileOrigin origin_b = tile_origins[seam.tile_b];
+
+    const uint32_t collar = compact_merge_collar(k_sq);
+    const uint8_t face_a = seam.axis == 0u ? gm::FACE_RIGHT : gm::FACE_OUTER;
+    const uint8_t face_b = seam.axis == 0u ? gm::FACE_LEFT : gm::FACE_INNER;
+    const int64_t tile_side =
+        seam.axis == 0u ? (origin_b.b_lo - origin_a.b_lo) : (origin_b.a_lo - origin_a.a_lo);
+    if (tile_side <= 0) {
+        return;
+    }
+
+    for (uint32_t i = 0; i < hdr_a->num_ports; ++i) {
+        const gm::CompactPortRecord pa = ports_a[i];
+        if (!compact_port_on_face(pa, face_a, tile_side, collar)) {
+            continue;
+        }
+
+        const int64_t pa_abs_a = origin_a.a_lo + static_cast<int64_t>(pa.x);
+        const int64_t pa_abs_b = origin_a.b_lo + static_cast<int64_t>(pa.y);
+        for (uint32_t j = 0; j < hdr_b->num_ports; ++j) {
+            const gm::CompactPortRecord pb = ports_b[j];
+            if (!compact_port_on_face(pb, face_b, tile_side, collar)) {
+                continue;
+            }
+
+            const int64_t pb_abs_a = origin_b.a_lo + static_cast<int64_t>(pb.x);
+            const int64_t pb_abs_b = origin_b.b_lo + static_cast<int64_t>(pb.y);
+            const int64_t da = pa_abs_a - pb_abs_a;
+            const int64_t db = pa_abs_b - pb_abs_b;
+            const uint64_t dist_sq =
+                static_cast<uint64_t>(da * da) + static_cast<uint64_t>(db * db);
+            if (dist_sq <= static_cast<uint64_t>(k_sq)) {
+                merge_uf_union(merge_parent, pa.comp_id, pb.comp_id);
+            }
+        }
+    }
+}
+
+struct CompactMergeDeviceBuffers {
+    uint8_t* d_compact_blob = nullptr;
+    uint64_t* d_tile_offsets = nullptr;
+    gm::SeamPair* d_seam_pairs = nullptr;
+    gm::TileOrigin* d_tile_origins = nullptr;
+    uint32_t* d_parent = nullptr;
+
+    ~CompactMergeDeviceBuffers() {
+        if (d_compact_blob != nullptr) cudaFree(d_compact_blob);
+        if (d_tile_offsets != nullptr) cudaFree(d_tile_offsets);
+        if (d_seam_pairs != nullptr) cudaFree(d_seam_pairs);
+        if (d_tile_origins != nullptr) cudaFree(d_tile_origins);
+        if (d_parent != nullptr) cudaFree(d_parent);
+    }
+};
+
+void validate_compact_merge_topology(
+    const CompactAccumulator& accumulator,
+    const gm::TopologyPrepass& topo
+) {
+    if (accumulator.tile_offsets.size() != topo.tile_origins.size()) {
+        fail(
+            kExitIoError,
+            "compact merge requires manifest tile order to match topology tile order");
+    }
+    if (topo.tile_origins.size() != topo.grid.total_tiles) {
+        fail(kExitIoError, "topology tile_origins size mismatch");
+    }
+
+    for (size_t i = 0; i < topo.seam_pairs.size(); ++i) {
+        const gm::SeamPair seam = topo.seam_pairs[i];
+        if (seam.tile_a >= topo.tile_origins.size() || seam.tile_b >= topo.tile_origins.size()) {
+            fail(kExitIoError, "topology seam pair references tile outside compact blob");
+        }
+    }
+}
+
+CampaignSummary run_compact_merge(
+    const CompactAccumulator& accumulator,
+    const gm::TopologyPrepass& topo,
+    uint64_t k_sq
+) {
+    if (k_sq > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+        fail(kExitBadArgs, "compact merge requires k_sq to fit in uint32_t");
+    }
+
+    CampaignSummary summary{};
+    summary.total_primes = accumulator.total_primes;
+    summary.num_tiles = static_cast<uint32_t>(accumulator.tile_offsets.size());
+    summary.num_components = 0u;
+    summary.spanning_component = -1;
+    summary.reserved = 0u;
+
+    validate_finalized_compact_blob(accumulator);
+    validate_compact_merge_topology(accumulator, topo);
+
+    const auto merge_start = std::chrono::steady_clock::now();
+
+    const uint32_t total_global_components = accumulator.total_components;
+    if (total_global_components == 0u) {
+        const auto merge_end = std::chrono::steady_clock::now();
+        const double merge_ms = std::chrono::duration<double, std::milli>(merge_end - merge_start).count();
+        std::fprintf(
+            stderr,
+            "compact-merge: total_global_components=%u num_seams=%u merge_ms=%.3f spanning=false\n",
+            total_global_components,
+            static_cast<unsigned>(topo.seam_pairs.size()),
+            merge_ms);
+        return summary;
+    }
+
+    CompactMergeDeviceBuffers buffers;
+    const auto alloc_and_copy_bytes =
+        [](void** dst, const void* src, size_t bytes) {
+            if (bytes == 0u) {
+                return;
+            }
+            CUDA_CHECK(cudaMalloc(dst, bytes));
+            CUDA_CHECK(cudaMemcpy(*dst, src, bytes, cudaMemcpyHostToDevice));
+        };
+
+    alloc_and_copy_bytes(
+        reinterpret_cast<void**>(&buffers.d_compact_blob),
+        accumulator.blob.data(),
+        accumulator.blob.size());
+    alloc_and_copy_bytes(
+        reinterpret_cast<void**>(&buffers.d_tile_offsets),
+        accumulator.tile_offsets.data(),
+        accumulator.tile_offsets.size() * sizeof(uint64_t));
+    alloc_and_copy_bytes(
+        reinterpret_cast<void**>(&buffers.d_seam_pairs),
+        topo.seam_pairs.data(),
+        topo.seam_pairs.size() * sizeof(gm::SeamPair));
+    alloc_and_copy_bytes(
+        reinterpret_cast<void**>(&buffers.d_tile_origins),
+        topo.tile_origins.data(),
+        topo.tile_origins.size() * sizeof(gm::TileOrigin));
+    CUDA_CHECK(cudaMalloc(
+        &buffers.d_parent,
+        static_cast<size_t>(total_global_components) * sizeof(uint32_t)));
+
+    constexpr uint32_t kBlock = 256u;
+    const uint32_t node_blocks = (total_global_components + kBlock - 1u) / kBlock;
+    merge_init_parent_kernel<<<node_blocks, kBlock>>>(buffers.d_parent, total_global_components);
+    CUDA_CHECK(cudaGetLastError());
+
+    if (!topo.seam_pairs.empty()) {
+        const uint32_t seam_blocks =
+            (static_cast<uint32_t>(topo.seam_pairs.size()) + kBlock - 1u) / kBlock;
+        merge_seams_compact_kernel<<<seam_blocks, kBlock>>>(
+            buffers.d_compact_blob,
+            buffers.d_tile_offsets,
+            buffers.d_seam_pairs,
+            buffers.d_tile_origins,
+            static_cast<uint32_t>(topo.seam_pairs.size()),
+            buffers.d_parent,
+            static_cast<uint32_t>(k_sq));
+        CUDA_CHECK(cudaGetLastError());
+    }
+
+    for (int pass = 0; pass < 3; ++pass) {
+        merge_flatten_kernel<<<node_blocks, kBlock>>>(buffers.d_parent, total_global_components);
+        CUDA_CHECK(cudaGetLastError());
+    }
+    CUDA_CHECK(cudaDeviceSynchronize());
+
+    std::vector<uint32_t> parent(total_global_components);
+    CUDA_CHECK(cudaMemcpy(
+        parent.data(),
+        buffers.d_parent,
+        static_cast<size_t>(total_global_components) * sizeof(uint32_t),
+        cudaMemcpyDeviceToHost));
+
+    auto host_find = [&](uint32_t x) {
+        while (parent[x] != x) {
+            parent[x] = parent[parent[x]];
+            x = parent[x];
+        }
+        return x;
+    };
+    for (uint32_t i = 0; i < total_global_components; ++i) {
+        parent[i] = host_find(i);
+    }
+
+    constexpr uint32_t kUnset = 0xFFFFFFFFu;
+    std::vector<uint32_t> root_to_dense(total_global_components, kUnset);
+    std::vector<uint8_t> dense_face_bits;
+    dense_face_bits.reserve(total_global_components);
+
+    for (size_t tile_idx = 0; tile_idx < accumulator.tile_offsets.size(); ++tile_idx) {
+        const uint64_t tile_offset = accumulator.tile_offsets[tile_idx];
+        const auto* header = reinterpret_cast<const gm::CompactTileHeader*>(
+            accumulator.blob.data() + static_cast<size_t>(tile_offset));
+        const uint8_t* face_bits = gm::compact_face_bits(
+            const_cast<void*>(static_cast<const void*>(header)));
+
+        for (uint32_t local_comp = 0; local_comp < header->num_components; ++local_comp) {
+            const uint32_t global_comp = header->component_base + local_comp;
+            const uint32_t root = parent[global_comp];
+            uint32_t dense = root_to_dense[root];
+            if (dense == kUnset) {
+                dense = static_cast<uint32_t>(dense_face_bits.size());
+                root_to_dense[root] = dense;
+                dense_face_bits.push_back(0u);
+            }
+            dense_face_bits[dense] |= face_bits[local_comp];
+        }
+    }
+
+    summary.num_components = static_cast<uint32_t>(dense_face_bits.size());
+
+    int64_t a_min = topo.grid.r_min;
+    int64_t a_max = topo.grid.r_max;
+    int64_t b_min = 0;
+    int64_t b_max = topo.grid.b_max;
+    if (!topo.tile_origins.empty()) {
+        a_min = a_max = topo.tile_origins.front().a_lo;
+        b_min = b_max = topo.tile_origins.front().b_lo;
+        for (const gm::TileOrigin& origin : topo.tile_origins) {
+            a_min = std::min(a_min, origin.a_lo);
+            a_max = std::max(a_max, origin.a_lo + static_cast<int64_t>(topo.grid.tile_side));
+            b_min = std::min(b_min, origin.b_lo);
+            b_max = std::max(b_max, origin.b_lo + static_cast<int64_t>(topo.grid.tile_side));
+        }
+    }
+
+    const long double collar =
+        std::ceil(std::sqrt(static_cast<long double>(k_sq)));
+    const bool off_axis = b_min > 0;
+    const long double a_start = static_cast<long double>(a_min);
+    const long double a_end = static_cast<long double>(a_max);
+    const long double b_min_f = static_cast<long double>(b_min);
+    const long double b_max_f = static_cast<long double>(b_max);
+    const long double r_inner_geom =
+        off_axis ? std::sqrt(a_start * a_start + b_min_f * b_min_f) : a_start;
+    const long double r_outer_geom =
+        off_axis ? std::sqrt(a_end * a_end + b_max_f * b_max_f) : a_end;
+    const long double r_inner_thresh = r_inner_geom + collar;
+    const long double r_outer_thresh = std::max(r_outer_geom - collar, 0.0L);
+    const long double r_inner_sq = r_inner_thresh * r_inner_thresh;
+    const long double r_outer_sq = r_outer_thresh * r_outer_thresh;
+
+    std::vector<uint8_t> has_inner(summary.num_components, 0u);
+    std::vector<uint8_t> has_outer(summary.num_components, 0u);
+
+    for (size_t tile_idx = 0; tile_idx < accumulator.tile_offsets.size(); ++tile_idx) {
+        const uint64_t tile_offset = accumulator.tile_offsets[tile_idx];
+        const auto* header = reinterpret_cast<const gm::CompactTileHeader*>(
+            accumulator.blob.data() + static_cast<size_t>(tile_offset));
+        const gm::CompactPortRecord* ports = gm::compact_ports(
+            const_cast<void*>(static_cast<const void*>(header)),
+            header->num_components);
+        const gm::TileOrigin origin = topo.tile_origins[tile_idx];
+
+        for (uint32_t p = 0; p < header->num_ports; ++p) {
+            const gm::CompactPortRecord& port = ports[p];
+            const uint32_t dense = root_to_dense[parent[port.comp_id]];
+            const long double a =
+                static_cast<long double>(origin.a_lo + static_cast<int64_t>(port.x));
+            const long double b =
+                static_cast<long double>(origin.b_lo + static_cast<int64_t>(port.y));
+            const long double r_sq = a * a + b * b;
+            if (r_sq <= r_inner_sq) {
+                has_inner[dense] = 1u;
+            }
+            if (r_sq >= r_outer_sq) {
+                has_outer[dense] = 1u;
+            }
+        }
+    }
+
+    for (uint32_t dense = 0; dense < summary.num_components; ++dense) {
+        if (has_inner[dense] != 0u && has_outer[dense] != 0u) {
+            summary.spanning_component = static_cast<int32_t>(dense);
+            break;
+        }
+    }
+
+    const auto merge_end = std::chrono::steady_clock::now();
+    const double merge_ms = std::chrono::duration<double, std::milli>(merge_end - merge_start).count();
+    std::fprintf(
+        stderr,
+        "compact-merge: total_global_components=%u num_seams=%u merge_ms=%.3f spanning=%s\n",
+        total_global_components,
+        static_cast<unsigned>(topo.seam_pairs.size()),
+        merge_ms,
+        summary.spanning_component >= 0 ? "true" : "false");
+
+    return summary;
+}
+
 struct MergeDeviceBuffers {
     MergePort* d_inner_ports = nullptr;
     MergePort* d_outer_ports = nullptr;
@@ -1138,6 +1550,12 @@ int main(int argc, char** argv) {
         if (cfg.gpu_boundary_merge && !cfg.gpu_uf) {
             fail(kExitBadArgs, "--gpu-boundary-merge requires --gpu-uf");
         }
+        if (cfg.compact_merge && !cfg.gpu_boundary_merge) {
+            fail(kExitBadArgs, "--compact-merge requires --gpu-boundary-merge");
+        }
+        if (cfg.compact_merge && !cfg.gpu_uf) {
+            fail(kExitBadArgs, "--compact-merge requires --gpu-uf");
+        }
 
         const TileGeometry sample_geom = make_tile_geometry(manifest.k_sq, 0, 0, manifest.tile_side);
         const CampaignTopology campaign_topology =
@@ -1265,7 +1683,7 @@ int main(int argc, char** argv) {
         std::vector<FacePortRecord> merge_all_outer;
         std::vector<FacePortRecord> merge_all_left;
         std::vector<FacePortRecord> merge_all_right;
-        if (cfg.gpu_boundary_merge) {
+        if (cfg.gpu_boundary_merge && !cfg.compact_merge) {
             merge_tile_spans.resize(static_cast<size_t>(manifest.num_jobs));
             const size_t reserve_ports = static_cast<size_t>(manifest.num_jobs) * 16u;
             merge_all_inner.reserve(reserve_ports);
@@ -1334,43 +1752,49 @@ int main(int argc, char** argv) {
                     batch_start,
                     batch_count,
                     h_compact_output);
+                for (uint32_t i = 0; i < batch_count; ++i) {
+                    compact_accumulator.total_primes +=
+                        static_cast<uint64_t>(gpu_uf_ctx.h_num_primes[i]);
+                }
 
                 if (cfg.gpu_boundary_merge) {
-                    for (uint32_t i = 0; i < batch_count; ++i) {
-                        const size_t global_idx =
-                            static_cast<size_t>(batch_start) + static_cast<size_t>(i);
-                        TileFaceSpan& span = merge_tile_spans[global_idx];
-                        const uint32_t* fc = gpu_uf_ctx.h_face_counts + i * 4u;
-                        const uint64_t off =
-                            static_cast<uint64_t>(i) * gm::kMaxFacePortsPerFace;
+                    if (!cfg.compact_merge) {
+                        for (uint32_t i = 0; i < batch_count; ++i) {
+                            const size_t global_idx =
+                                static_cast<size_t>(batch_start) + static_cast<size_t>(i);
+                            TileFaceSpan& span = merge_tile_spans[global_idx];
+                            const uint32_t* fc = gpu_uf_ctx.h_face_counts + i * 4u;
+                            const uint64_t off =
+                                static_cast<uint64_t>(i) * gm::kMaxFacePortsPerFace;
 
-                        span.inner_offset = static_cast<uint32_t>(merge_all_inner.size());
-                        span.inner_count = fc[0];
-                        span.outer_offset = static_cast<uint32_t>(merge_all_outer.size());
-                        span.outer_count = fc[1];
-                        span.left_offset = static_cast<uint32_t>(merge_all_left.size());
-                        span.left_count = fc[2];
-                        span.right_offset = static_cast<uint32_t>(merge_all_right.size());
-                        span.right_count = fc[3];
-                        span.num_components = gpu_uf_ctx.h_num_components[i];
-                        span.num_primes = gpu_uf_ctx.h_num_primes[i];
+                            span.inner_offset = static_cast<uint32_t>(merge_all_inner.size());
+                            span.inner_count = fc[0];
+                            span.outer_offset = static_cast<uint32_t>(merge_all_outer.size());
+                            span.outer_count = fc[1];
+                            span.left_offset = static_cast<uint32_t>(merge_all_left.size());
+                            span.left_count = fc[2];
+                            span.right_offset = static_cast<uint32_t>(merge_all_right.size());
+                            span.right_count = fc[3];
+                            span.num_components = gpu_uf_ctx.h_num_components[i];
+                            span.num_primes = gpu_uf_ctx.h_num_primes[i];
 
-                        append_records(
-                            merge_all_inner,
-                            gpu_uf_ctx.h_face_inner + off,
-                            fc[0]);
-                        append_records(
-                            merge_all_outer,
-                            gpu_uf_ctx.h_face_outer + off,
-                            fc[1]);
-                        append_records(
-                            merge_all_left,
-                            gpu_uf_ctx.h_face_left + off,
-                            fc[2]);
-                        append_records(
-                            merge_all_right,
-                            gpu_uf_ctx.h_face_right + off,
-                            fc[3]);
+                            append_records(
+                                merge_all_inner,
+                                gpu_uf_ctx.h_face_inner + off,
+                                fc[0]);
+                            append_records(
+                                merge_all_outer,
+                                gpu_uf_ctx.h_face_outer + off,
+                                fc[1]);
+                            append_records(
+                                merge_all_left,
+                                gpu_uf_ctx.h_face_left + off,
+                                fc[2]);
+                            append_records(
+                                merge_all_right,
+                                gpu_uf_ctx.h_face_right + off,
+                                fc[3]);
+                        }
                     }
                 } else {
                     for (uint32_t i = 0; i < batch_count; ++i) {
@@ -1452,15 +1876,23 @@ int main(int argc, char** argv) {
         }
 
         if (cfg.gpu_boundary_merge) {
-            const PreparedMergeData prepared = prepare_boundary_merge_data(
-                jobs,
-                manifest.tile_side,
-                merge_tile_spans,
-                merge_all_inner,
-                merge_all_outer,
-                merge_all_left,
-                merge_all_right);
-            const CampaignSummary summary = run_gpu_boundary_merge(prepared, manifest.k_sq);
+            CampaignSummary summary{};
+            if (cfg.compact_merge) {
+                summary = run_compact_merge(
+                    compact_accumulator,
+                    campaign_topology.topo,
+                    manifest.k_sq);
+            } else {
+                const PreparedMergeData prepared = prepare_boundary_merge_data(
+                    jobs,
+                    manifest.tile_side,
+                    merge_tile_spans,
+                    merge_all_inner,
+                    merge_all_outer,
+                    merge_all_left,
+                    merge_all_right);
+                summary = run_gpu_boundary_merge(prepared, manifest.k_sq);
+            }
             const FacePortStreamHeader stream_header{
                 {'G', 'M', 'F', 'P'},
                 1,
