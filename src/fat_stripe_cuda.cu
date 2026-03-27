@@ -653,235 +653,7 @@ void validate_finalized_compact_blob(const CompactAccumulator& accumulator) {
     }
 }
 
-struct TileFaceSpan {
-    uint32_t inner_offset = 0;
-    uint32_t inner_count = 0;
-    uint32_t outer_offset = 0;
-    uint32_t outer_count = 0;
-    uint32_t left_offset = 0;
-    uint32_t left_count = 0;
-    uint32_t right_offset = 0;
-    uint32_t right_count = 0;
-    uint32_t num_components = 0;
-    uint32_t num_primes = 0;
-};
 
-struct MergePort {
-    int32_t a;
-    int32_t b;
-    uint32_t node_id;
-};
-
-struct SeamPair {
-    uint32_t tile_a;
-    uint32_t tile_b;
-};
-
-struct PreparedMergeData {
-    std::vector<MergePort> inner_ports;
-    std::vector<MergePort> outer_ports;
-    std::vector<MergePort> left_ports;
-    std::vector<MergePort> right_ports;
-    std::vector<uint32_t> inner_offsets;
-    std::vector<uint32_t> outer_offsets;
-    std::vector<uint32_t> left_offsets;
-    std::vector<uint32_t> right_offsets;
-    std::vector<SeamPair> horizontal_seams;
-    std::vector<SeamPair> vertical_seams;
-    std::vector<uint8_t> node_face_bits;
-    uint64_t total_primes = 0;
-    uint32_t num_tiles = 0;
-    int64_t a_min = 0;
-    int64_t a_max = 0;
-    int64_t b_min = 0;
-    int64_t b_max = 0;
-};
-
-uint64_t pack_tile_key(int32_t a_lo, int32_t b_lo) {
-    return (static_cast<uint64_t>(static_cast<uint32_t>(a_lo)) << 32u) |
-           static_cast<uint32_t>(b_lo);
-}
-
-void append_records(
-    std::vector<FacePortRecord>& dst,
-    const FacePortRecord* src,
-    uint32_t count
-) {
-    if (count == 0u) {
-        return;
-    }
-    dst.insert(dst.end(), src, src + static_cast<size_t>(count));
-}
-
-PreparedMergeData prepare_boundary_merge_data(
-    const std::vector<TileJob>& jobs,
-    uint32_t tile_side,
-    const std::vector<TileFaceSpan>& tile_spans,
-    const std::vector<FacePortRecord>& all_inner,
-    const std::vector<FacePortRecord>& all_outer,
-    const std::vector<FacePortRecord>& all_left,
-    const std::vector<FacePortRecord>& all_right
-) {
-    if (jobs.size() != tile_spans.size()) {
-        fail(kExitIoError, "tile span count mismatch while preparing boundary merge");
-    }
-
-    PreparedMergeData out;
-    out.num_tiles = static_cast<uint32_t>(jobs.size());
-    out.inner_offsets.resize(jobs.size() + 1u, 0u);
-    out.outer_offsets.resize(jobs.size() + 1u, 0u);
-    out.left_offsets.resize(jobs.size() + 1u, 0u);
-    out.right_offsets.resize(jobs.size() + 1u, 0u);
-    out.horizontal_seams.reserve(jobs.size());
-    out.vertical_seams.reserve(jobs.size());
-
-    std::unordered_map<uint64_t, uint32_t> tile_lookup;
-    tile_lookup.reserve(jobs.size() * 2u);
-
-    int32_t min_a_lo = 0;
-    int32_t max_a_lo = 0;
-    int32_t min_b_lo = 0;
-    int32_t max_b_lo = 0;
-    if (!jobs.empty()) {
-        min_a_lo = max_a_lo = jobs.front().a_lo;
-        min_b_lo = max_b_lo = jobs.front().b_lo;
-    }
-    for (size_t i = 0; i < jobs.size(); ++i) {
-        const TileJob& job = jobs[i];
-        tile_lookup.emplace(pack_tile_key(job.a_lo, job.b_lo), static_cast<uint32_t>(i));
-        min_a_lo = std::min(min_a_lo, job.a_lo);
-        max_a_lo = std::max(max_a_lo, job.a_lo);
-        min_b_lo = std::min(min_b_lo, job.b_lo);
-        max_b_lo = std::max(max_b_lo, job.b_lo);
-    }
-
-    const int64_t side = static_cast<int64_t>(tile_side);
-    out.a_min = static_cast<int64_t>(min_a_lo);
-    out.a_max = static_cast<int64_t>(max_a_lo) + side;
-    out.b_min = static_cast<int64_t>(min_b_lo);
-    out.b_max = static_cast<int64_t>(max_b_lo) + side;
-
-    constexpr uint32_t kUnsetNode = 0xFFFFFFFFu;
-    for (size_t tile_idx = 0; tile_idx < jobs.size(); ++tile_idx) {
-        const TileJob& tile = jobs[tile_idx];
-        const TileFaceSpan& span = tile_spans[tile_idx];
-        out.total_primes += static_cast<uint64_t>(span.num_primes);
-
-        out.inner_offsets[tile_idx] = static_cast<uint32_t>(out.inner_ports.size());
-        out.outer_offsets[tile_idx] = static_cast<uint32_t>(out.outer_ports.size());
-        out.left_offsets[tile_idx] = static_cast<uint32_t>(out.left_ports.size());
-        out.right_offsets[tile_idx] = static_cast<uint32_t>(out.right_ports.size());
-
-        std::vector<uint32_t> comp_to_node(span.num_components, kUnsetNode);
-        auto node_for = [&](uint32_t component_id) -> uint32_t {
-            if (component_id >= span.num_components) {
-                fail(
-                    kExitIoError,
-                    "face port component_id out of range during boundary merge prep");
-            }
-            uint32_t node = comp_to_node[component_id];
-            if (node == kUnsetNode) {
-                node = static_cast<uint32_t>(out.node_face_bits.size());
-                comp_to_node[component_id] = node;
-                out.node_face_bits.push_back(0u);
-            }
-            return node;
-        };
-
-        const auto append_face = [&](const std::vector<FacePortRecord>& source,
-                                     uint32_t offset,
-                                     uint32_t count,
-                                     uint8_t boundary_bit,
-                                     std::vector<MergePort>& target) {
-            const size_t begin = static_cast<size_t>(offset);
-            const size_t end = begin + static_cast<size_t>(count);
-            if (end > source.size()) {
-                fail(kExitIoError, "face span exceeds collected face-port buffer");
-            }
-            for (size_t i = begin; i < end; ++i) {
-                const FacePortRecord& port = source[i];
-                const uint32_t node = node_for(port.component_id);
-                if (boundary_bit != 0u) {
-                    out.node_face_bits[node] |= boundary_bit;
-                }
-                target.push_back(MergePort{
-                    port.a,
-                    port.b,
-                    node,
-                });
-            }
-        };
-
-        // Preserve seam ports for union, but only expose face bits on the
-        // campaign's actual outer rows/columns.
-        const bool touches_inner_boundary = tile.a_lo == min_a_lo;
-        const bool touches_outer_boundary = tile.a_lo == max_a_lo;
-        const bool touches_left_boundary = tile.b_lo == min_b_lo;
-        const bool touches_right_boundary = tile.b_lo == max_b_lo;
-
-        append_face(
-            all_inner,
-            span.inner_offset,
-            span.inner_count,
-            touches_inner_boundary ? gm::kFaceInnerBit : 0u,
-            out.inner_ports);
-        append_face(
-            all_outer,
-            span.outer_offset,
-            span.outer_count,
-            touches_outer_boundary ? gm::kFaceOuterBit : 0u,
-            out.outer_ports);
-        append_face(
-            all_left,
-            span.left_offset,
-            span.left_count,
-            touches_left_boundary ? gm::kFaceLeftBit : 0u,
-            out.left_ports);
-        append_face(
-            all_right,
-            span.right_offset,
-            span.right_count,
-            touches_right_boundary ? gm::kFaceRightBit : 0u,
-            out.right_ports);
-    }
-
-    out.inner_offsets[jobs.size()] = static_cast<uint32_t>(out.inner_ports.size());
-    out.outer_offsets[jobs.size()] = static_cast<uint32_t>(out.outer_ports.size());
-    out.left_offsets[jobs.size()] = static_cast<uint32_t>(out.left_ports.size());
-    out.right_offsets[jobs.size()] = static_cast<uint32_t>(out.right_ports.size());
-
-    for (size_t i = 0; i < jobs.size(); ++i) {
-        const TileJob& tile = jobs[i];
-        const int64_t a_lo = static_cast<int64_t>(tile.a_lo);
-        const int64_t b_lo = static_cast<int64_t>(tile.b_lo);
-
-        const int64_t right_b = b_lo + side;
-        if (right_b >= std::numeric_limits<int32_t>::min() &&
-            right_b <= std::numeric_limits<int32_t>::max()) {
-            const auto it = tile_lookup.find(pack_tile_key(tile.a_lo, static_cast<int32_t>(right_b)));
-            if (it != tile_lookup.end()) {
-                out.horizontal_seams.push_back(SeamPair{
-                    static_cast<uint32_t>(i),
-                    it->second,
-                });
-            }
-        }
-
-        const int64_t top_a = a_lo + side;
-        if (top_a >= std::numeric_limits<int32_t>::min() &&
-            top_a <= std::numeric_limits<int32_t>::max()) {
-            const auto it = tile_lookup.find(pack_tile_key(static_cast<int32_t>(top_a), tile.b_lo));
-            if (it != tile_lookup.end()) {
-                out.vertical_seams.push_back(SeamPair{
-                    static_cast<uint32_t>(i),
-                    it->second,
-                });
-            }
-        }
-    }
-
-    return out;
-}
 
 __device__ __forceinline__
 uint32_t merge_uf_find(uint32_t* parent, uint32_t x) {
@@ -925,42 +697,6 @@ void merge_init_parent_kernel(uint32_t* parent, uint32_t count) {
     }
 }
 
-__global__
-void merge_seams_kernel(
-    const MergePort* ports_a,
-    const uint32_t* offsets_a,
-    const MergePort* ports_b,
-    const uint32_t* offsets_b,
-    const SeamPair* seams,
-    uint32_t num_seams,
-    uint64_t k_sq,
-    uint32_t* parent
-) {
-    const uint32_t idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_seams) {
-        return;
-    }
-
-    const SeamPair seam = seams[idx];
-    const uint32_t a_start = offsets_a[seam.tile_a];
-    const uint32_t a_end = offsets_a[seam.tile_a + 1u];
-    const uint32_t b_start = offsets_b[seam.tile_b];
-    const uint32_t b_end = offsets_b[seam.tile_b + 1u];
-
-    for (uint32_t i = a_start; i < a_end; ++i) {
-        const MergePort pa = ports_a[i];
-        for (uint32_t j = b_start; j < b_end; ++j) {
-            const MergePort pb = ports_b[j];
-            const int64_t da = static_cast<int64_t>(pa.a) - static_cast<int64_t>(pb.a);
-            const int64_t db = static_cast<int64_t>(pa.b) - static_cast<int64_t>(pb.b);
-            const uint64_t dist_sq =
-                static_cast<uint64_t>(da * da) + static_cast<uint64_t>(db * db);
-            if (dist_sq <= k_sq) {
-                merge_uf_union(parent, pa.node_id, pb.node_id);
-            }
-        }
-    }
-}
 
 __global__
 void merge_flatten_kernel(uint32_t* parent, uint32_t count) {
@@ -1146,57 +882,257 @@ CampaignSummary run_compact_merge(
         return summary;
     }
 
-    CompactMergeDeviceBuffers buffers;
-    const auto alloc_and_copy_bytes =
-        [](void** dst, const void* src, size_t bytes) {
-            if (bytes == 0u) {
-                return;
-            }
-            CUDA_CHECK(cudaMalloc(dst, bytes));
-            CUDA_CHECK(cudaMemcpy(*dst, src, bytes, cudaMemcpyHostToDevice));
-        };
+    // Fix 1: Stream seam batches to avoid OOM from uploading the entire compact
+    // blob at once.  Only d_parent lives for the full merge; all other device
+    // buffers are scoped to each seam batch.
+    //
+    // Batch-size heuristic: query free VRAM, reserve 512 MB for the kernel,
+    // and divide the remainder by per-tile cost.
+    // Per-tile cost = kMaxCompactTileBytes (blob) + sizeof(uint64_t) (offset)
+    //               + sizeof(TileOrigin) (origin) + seam overhead (small).
+    constexpr size_t kMergeVramReserve = 512ULL << 20;
+    constexpr size_t kPerTileBatchBytes =
+        static_cast<size_t>(gm::kMaxCompactTileBytes) +
+        sizeof(uint64_t) + sizeof(gm::TileOrigin);
 
-    alloc_and_copy_bytes(
-        reinterpret_cast<void**>(&buffers.d_compact_blob),
-        accumulator.blob.data(),
-        accumulator.blob.size());
-    alloc_and_copy_bytes(
-        reinterpret_cast<void**>(&buffers.d_tile_offsets),
-        accumulator.tile_offsets.data(),
-        accumulator.tile_offsets.size() * sizeof(uint64_t));
-    alloc_and_copy_bytes(
-        reinterpret_cast<void**>(&buffers.d_seam_pairs),
-        topo.seam_pairs.data(),
-        topo.seam_pairs.size() * sizeof(gm::SeamPair));
-    alloc_and_copy_bytes(
-        reinterpret_cast<void**>(&buffers.d_tile_origins),
-        topo.tile_origins.data(),
-        topo.tile_origins.size() * sizeof(gm::TileOrigin));
+    uint32_t max_tiles_per_batch = static_cast<uint32_t>(topo.tile_origins.size());
+    {
+        size_t free_mem = 0;
+        size_t total_mem = 0;
+        if (cudaMemGetInfo(&free_mem, &total_mem) == cudaSuccess && free_mem > kMergeVramReserve) {
+            const size_t usable = free_mem - kMergeVramReserve;
+            // Also subtract d_parent allocation that is about to happen.
+            const size_t parent_bytes =
+                static_cast<size_t>(total_global_components) * sizeof(uint32_t);
+            const size_t for_tiles = usable > parent_bytes ? usable - parent_bytes : 0u;
+            if (kPerTileBatchBytes > 0u && for_tiles >= kPerTileBatchBytes) {
+                const size_t tiles_by_vram = for_tiles / kPerTileBatchBytes;
+                max_tiles_per_batch = static_cast<uint32_t>(
+                    std::min<size_t>(tiles_by_vram, std::numeric_limits<uint32_t>::max()));
+                if (max_tiles_per_batch == 0u) {
+                    max_tiles_per_batch = 1u;
+                }
+            }
+        }
+    }
+
+    std::fprintf(
+        stderr,
+        "compact-merge: total_global_components=%u num_seams=%u max_tiles_per_batch=%u\n",
+        total_global_components,
+        static_cast<unsigned>(topo.seam_pairs.size()),
+        max_tiles_per_batch);
+
+    // Allocate d_parent for the full campaign — the only permanent device allocation.
+    uint32_t* d_parent = nullptr;
     CUDA_CHECK(cudaMalloc(
-        &buffers.d_parent,
+        &d_parent,
         static_cast<size_t>(total_global_components) * sizeof(uint32_t)));
+
+    // RAII guard for d_parent so it is freed on any exception path.
+    struct ParentGuard {
+        uint32_t* ptr = nullptr;
+        ~ParentGuard() { if (ptr != nullptr) { cudaFree(ptr); } }
+    } parent_guard;
+    parent_guard.ptr = d_parent;
 
     constexpr uint32_t kBlock = 256u;
     const uint32_t node_blocks = (total_global_components + kBlock - 1u) / kBlock;
-    merge_init_parent_kernel<<<node_blocks, kBlock>>>(buffers.d_parent, total_global_components);
+    merge_init_parent_kernel<<<node_blocks, kBlock>>>(d_parent, total_global_components);
     CUDA_CHECK(cudaGetLastError());
 
     if (!topo.seam_pairs.empty()) {
-        const uint32_t seam_blocks =
-            (static_cast<uint32_t>(topo.seam_pairs.size()) + kBlock - 1u) / kBlock;
-        merge_seams_compact_kernel<<<seam_blocks, kBlock>>>(
-            buffers.d_compact_blob,
-            buffers.d_tile_offsets,
-            buffers.d_seam_pairs,
-            buffers.d_tile_origins,
-            static_cast<uint32_t>(topo.seam_pairs.size()),
-            buffers.d_parent,
-            static_cast<uint32_t>(k_sq));
-        CUDA_CHECK(cudaGetLastError());
+        // Build a global-tile-index → compact-blob-offset map for fast lookup.
+        const size_t num_global_tiles = accumulator.tile_offsets.size();
+
+        // Process seam_pairs in batches.  For each batch:
+        //   1. Collect unique tile IDs touched by the batch seams.
+        //   2. Build batch-local blob (concatenate just those tiles' compact data).
+        //   3. Build batch-local tile_offsets and tile_origins, remapped to batch indices.
+        //   4. Remap seam_pairs to batch-local tile indices.
+        //   5. Upload and launch kernel.
+        //   6. Free batch device buffers.
+
+        // Pre-build a tile-index → tile-size table to avoid re-parsing headers.
+        std::vector<uint32_t> tile_sizes(num_global_tiles);
+        for (size_t t = 0; t < num_global_tiles; ++t) {
+            const auto* hdr = reinterpret_cast<const gm::CompactTileHeader*>(
+                accumulator.blob.data() +
+                static_cast<size_t>(accumulator.tile_offsets[t]));
+            tile_sizes[t] = gm::compact_tile_size(hdr->num_components, hdr->num_ports);
+        }
+
+        const size_t total_seams = topo.seam_pairs.size();
+        size_t seam_batch_start = 0u;
+        uint32_t batch_idx = 0u;
+
+        while (seam_batch_start < total_seams) {
+            // Greedy: include seams until adding the next seam would exceed max_tiles_per_batch
+            // unique tiles.  Use a local set to track which tiles we've included.
+            std::unordered_map<uint32_t, uint32_t> global_to_local;
+            global_to_local.reserve(static_cast<size_t>(max_tiles_per_batch) * 2u);
+
+            size_t seam_batch_end = seam_batch_start;
+            while (seam_batch_end < total_seams) {
+                const gm::SeamPair& sp = topo.seam_pairs[seam_batch_end];
+                // Count how many new tiles this seam would add.
+                const uint32_t count_before =
+                    static_cast<uint32_t>(global_to_local.size());
+                const bool a_new = (global_to_local.count(sp.tile_a) == 0u);
+                const bool b_new = (global_to_local.count(sp.tile_b) == 0u);
+                const uint32_t would_add =
+                    (a_new ? 1u : 0u) + (b_new && sp.tile_b != sp.tile_a ? 1u : 0u);
+                if (count_before + would_add > max_tiles_per_batch && count_before > 0u) {
+                    // This seam would exceed the tile budget; stop here.
+                    break;
+                }
+                // Admit the seam: assign local IDs to new tiles.
+                if (a_new) {
+                    global_to_local[sp.tile_a] =
+                        static_cast<uint32_t>(global_to_local.size());
+                }
+                if (b_new && sp.tile_b != sp.tile_a) {
+                    global_to_local[sp.tile_b] =
+                        static_cast<uint32_t>(global_to_local.size());
+                }
+                ++seam_batch_end;
+            }
+
+            const uint32_t batch_num_tiles =
+                static_cast<uint32_t>(global_to_local.size());
+            const uint32_t batch_num_seams =
+                static_cast<uint32_t>(seam_batch_end - seam_batch_start);
+
+            std::fprintf(
+                stderr,
+                "compact-merge: seam batch %u: seams [%zu, %zu) = %u seams, %u tiles\n",
+                batch_idx,
+                seam_batch_start, seam_batch_end,
+                batch_num_seams,
+                batch_num_tiles);
+
+            // Build ordered tile list (local_id → global_id).
+            std::vector<uint32_t> local_to_global(batch_num_tiles);
+            for (const auto& kv : global_to_local) {
+                local_to_global[kv.second] = kv.first;
+            }
+
+            // Build batch-local compact blob, tile_offsets (relative to batch blob start),
+            // and tile_origins.
+            std::vector<uint8_t> batch_blob;
+            std::vector<uint64_t> batch_tile_offsets(batch_num_tiles);
+            std::vector<gm::TileOrigin> batch_tile_origins(batch_num_tiles);
+            {
+                size_t running_offset = 0u;
+                for (uint32_t li = 0; li < batch_num_tiles; ++li) {
+                    const uint32_t gi = local_to_global[li];
+                    const size_t src_offset =
+                        static_cast<size_t>(accumulator.tile_offsets[gi]);
+                    const uint32_t sz = tile_sizes[gi];
+                    batch_tile_offsets[li] = static_cast<uint64_t>(running_offset);
+                    batch_tile_origins[li] = topo.tile_origins[gi];
+                    const uint8_t* src = accumulator.blob.data() + src_offset;
+                    batch_blob.insert(batch_blob.end(), src, src + sz);
+                    running_offset += sz;
+                }
+            }
+
+            // Build batch-local seam_pairs (remapped tile indices).
+            std::vector<gm::SeamPair> batch_seam_pairs(batch_num_seams);
+            for (uint32_t si = 0; si < batch_num_seams; ++si) {
+                const gm::SeamPair& sp = topo.seam_pairs[seam_batch_start + si];
+                batch_seam_pairs[si] = gm::SeamPair{
+                    global_to_local.at(sp.tile_a),
+                    global_to_local.at(sp.tile_b),
+                    sp.axis,
+                };
+            }
+
+            // Upload batch to device.
+            uint8_t* d_batch_blob = nullptr;
+            uint64_t* d_batch_offsets = nullptr;
+            gm::SeamPair* d_batch_seams = nullptr;
+            gm::TileOrigin* d_batch_origins = nullptr;
+
+            // RAII guard for batch allocations.
+            struct BatchGuard {
+                uint8_t* blob = nullptr;
+                uint64_t* offsets = nullptr;
+                gm::SeamPair* seams = nullptr;
+                gm::TileOrigin* origins = nullptr;
+                ~BatchGuard() {
+                    if (blob    != nullptr) cudaFree(blob);
+                    if (offsets != nullptr) cudaFree(offsets);
+                    if (seams   != nullptr) cudaFree(seams);
+                    if (origins != nullptr) cudaFree(origins);
+                }
+            } batch_guard;
+
+            if (!batch_blob.empty()) {
+                CUDA_CHECK(cudaMalloc(&d_batch_blob, batch_blob.size()));
+                batch_guard.blob = d_batch_blob;
+                CUDA_CHECK(cudaMemcpy(
+                    d_batch_blob, batch_blob.data(), batch_blob.size(),
+                    cudaMemcpyHostToDevice));
+            }
+            if (!batch_tile_offsets.empty()) {
+                CUDA_CHECK(cudaMalloc(
+                    &d_batch_offsets,
+                    batch_tile_offsets.size() * sizeof(uint64_t)));
+                batch_guard.offsets = d_batch_offsets;
+                CUDA_CHECK(cudaMemcpy(
+                    d_batch_offsets,
+                    batch_tile_offsets.data(),
+                    batch_tile_offsets.size() * sizeof(uint64_t),
+                    cudaMemcpyHostToDevice));
+            }
+            if (!batch_seam_pairs.empty()) {
+                CUDA_CHECK(cudaMalloc(
+                    &d_batch_seams,
+                    batch_seam_pairs.size() * sizeof(gm::SeamPair)));
+                batch_guard.seams = d_batch_seams;
+                CUDA_CHECK(cudaMemcpy(
+                    d_batch_seams,
+                    batch_seam_pairs.data(),
+                    batch_seam_pairs.size() * sizeof(gm::SeamPair),
+                    cudaMemcpyHostToDevice));
+            }
+            if (!batch_tile_origins.empty()) {
+                CUDA_CHECK(cudaMalloc(
+                    &d_batch_origins,
+                    batch_tile_origins.size() * sizeof(gm::TileOrigin)));
+                batch_guard.origins = d_batch_origins;
+                CUDA_CHECK(cudaMemcpy(
+                    d_batch_origins,
+                    batch_tile_origins.data(),
+                    batch_tile_origins.size() * sizeof(gm::TileOrigin),
+                    cudaMemcpyHostToDevice));
+            }
+
+            // Launch seam kernel for this batch.
+            if (batch_num_seams > 0u) {
+                const uint32_t seam_blocks =
+                    (batch_num_seams + kBlock - 1u) / kBlock;
+                merge_seams_compact_kernel<<<seam_blocks, kBlock>>>(
+                    d_batch_blob,
+                    d_batch_offsets,
+                    d_batch_seams,
+                    d_batch_origins,
+                    batch_num_seams,
+                    d_parent,
+                    static_cast<uint32_t>(k_sq));
+                CUDA_CHECK(cudaGetLastError());
+                CUDA_CHECK(cudaDeviceSynchronize());
+            }
+            // BatchGuard destructor frees d_batch_blob, offsets, seams, origins here.
+
+            seam_batch_start = seam_batch_end;
+            ++batch_idx;
+        }
     }
 
     for (int pass = 0; pass < 3; ++pass) {
-        merge_flatten_kernel<<<node_blocks, kBlock>>>(buffers.d_parent, total_global_components);
+        merge_flatten_kernel<<<node_blocks, kBlock>>>(d_parent, total_global_components);
         CUDA_CHECK(cudaGetLastError());
     }
     CUDA_CHECK(cudaDeviceSynchronize());
@@ -1204,7 +1140,7 @@ CampaignSummary run_compact_merge(
     std::vector<uint32_t> parent(total_global_components);
     CUDA_CHECK(cudaMemcpy(
         parent.data(),
-        buffers.d_parent,
+        d_parent,
         static_cast<size_t>(total_global_components) * sizeof(uint32_t),
         cudaMemcpyDeviceToHost));
 
@@ -1219,11 +1155,36 @@ CampaignSummary run_compact_merge(
         parent[i] = host_find(i);
     }
 
-    constexpr uint32_t kUnset = 0xFFFFFFFFu;
-    std::vector<uint32_t> root_to_dense(total_global_components, kUnset);
-    std::vector<uint8_t> dense_face_bits;
-    dense_face_bits.reserve(total_global_components);
+    // Fix 2: replace root_to_dense (4 bytes × total_global_components, ~660 MB at 165M
+    // components) with root_flags (1 byte × total_global_components, ~165 MB).
+    //
+    // Strategy: use 4 bit-flags per root packed into one uint8_t:
+    //   bits 0-3 = accumulated tile face-bits (same as before)
+    //   bit  4   = kHasInnerBit: at least one port of this root is near the inner boundary
+    //   bit  5   = kHasOuterBit: at least one port of this root is near the outer boundary
+    //
+    // Pass 1: sweep tiles, OR face-bits into root_flags[root].
+    //   A root r is live iff root_flags[r] != 0 (it owns ≥1 component).
+    // Count distinct live roots → summary.num_components.
+    //
+    // Pass 2: sweep ports, set kHasInnerBit/kHasOuterBit on root_flags[root].
+    //
+    // Spanning check: any root where (root_flags[r] & kHasInnerBit) &&
+    //                               (root_flags[r] & kHasOuterBit) is a spanning component.
+    // No dense-ID array needed.
 
+    // Bit assignments in root_flags[]:
+    //   bits 0-3 : accumulated compact face-bits (FACE_INNER/OUTER/LEFT/RIGHT)
+    //   bit 4    : kHasInnerBit — at least one port near inner radial boundary
+    //   bit 5    : kHasOuterBit — at least one port near outer radial boundary
+    //   bit 7    : kLiveBit    — this index is the canonical root of ≥1 component
+    constexpr uint8_t kHasInnerBit = 0x10u;
+    constexpr uint8_t kHasOuterBit = 0x20u;
+    constexpr uint8_t kLiveBit     = 0x80u;
+
+    std::vector<uint8_t> root_flags(total_global_components, 0u);
+
+    // Pass 1: sweep tiles, accumulate face-bits and mark live roots.
     for (size_t tile_idx = 0; tile_idx < accumulator.tile_offsets.size(); ++tile_idx) {
         const uint64_t tile_offset = accumulator.tile_offsets[tile_idx];
         const auto* header = reinterpret_cast<const gm::CompactTileHeader*>(
@@ -1234,17 +1195,19 @@ CampaignSummary run_compact_merge(
         for (uint32_t local_comp = 0; local_comp < header->num_components; ++local_comp) {
             const uint32_t global_comp = header->component_base + local_comp;
             const uint32_t root = parent[global_comp];
-            uint32_t dense = root_to_dense[root];
-            if (dense == kUnset) {
-                dense = static_cast<uint32_t>(dense_face_bits.size());
-                root_to_dense[root] = dense;
-                dense_face_bits.push_back(0u);
-            }
-            dense_face_bits[dense] |= face_bits[local_comp];
+            root_flags[root] |= face_bits[local_comp] | kLiveBit;
         }
     }
 
-    summary.num_components = static_cast<uint32_t>(dense_face_bits.size());
+    // Count distinct live roots = number of merged components.
+    uint32_t num_dense = 0u;
+    for (uint32_t r = 0; r < total_global_components; ++r) {
+        if ((root_flags[r] & kLiveBit) != 0u) {
+            ++num_dense;
+        }
+    }
+
+    summary.num_components = num_dense;
 
     int64_t a_min = topo.grid.r_min;
     int64_t a_max = topo.grid.r_max;
@@ -1277,9 +1240,8 @@ CampaignSummary run_compact_merge(
     const long double r_inner_sq = r_inner_thresh * r_inner_thresh;
     const long double r_outer_sq = r_outer_thresh * r_outer_thresh;
 
-    std::vector<uint8_t> has_inner(summary.num_components, 0u);
-    std::vector<uint8_t> has_outer(summary.num_components, 0u);
-
+    // Pass 2: sweep ports, set kHasInnerBit/kHasOuterBit on root_flags[root].
+    // No dense-ID mapping needed — we operate directly on the canonical root.
     for (size_t tile_idx = 0; tile_idx < accumulator.tile_offsets.size(); ++tile_idx) {
         const uint64_t tile_offset = accumulator.tile_offsets[tile_idx];
         const auto* header = reinterpret_cast<const gm::CompactTileHeader*>(
@@ -1291,24 +1253,28 @@ CampaignSummary run_compact_merge(
 
         for (uint32_t p = 0; p < header->num_ports; ++p) {
             const gm::CompactPortRecord& port = ports[p];
-            const uint32_t dense = root_to_dense[parent[port.comp_id]];
+            const uint32_t root = parent[port.comp_id];
             const long double a =
                 static_cast<long double>(origin.a_lo + static_cast<int64_t>(port.x));
             const long double b =
                 static_cast<long double>(origin.b_lo + static_cast<int64_t>(port.y));
             const long double r_sq = a * a + b * b;
             if (r_sq <= r_inner_sq) {
-                has_inner[dense] = 1u;
+                root_flags[root] |= kHasInnerBit;
             }
             if (r_sq >= r_outer_sq) {
-                has_outer[dense] = 1u;
+                root_flags[root] |= kHasOuterBit;
             }
         }
     }
 
-    for (uint32_t dense = 0; dense < summary.num_components; ++dense) {
-        if (has_inner[dense] != 0u && has_outer[dense] != 0u) {
-            summary.spanning_component = static_cast<int32_t>(dense);
+    // Find a spanning root: any live root with both inner and outer radial bits set.
+    // Report as spanning_component = 0 (the API only checks >= 0 for existence).
+    for (uint32_t r = 0; r < total_global_components; ++r) {
+        if ((root_flags[r] & kLiveBit) != 0u &&
+            (root_flags[r] & kHasInnerBit) != 0u &&
+            (root_flags[r] & kHasOuterBit) != 0u) {
+            summary.spanning_component = 0;
             break;
         }
     }
@@ -1326,201 +1292,12 @@ CampaignSummary run_compact_merge(
     return summary;
 }
 
-struct MergeDeviceBuffers {
-    MergePort* d_inner_ports = nullptr;
-    MergePort* d_outer_ports = nullptr;
-    MergePort* d_left_ports = nullptr;
-    MergePort* d_right_ports = nullptr;
-    uint32_t* d_inner_offsets = nullptr;
-    uint32_t* d_outer_offsets = nullptr;
-    uint32_t* d_left_offsets = nullptr;
-    uint32_t* d_right_offsets = nullptr;
-    SeamPair* d_horizontal_seams = nullptr;
-    SeamPair* d_vertical_seams = nullptr;
-    uint32_t* d_parent = nullptr;
 
-    ~MergeDeviceBuffers() {
-        if (d_inner_ports != nullptr) cudaFree(d_inner_ports);
-        if (d_outer_ports != nullptr) cudaFree(d_outer_ports);
-        if (d_left_ports != nullptr) cudaFree(d_left_ports);
-        if (d_right_ports != nullptr) cudaFree(d_right_ports);
-        if (d_inner_offsets != nullptr) cudaFree(d_inner_offsets);
-        if (d_outer_offsets != nullptr) cudaFree(d_outer_offsets);
-        if (d_left_offsets != nullptr) cudaFree(d_left_offsets);
-        if (d_right_offsets != nullptr) cudaFree(d_right_offsets);
-        if (d_horizontal_seams != nullptr) cudaFree(d_horizontal_seams);
-        if (d_vertical_seams != nullptr) cudaFree(d_vertical_seams);
-        if (d_parent != nullptr) cudaFree(d_parent);
-    }
-};
+// run_gpu_boundary_merge() deleted (Fix 5 — legacy path removed).
+// Use run_compact_merge() exclusively.
 
-CampaignSummary run_gpu_boundary_merge(const PreparedMergeData& data, uint64_t k_sq) {
-    CampaignSummary summary{};
-    summary.total_primes = data.total_primes;
-    summary.num_tiles = data.num_tiles;
-    summary.num_components = 0u;
-    summary.spanning_component = -1;
-    summary.reserved = 0u;
 
-    const uint32_t num_nodes = static_cast<uint32_t>(data.node_face_bits.size());
-    if (num_nodes == 0u) {
-        return summary;
-    }
 
-    MergeDeviceBuffers buffers;
-    const auto alloc_and_copy = [](auto** dst, const auto& src) {
-        using Ptr = std::remove_reference_t<decltype(*dst)>;
-        using T = std::remove_pointer_t<Ptr>;
-        if (src.empty()) {
-            return;
-        }
-        CUDA_CHECK(cudaMalloc(dst, src.size() * sizeof(T)));
-        CUDA_CHECK(cudaMemcpy(
-            *dst,
-            src.data(),
-            src.size() * sizeof(T),
-            cudaMemcpyHostToDevice));
-    };
-
-    alloc_and_copy(&buffers.d_inner_ports, data.inner_ports);
-    alloc_and_copy(&buffers.d_outer_ports, data.outer_ports);
-    alloc_and_copy(&buffers.d_left_ports, data.left_ports);
-    alloc_and_copy(&buffers.d_right_ports, data.right_ports);
-    alloc_and_copy(&buffers.d_inner_offsets, data.inner_offsets);
-    alloc_and_copy(&buffers.d_outer_offsets, data.outer_offsets);
-    alloc_and_copy(&buffers.d_left_offsets, data.left_offsets);
-    alloc_and_copy(&buffers.d_right_offsets, data.right_offsets);
-    alloc_and_copy(&buffers.d_horizontal_seams, data.horizontal_seams);
-    alloc_and_copy(&buffers.d_vertical_seams, data.vertical_seams);
-
-    CUDA_CHECK(cudaMalloc(&buffers.d_parent, static_cast<size_t>(num_nodes) * sizeof(uint32_t)));
-
-    constexpr uint32_t kBlock = 256u;
-    const uint32_t node_blocks = (num_nodes + kBlock - 1u) / kBlock;
-    merge_init_parent_kernel<<<node_blocks, kBlock>>>(buffers.d_parent, num_nodes);
-    CUDA_CHECK(cudaGetLastError());
-
-    if (!data.horizontal_seams.empty()) {
-        const uint32_t seam_blocks =
-            (static_cast<uint32_t>(data.horizontal_seams.size()) + kBlock - 1u) / kBlock;
-        merge_seams_kernel<<<seam_blocks, kBlock>>>(
-            buffers.d_right_ports,
-            buffers.d_right_offsets,
-            buffers.d_left_ports,
-            buffers.d_left_offsets,
-            buffers.d_horizontal_seams,
-            static_cast<uint32_t>(data.horizontal_seams.size()),
-            k_sq,
-            buffers.d_parent);
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    if (!data.vertical_seams.empty()) {
-        const uint32_t seam_blocks =
-            (static_cast<uint32_t>(data.vertical_seams.size()) + kBlock - 1u) / kBlock;
-        merge_seams_kernel<<<seam_blocks, kBlock>>>(
-            buffers.d_outer_ports,
-            buffers.d_outer_offsets,
-            buffers.d_inner_ports,
-            buffers.d_inner_offsets,
-            buffers.d_vertical_seams,
-            static_cast<uint32_t>(data.vertical_seams.size()),
-            k_sq,
-            buffers.d_parent);
-        CUDA_CHECK(cudaGetLastError());
-    }
-
-    for (int pass = 0; pass < 3; ++pass) {
-        merge_flatten_kernel<<<node_blocks, kBlock>>>(buffers.d_parent, num_nodes);
-        CUDA_CHECK(cudaGetLastError());
-    }
-    CUDA_CHECK(cudaDeviceSynchronize());
-
-    std::vector<uint32_t> parent(num_nodes);
-    CUDA_CHECK(cudaMemcpy(
-        parent.data(),
-        buffers.d_parent,
-        static_cast<size_t>(num_nodes) * sizeof(uint32_t),
-        cudaMemcpyDeviceToHost));
-
-    auto host_find = [&](uint32_t x) {
-        while (parent[x] != x) {
-            parent[x] = parent[parent[x]];
-            x = parent[x];
-        }
-        return x;
-    };
-    for (uint32_t i = 0; i < num_nodes; ++i) {
-        parent[i] = host_find(i);
-    }
-
-    constexpr uint32_t kUnset = 0xFFFFFFFFu;
-    std::vector<uint32_t> root_to_dense(num_nodes, kUnset);
-    std::vector<uint8_t> dense_face_bits;
-    dense_face_bits.reserve(num_nodes);
-
-    for (uint32_t node = 0; node < num_nodes; ++node) {
-        const uint32_t root = parent[node];
-        uint32_t dense = root_to_dense[root];
-        if (dense == kUnset) {
-            dense = static_cast<uint32_t>(dense_face_bits.size());
-            root_to_dense[root] = dense;
-            dense_face_bits.push_back(0u);
-        }
-        dense_face_bits[dense] |= data.node_face_bits[node];
-    }
-
-    summary.num_components = static_cast<uint32_t>(dense_face_bits.size());
-
-    // Match the Rust moat verdict by testing merged face-port coordinates
-    // against radial thresholds instead of rectangular INNER|OUTER bits.
-    const long double collar = std::ceil(std::sqrt(static_cast<long double>(k_sq)));
-    const long double a_start = static_cast<long double>(data.a_min);
-    const long double a_end = static_cast<long double>(data.a_max);
-    const long double b_min = static_cast<long double>(data.b_min);
-    const long double b_max = static_cast<long double>(data.b_max);
-    const bool off_axis = data.b_min > 0;
-    const long double r_inner_geom =
-        off_axis ? std::sqrt(a_start * a_start + b_min * b_min) : a_start;
-    const long double r_outer_geom =
-        off_axis ? std::sqrt(a_end * a_end + b_max * b_max) : a_end;
-    const long double r_inner_thresh = r_inner_geom + collar;
-    const long double r_outer_thresh = std::max(r_outer_geom - collar, 0.0L);
-    const long double r_inner_sq = r_inner_thresh * r_inner_thresh;
-    const long double r_outer_sq = r_outer_thresh * r_outer_thresh;
-
-    std::vector<uint8_t> has_inner(summary.num_components, 0u);
-    std::vector<uint8_t> has_outer(summary.num_components, 0u);
-
-    const auto mark_ports = [&](const std::vector<MergePort>& ports) {
-        for (const MergePort& port : ports) {
-            const uint32_t root = parent[port.node_id];
-            const uint32_t dense = root_to_dense[root];
-            const long double a = static_cast<long double>(port.a);
-            const long double b = static_cast<long double>(port.b);
-            const long double r_sq = a * a + b * b;
-            if (r_sq <= r_inner_sq) {
-                has_inner[dense] = 1u;
-            }
-            if (r_sq >= r_outer_sq) {
-                has_outer[dense] = 1u;
-            }
-        }
-    };
-
-    mark_ports(data.inner_ports);
-    mark_ports(data.outer_ports);
-    mark_ports(data.left_ports);
-    mark_ports(data.right_ports);
-
-    for (uint32_t i = 0; i < summary.num_components; ++i) {
-        if (has_inner[i] != 0u && has_outer[i] != 0u) {
-            summary.spanning_component = static_cast<int32_t>(i);
-            break;
-        }
-    }
-    return summary;
-}
 
 } // namespace
 
@@ -1678,19 +1455,6 @@ int main(int argc, char** argv) {
             write_exact(output.file, stream_header, "face port stream header");
         }
 
-        std::vector<TileFaceSpan> merge_tile_spans;
-        std::vector<FacePortRecord> merge_all_inner;
-        std::vector<FacePortRecord> merge_all_outer;
-        std::vector<FacePortRecord> merge_all_left;
-        std::vector<FacePortRecord> merge_all_right;
-        if (cfg.gpu_boundary_merge && !cfg.compact_merge) {
-            merge_tile_spans.resize(static_cast<size_t>(manifest.num_jobs));
-            const size_t reserve_ports = static_cast<size_t>(manifest.num_jobs) * 16u;
-            merge_all_inner.reserve(reserve_ports);
-            merge_all_outer.reserve(reserve_ports);
-            merge_all_left.reserve(reserve_ports);
-            merge_all_right.reserve(reserve_ports);
-        }
 
         const int64_t collar = sample_geom.collar;
         for (uint32_t batch_start = 0;
@@ -1757,46 +1521,7 @@ int main(int argc, char** argv) {
                         static_cast<uint64_t>(gpu_uf_ctx.h_num_primes[i]);
                 }
 
-                if (cfg.gpu_boundary_merge) {
-                    if (!cfg.compact_merge) {
-                        for (uint32_t i = 0; i < batch_count; ++i) {
-                            const size_t global_idx =
-                                static_cast<size_t>(batch_start) + static_cast<size_t>(i);
-                            TileFaceSpan& span = merge_tile_spans[global_idx];
-                            const uint32_t* fc = gpu_uf_ctx.h_face_counts + i * 4u;
-                            const uint64_t off =
-                                static_cast<uint64_t>(i) * gm::kMaxFacePortsPerFace;
-
-                            span.inner_offset = static_cast<uint32_t>(merge_all_inner.size());
-                            span.inner_count = fc[0];
-                            span.outer_offset = static_cast<uint32_t>(merge_all_outer.size());
-                            span.outer_count = fc[1];
-                            span.left_offset = static_cast<uint32_t>(merge_all_left.size());
-                            span.left_count = fc[2];
-                            span.right_offset = static_cast<uint32_t>(merge_all_right.size());
-                            span.right_count = fc[3];
-                            span.num_components = gpu_uf_ctx.h_num_components[i];
-                            span.num_primes = gpu_uf_ctx.h_num_primes[i];
-
-                            append_records(
-                                merge_all_inner,
-                                gpu_uf_ctx.h_face_inner + off,
-                                fc[0]);
-                            append_records(
-                                merge_all_outer,
-                                gpu_uf_ctx.h_face_outer + off,
-                                fc[1]);
-                            append_records(
-                                merge_all_left,
-                                gpu_uf_ctx.h_face_left + off,
-                                fc[2]);
-                            append_records(
-                                merge_all_right,
-                                gpu_uf_ctx.h_face_right + off,
-                                fc[3]);
-                        }
-                    }
-                } else {
+                if (!cfg.gpu_boundary_merge) {
                     for (uint32_t i = 0; i < batch_count; ++i) {
                         const TileJob& job =
                             jobs[static_cast<size_t>(batch_start) + static_cast<size_t>(i)];
@@ -1825,48 +1550,12 @@ int main(int argc, char** argv) {
                             manifest.k_sq);
                 }
 
-                if (cfg.gpu_boundary_merge) {
-                    for (uint32_t i = 0; i < batch_count; ++i) {
-                        const size_t global_idx =
-                            static_cast<size_t>(batch_start) + static_cast<size_t>(i);
-                        const gm::TileFacePorts& ports = batch_results[static_cast<size_t>(i)];
-                        TileFaceSpan& span = merge_tile_spans[global_idx];
-                        span.inner_offset = static_cast<uint32_t>(merge_all_inner.size());
-                        span.inner_count = static_cast<uint32_t>(ports.face_inner.size());
-                        span.outer_offset = static_cast<uint32_t>(merge_all_outer.size());
-                        span.outer_count = static_cast<uint32_t>(ports.face_outer.size());
-                        span.left_offset = static_cast<uint32_t>(merge_all_left.size());
-                        span.left_count = static_cast<uint32_t>(ports.face_left.size());
-                        span.right_offset = static_cast<uint32_t>(merge_all_right.size());
-                        span.right_count = static_cast<uint32_t>(ports.face_right.size());
-                        span.num_components = ports.num_components;
-                        span.num_primes = ports.num_primes;
-
-                        merge_all_inner.insert(
-                            merge_all_inner.end(),
-                            ports.face_inner.begin(),
-                            ports.face_inner.end());
-                        merge_all_outer.insert(
-                            merge_all_outer.end(),
-                            ports.face_outer.begin(),
-                            ports.face_outer.end());
-                        merge_all_left.insert(
-                            merge_all_left.end(),
-                            ports.face_left.begin(),
-                            ports.face_left.end());
-                        merge_all_right.insert(
-                            merge_all_right.end(),
-                            ports.face_right.begin(),
-                            ports.face_right.end());
-                    }
-                } else {
-                    for (uint32_t i = 0; i < batch_count; ++i) {
-                        write_tile_result(
-                            output.file,
-                            jobs[static_cast<size_t>(batch_start) + static_cast<size_t>(i)],
-                            manifest.tile_side,
-                            batch_results[static_cast<size_t>(i)]);
-                    }
+                for (uint32_t i = 0; i < batch_count; ++i) {
+                    write_tile_result(
+                        output.file,
+                        jobs[static_cast<size_t>(batch_start) + static_cast<size_t>(i)],
+                        manifest.tile_side,
+                        batch_results[static_cast<size_t>(i)]);
                 }
             }
         }
@@ -1875,24 +1564,26 @@ int main(int argc, char** argv) {
             finalize_compact_accumulator(compact_accumulator);
         }
 
+        // Phase 1 (sieve + UF) is complete. Free phase-1 GPU staging before
+        // entering phase 2 (merge) so their VRAM is available to the seam kernel.
+        if (cfg.compact_merge) {
+            bind_gpu_uf_compact_buffers(gpu_uf_ctx, nullptr, nullptr, nullptr);
+            gm::destroy_gpu_uf_context(&gpu_uf_ctx);
+            gm::destroy_batch_context(&batch_ctx);
+            // gpu_uf_compact_staging RAII destructor fires here at scope exit,
+            // but we want it freed now — explicitly release via a swap.
+            {
+                GpuUfCompactStaging tmp;
+                std::swap(tmp, gpu_uf_compact_staging);
+            } // tmp destructor frees d_exposed_face_masks, d_compact_output, d_compact_status
+        }
+
         if (cfg.gpu_boundary_merge) {
             CampaignSummary summary{};
-            if (cfg.compact_merge) {
-                summary = run_compact_merge(
-                    compact_accumulator,
-                    campaign_topology.topo,
-                    manifest.k_sq);
-            } else {
-                const PreparedMergeData prepared = prepare_boundary_merge_data(
-                    jobs,
-                    manifest.tile_side,
-                    merge_tile_spans,
-                    merge_all_inner,
-                    merge_all_outer,
-                    merge_all_left,
-                    merge_all_right);
-                summary = run_gpu_boundary_merge(prepared, manifest.k_sq);
-            }
+            summary = run_compact_merge(
+                compact_accumulator,
+                campaign_topology.topo,
+                manifest.k_sq);
             const FacePortStreamHeader stream_header{
                 {'G', 'M', 'F', 'P'},
                 1,
@@ -1910,11 +1601,14 @@ int main(int argc, char** argv) {
             fail(kExitIoError, "failed to flush output stream");
         }
 
-        if (cfg.gpu_uf) {
+        if (cfg.gpu_uf && !cfg.compact_merge) {
+            // Already freed above for compact_merge path.
             bind_gpu_uf_compact_buffers(gpu_uf_ctx, nullptr, nullptr, nullptr);
             gm::destroy_gpu_uf_context(&gpu_uf_ctx);
         }
-        gm::destroy_batch_context(&batch_ctx);
+        if (!cfg.compact_merge) {
+            gm::destroy_batch_context(&batch_ctx);
+        }
         return kExitSuccess;
     } catch (const AppError& error) {
         std::fprintf(stderr, "%s\n", error.what());

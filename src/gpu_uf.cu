@@ -755,10 +755,6 @@ cudaError_t create_gpu_uf_context(
     if (status != cudaSuccess) {
         goto cleanup;
     }
-    status = cudaMalloc(&next.d_comp_counter, tile_count * sizeof(uint32_t));
-    if (status != cudaSuccess) {
-        goto cleanup;
-    }
     status = cudaMalloc(&next.d_rank, tile_count * uf_point_count * sizeof(uint8_t));
     if (status != cudaSuccess) {
         goto cleanup;
@@ -821,11 +817,6 @@ cudaError_t create_gpu_uf_context(
         goto cleanup;
     }
 
-    status = cudaMalloc(&next.d_origin_set, tile_count * sizeof(int32_t));
-    if (status != cudaSuccess) {
-        goto cleanup;
-    }
-
     status = cudaMallocHost(&next.h_face_inner, tile_count * face_cap * sizeof(FacePortRecord));
     if (status != cudaSuccess) {
         goto cleanup;
@@ -865,9 +856,6 @@ void destroy_gpu_uf_context(GpuUfContext* ctx) {
     if (ctx->d_comp_id != nullptr) {
         cudaFree(ctx->d_comp_id);
     }
-    if (ctx->d_comp_counter != nullptr) {
-        cudaFree(ctx->d_comp_counter);
-    }
     if (ctx->d_rank != nullptr) {
         cudaFree(ctx->d_rank);
     }
@@ -889,10 +877,6 @@ void destroy_gpu_uf_context(GpuUfContext* ctx) {
     if (ctx->d_face_right != nullptr) {
         cudaFree(ctx->d_face_right);
     }
-    if (ctx->d_origin_set != nullptr) {
-        cudaFree(ctx->d_origin_set);
-    }
-
     free_mirror(ctx->d_face_counts, ctx->h_face_counts);
     free_mirror(ctx->d_num_components, ctx->h_num_components);
     free_mirror(ctx->d_origin_component, ctx->h_origin_component);

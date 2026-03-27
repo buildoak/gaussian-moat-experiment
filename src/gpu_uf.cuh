@@ -61,7 +61,6 @@ struct GpuUfContext {
     // Device allocations – sized [batch_cap * kMaxPrimesPerTile]
     uint32_t* d_parent       = nullptr; // UF parent array
     uint32_t* d_comp_id      = nullptr; // component ID per point (kNoComponent initially)
-    uint32_t* d_comp_counter = nullptr; // per-tile atomic counters for component IDs [batch_cap]
     uint8_t*  d_rank         = nullptr; // UF rank array [batch_cap * kMaxPrimesPerTile]
 
     // Compact-emission inputs/outputs. The caller must set
@@ -81,7 +80,6 @@ struct GpuUfContext {
     uint32_t* d_num_components   = nullptr;
     int32_t*  d_origin_component = nullptr;
     uint32_t* d_num_primes       = nullptr;
-    int32_t*  d_origin_set       = nullptr; // boolean flag: has origin been set for this tile?
 
     // Pinned host mirrors for result download
     FacePortRecord* h_face_inner = nullptr;
