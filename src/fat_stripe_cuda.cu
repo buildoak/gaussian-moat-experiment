@@ -912,8 +912,7 @@ int main(int argc, char** argv) {
             const size_t per_tile_bitmap =
                 bitmap_words_local * sizeof(uint32_t) * 2u; // device + pinned host
             const size_t per_tile_uf =
-                static_cast<size_t>(sample_geom.total_points) * (4u + 4u) + // parent + comp_id
-                static_cast<size_t>(sample_geom.total_points) * 1u +         // rank
+                static_cast<size_t>(gm::kMaxPrimesPerTile) * (4u + 4u + 1u) + // parent + comp_id + rank
                 4u * static_cast<size_t>(gm::kMaxFacePortsPerFace) * sizeof(FacePortRecord) * 2u +
                 64u;
             const size_t per_tile_total = per_tile_bitmap + per_tile_uf;

@@ -602,3 +602,21 @@ mod tests {
         buf.extend_from_slice(cast_slice(&ports.right));
     }
 }
+
+#[repr(C, packed)]
+pub struct CompactPortRecord {
+    pub x: u16,
+    pub y: u16,
+    pub comp_id: u32,
+}
+
+#[repr(C, packed)]
+pub struct CompactTileHeader {
+    pub tile_idx: u32,
+    pub num_components: u32,
+    pub num_ports: u32,
+    pub component_base: u32,
+}
+
+const _: [(); 8] = [(); size_of::<CompactPortRecord>()];
+const _: [(); 16] = [(); size_of::<CompactTileHeader>()];
