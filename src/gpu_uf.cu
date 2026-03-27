@@ -16,7 +16,9 @@
 // Those headers define non-inline __global__ kernels. Including them in
 // both this TU and fat_stripe_cuda.cu causes duplicate-symbol link errors.
 // Only face_port_io.h (structs) and types.h (TileGeometry) are safe to include.
+#include "compact_types.cuh"
 #include "face_port_io.h"
+#include "topology_prepass.cuh"
 #include "types.h"
 
 namespace {
@@ -38,6 +40,8 @@ struct TileSharedScalars {
     uint32_t origin_anchor;
     int32_t origin_component;
     uint32_t face_counts[4];
+    uint32_t compact_num_ports;
+    uint32_t compact_status;
 };
 
 struct TileSharedView {
@@ -254,10 +258,53 @@ bool in_nominal_bounds(
 }
 
 __device__
+uint8_t boundary_touch_mask(
+    int64_t a,
+    int64_t b,
+    int64_t a_lo,
+    int64_t a_hi,
+    int64_t b_lo,
+    int64_t b_hi,
+    uint32_t collar
+) {
+    uint8_t mask = 0u;
+    const uint64_t collar_u64 = static_cast<uint64_t>(collar);
+    if (static_cast<uint64_t>(a - a_lo) <= collar_u64) {
+        mask |= gm::FACE_INNER;
+    }
+    if (static_cast<uint64_t>(a_hi - a) <= collar_u64) {
+        mask |= gm::FACE_OUTER;
+    }
+    if (static_cast<uint64_t>(b - b_lo) <= collar_u64) {
+        mask |= gm::FACE_LEFT;
+    }
+    if (static_cast<uint64_t>(b_hi - b) <= collar_u64) {
+        mask |= gm::FACE_RIGHT;
+    }
+    return mask;
+}
+
+__device__ __forceinline__
+void atomic_or_face_bits(uint8_t* face_bits, uint32_t comp_id, uint8_t mask) {
+    if (mask == 0u) {
+        return;
+    }
+
+    const uint32_t word_idx = comp_id >> 2;
+    const uint32_t byte_shift = (comp_id & 3u) * 8u;
+    unsigned int* word_ptr = reinterpret_cast<unsigned int*>(
+        face_bits + static_cast<size_t>(word_idx) * sizeof(unsigned int));
+    atomicOr(word_ptr, static_cast<unsigned int>(mask) << byte_shift);
+}
+
+__device__
 void write_empty_tile(
     uint32_t tile_idx,
+    uint32_t global_tile_idx,
     uint32_t num_primes,
     int32_t origin_component,
+    uint8_t* d_compact_output,
+    uint8_t* d_compact_status,
     uint32_t* d_face_counts,
     uint32_t* d_num_components,
     uint32_t* d_num_primes,
@@ -272,6 +319,15 @@ void write_empty_tile(
     tile_face_counts[1] = 0u;
     tile_face_counts[2] = 0u;
     tile_face_counts[3] = 0u;
+
+    uint8_t* tile_slot =
+        d_compact_output + static_cast<size_t>(tile_idx) * gm::kMaxCompactTileBytes;
+    auto* header = reinterpret_cast<gm::CompactTileHeader*>(tile_slot);
+    header->tile_idx = global_tile_idx;
+    header->num_components = 0u;
+    header->num_ports = 0u;
+    header->component_base = 0u;
+    d_compact_status[tile_idx] = 1u;
 }
 
 __global__
@@ -291,6 +347,9 @@ void gpu_uf_tile_kernel(
     FacePortRecord* __restrict__ d_face_outer,
     FacePortRecord* __restrict__ d_face_left,
     FacePortRecord* __restrict__ d_face_right,
+    const uint8_t* __restrict__ d_exposed_face_masks,
+    uint8_t* __restrict__ d_compact_output,
+    uint8_t* __restrict__ d_compact_status,
     uint32_t* __restrict__ d_face_counts,
     uint32_t* __restrict__ d_num_components,
     uint32_t* __restrict__ d_num_primes,
@@ -298,6 +357,7 @@ void gpu_uf_tile_kernel(
 ) {
     const uint32_t tile_idx = blockIdx.x;
     const uint32_t tid = threadIdx.x;
+    const TileJob job = d_jobs[tile_idx];
 
     extern __shared__ char s_mem[];
     TileSharedView shared = shared_view(s_mem, bitmap_words);
@@ -320,6 +380,8 @@ void gpu_uf_tile_kernel(
         scalars.face_counts[1] = 0u;
         scalars.face_counts[2] = 0u;
         scalars.face_counts[3] = 0u;
+        scalars.compact_num_ports = 0u;
+        scalars.compact_status = 0u;
     }
     __syncthreads();
 
@@ -359,8 +421,11 @@ void gpu_uf_tile_kernel(
                 gm::kMaxPrimesPerTile);
             write_empty_tile(
                 tile_idx,
+                job.tile_id,
                 scalars.num_primes,
                 kOriginComponentPrimeOverflow,
+                d_compact_output,
+                d_compact_status,
                 d_face_counts,
                 d_num_components,
                 d_num_primes,
@@ -417,7 +482,6 @@ void gpu_uf_tile_kernel(
     }
     __syncthreads();
 
-    const TileJob job = d_jobs[tile_idx];
     const int64_t a_lo = static_cast<int64_t>(job.a_lo);
     const int64_t b_lo = static_cast<int64_t>(job.b_lo);
     const int64_t a_hi = a_lo + static_cast<int64_t>(side);
@@ -499,28 +563,30 @@ void gpu_uf_tile_kernel(
                 component,
             };
 
-            if (static_cast<uint64_t>(a - a_lo) <= collar) {
+            const uint8_t touch_mask =
+                boundary_touch_mask(a, b, a_lo, a_hi, b_lo, b_hi, collar);
+            if ((touch_mask & gm::FACE_INNER) != 0u) {
                 const uint32_t out = scalars.face_counts[0];
                 if (out < gm::kMaxFacePortsPerFace) {
                     d_face_inner[tile_face_off + out] = record;
                 }
                 ++scalars.face_counts[0];
             }
-            if (static_cast<uint64_t>(a_hi - a) <= collar) {
+            if ((touch_mask & gm::FACE_OUTER) != 0u) {
                 const uint32_t out = scalars.face_counts[1];
                 if (out < gm::kMaxFacePortsPerFace) {
                     d_face_outer[tile_face_off + out] = record;
                 }
                 ++scalars.face_counts[1];
             }
-            if (static_cast<uint64_t>(b - b_lo) <= collar) {
+            if ((touch_mask & gm::FACE_LEFT) != 0u) {
                 const uint32_t out = scalars.face_counts[2];
                 if (out < gm::kMaxFacePortsPerFace) {
                     d_face_left[tile_face_off + out] = record;
                 }
                 ++scalars.face_counts[2];
             }
-            if (static_cast<uint64_t>(b_hi - b) <= collar) {
+            if ((touch_mask & gm::FACE_RIGHT) != 0u) {
                 const uint32_t out = scalars.face_counts[3];
                 if (out < gm::kMaxFacePortsPerFace) {
                     d_face_right[tile_face_off + out] = record;
@@ -553,6 +619,83 @@ void gpu_uf_tile_kernel(
         tile_face_counts[1] = scalars.face_counts[1];
         tile_face_counts[2] = scalars.face_counts[2];
         tile_face_counts[3] = scalars.face_counts[3];
+    }
+    __syncthreads();
+
+    // Phase 9: emit the compact per-tile boundary payload into a fixed-size
+    // output slot. Boundary primes are still emitted for internal seams, but
+    // face_bits only retain campaign-exposed faces.
+    uint8_t* tile_slot =
+        d_compact_output + static_cast<size_t>(tile_idx) * gm::kMaxCompactTileBytes;
+    if (tid == 0u) {
+        auto* header = reinterpret_cast<gm::CompactTileHeader*>(tile_slot);
+        header->tile_idx = job.tile_id;
+        header->num_components = scalars.num_components;
+        header->num_ports = 0u;
+        header->component_base = 0u;
+        scalars.compact_num_ports = 0u;
+        scalars.compact_status = 0u;
+    }
+    __syncthreads();
+
+    uint8_t* face_bits = gm::compact_face_bits(tile_slot);
+    for (uint32_t comp = tid; comp < scalars.num_components; comp += blockDim.x) {
+        face_bits[comp] = 0u;
+    }
+    __syncthreads();
+
+    const uint8_t exposed_face_mask = d_exposed_face_masks[tile_idx];
+    gm::CompactPortRecord* compact_ports = gm::compact_ports(tile_slot, scalars.num_components);
+    for (uint32_t i = tid; i < scalars.num_primes; i += blockDim.x) {
+        const uint32_t pos = shared.prime_pos[i];
+        const int64_t row = static_cast<int64_t>(pos / side_exp);
+        const int64_t col = static_cast<int64_t>(pos % side_exp);
+        const int64_t a = expanded_a_lo + row;
+        const int64_t b = expanded_b_lo + col;
+
+        if (!in_nominal_bounds(a, b, a_lo, a_hi, b_lo, b_hi)) {
+            continue;
+        }
+
+        const uint8_t touch_mask =
+            boundary_touch_mask(a, b, a_lo, a_hi, b_lo, b_hi, collar);
+        if (touch_mask == 0u) {
+            continue;
+        }
+
+        const uint32_t component = g_root_comp[g_parent[i]];
+        if (component == gm::kNoComponent) {
+            continue;
+        }
+
+        const uint32_t out = atomicAdd(&scalars.compact_num_ports, 1u);
+        if (out < gm::kMaxBoundaryPortsPerTile) {
+            compact_ports[out] = gm::CompactPortRecord{
+                static_cast<uint16_t>(a - a_lo),
+                static_cast<uint16_t>(b - b_lo),
+                component,
+            };
+        } else {
+            atomicExch(&scalars.compact_status, 1u);
+        }
+
+        const uint8_t exposed_touch_mask = touch_mask & exposed_face_mask;
+        if (exposed_touch_mask != 0u) {
+            atomic_or_face_bits(face_bits, component, exposed_touch_mask);
+        }
+    }
+    __syncthreads();
+
+    if (tid == 0u) {
+        auto* header = reinterpret_cast<gm::CompactTileHeader*>(tile_slot);
+        const uint32_t stored_ports =
+            scalars.compact_num_ports > gm::kMaxBoundaryPortsPerTile
+                ? gm::kMaxBoundaryPortsPerTile
+                : scalars.compact_num_ports;
+        header->num_ports = stored_ports;
+        d_compact_status[tile_idx] = static_cast<uint8_t>(
+            scalars.compact_status != 0u ||
+            scalars.compact_num_ports > gm::kMaxBoundaryPortsPerTile);
     }
 }
 
@@ -617,6 +760,14 @@ cudaError_t create_gpu_uf_context(
         goto cleanup;
     }
     status = cudaMalloc(&next.d_rank, tile_count * uf_point_count * sizeof(uint8_t));
+    if (status != cudaSuccess) {
+        goto cleanup;
+    }
+    status = cudaMalloc(&next.d_compact_output, tile_count * gm::kMaxCompactTileBytes * sizeof(uint8_t));
+    if (status != cudaSuccess) {
+        goto cleanup;
+    }
+    status = cudaMalloc(&next.d_compact_status, tile_count * sizeof(uint8_t));
     if (status != cudaSuccess) {
         goto cleanup;
     }
@@ -720,6 +871,12 @@ void destroy_gpu_uf_context(GpuUfContext* ctx) {
     if (ctx->d_rank != nullptr) {
         cudaFree(ctx->d_rank);
     }
+    if (ctx->d_compact_output != nullptr) {
+        cudaFree(ctx->d_compact_output);
+    }
+    if (ctx->d_compact_status != nullptr) {
+        cudaFree(ctx->d_compact_status);
+    }
     if (ctx->d_face_inner != nullptr) {
         cudaFree(ctx->d_face_inner);
     }
@@ -769,6 +926,11 @@ cudaError_t run_gpu_uf(
     size_t bitmap_words
 ) {
     if (num_tiles == 0u || num_tiles > ctx.batch_capacity || d_bitmaps == nullptr || d_jobs == nullptr) {
+        return cudaErrorInvalidValue;
+    }
+    if (ctx.d_exposed_face_masks == nullptr ||
+        ctx.d_compact_output == nullptr ||
+        ctx.d_compact_status == nullptr) {
         return cudaErrorInvalidValue;
     }
     if (tile_side > 512u || collar < 0) {
@@ -849,6 +1011,10 @@ cudaError_t run_gpu_uf(
     if (status != cudaSuccess) {
         return status;
     }
+    status = cudaMemset(ctx.d_compact_status, 0, static_cast<size_t>(num_tiles) * sizeof(uint8_t));
+    if (status != cudaSuccess) {
+        return status;
+    }
 
     gpu_uf_tile_kernel<<<num_tiles, kBlockSize, shared_bytes>>>(
         d_bitmaps,
@@ -866,6 +1032,9 @@ cudaError_t run_gpu_uf(
         ctx.d_face_outer,
         ctx.d_face_left,
         ctx.d_face_right,
+        ctx.d_exposed_face_masks,
+        ctx.d_compact_output,
+        ctx.d_compact_status,
         ctx.d_face_counts,
         ctx.d_num_components,
         ctx.d_num_primes,

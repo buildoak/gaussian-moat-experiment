@@ -64,6 +64,12 @@ struct GpuUfContext {
     uint32_t* d_comp_counter = nullptr; // per-tile atomic counters for component IDs [batch_cap]
     uint8_t*  d_rank         = nullptr; // UF rank array [batch_cap * kMaxPrimesPerTile]
 
+    // Compact-emission inputs/outputs. The caller must set
+    // d_exposed_face_masks before launching run_gpu_uf().
+    const uint8_t* d_exposed_face_masks = nullptr; // [batch_cap], caller-owned device buffer
+    uint8_t*       d_compact_output     = nullptr; // [batch_cap * kMaxCompactTileBytes]
+    uint8_t*       d_compact_status     = nullptr; // [batch_cap], 0 = ok, nonzero = overflow
+
     // Per-face output buffers – sized [batch_cap * kMaxFacePortsPerFace]
     FacePortRecord* d_face_inner = nullptr;
     FacePortRecord* d_face_outer = nullptr;
@@ -109,6 +115,8 @@ void destroy_gpu_uf_context(GpuUfContext* ctx);
 // -----------------------------------------------------------------------
 
 // Run GPU UF on the device bitmaps already populated by launch_batch_sieve().
+// Caller must set ctx.d_exposed_face_masks to the current batch's device
+// exposed-face-mask slice before launching.
 // On return, all h_* fields of ctx are valid for tile indices [0, num_tiles).
 // Does NOT call cudaDeviceSynchronize at the end — caller is responsible.
 cudaError_t run_gpu_uf(
