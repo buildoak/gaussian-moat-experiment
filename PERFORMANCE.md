@@ -5,6 +5,42 @@
 All numbers are Gaussian primes/second unless noted otherwise.
 Measured February-March 2026.
 
+## 2026-03-27 — GPU Boundary Merge Benchmark (RTX 3090)
+
+**Hardware:** NVIDIA GeForce RTX 3090 24 GB, Driver 560.35.03, CUDA 12.6
+**Instance:** vast.ai #33626588, $0.12/hr, South Korea
+**Branch:** `feature/gpu-uf-v2`, commit `44e81c6`
+**Config:** 128K fat-stripe, k^2=40 (`--r-min 0 --r-max 128000 --b-max 128000 --k-sq 40`)
+
+### Test Results
+
+| Test | Flags | Tile Side | Tiles | Primes Found | Components | Wall Time |
+|------|-------|-----------|-------|-------------|------------|-----------|
+| GPU UF + GPU boundary merge | `--gpu-uf --gpu-boundary-merge` | 256 | 250,000 | 1,028,306,142 | 29,409 | **40.8s** |
+| CPU UF baseline | (none) | 2000 | 4,096 | 931,453,824 | — | **533s (8m53s)** |
+
+Both tests: `blocked=false, spanning_component=0`
+
+**Speedup: 13× (533s → 40.8s)**
+
+The GPU path runs the full pipeline on-device: sieve, union-find, cross-tile boundary merge, and verdict. The CPU path runs the CUDA sieve but performs UF and cross-tile composition on CPU.
+
+### Historical Baselines
+
+| Session | Hardware | Mode | Tile Side | Wall Time | Notes |
+|---------|----------|------|-----------|-----------|-------|
+| 7f2a8a5b | 3090 (different instance) | CPU fat-stripe, pre-batching refactor | 2000 | 16m51s | — |
+| 7f2a8a5b | 3090 (different instance) | CPU fat-stripe, post-batching refactor | 2000 | 4m27s | — |
+| 48553a1e | 3090 (same instance) | GPU UF without boundary merge | 256 | 32m23s total (42.7s GPU + 1855s CPU composition) | — |
+| this session | 3090 #33626588 | GPU UF + GPU boundary merge | 256 | **40.8s** | new record |
+
+### Correctness Notes
+
+- Both paths agree on verdict (`blocked=false`) — weak correctness signal only (same starting condition, not same algorithm path)
+- Different tile sizes (256 vs 2000) yield different prime counts (1.03B vs 931M) — not a direct differential test
+- **Tile 0 overflow:** `gpu_uf_tile_kernel: tile 0 has 9174 primes; max supported is 8192` — overflow sentinel emitted at origin. Latent correctness risk for origin-inclusive probes. Tile-side 256 packs the origin tile densely; tile-side > ~512 would avoid this.
+- No differential test at the **same tile size** across both paths exists yet — that is the missing correctness gate.
+
 ## CUDA Sieve on Jetson Orin (8 GB, 1024 CUDA cores)
 
 | Scenario | Throughput | Config |
