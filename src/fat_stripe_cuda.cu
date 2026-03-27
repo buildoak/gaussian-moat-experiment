@@ -17,11 +17,13 @@
 #include <vector>
 
 #include "batch_dispatch.cuh"
+#include "compact_types.cuh"
 #include "face_extract.cuh"
 #include "face_port_io.h"
 #include "gpu_uf.cuh"
 #include "row_sieve.cuh"
 #include "tile_kernel.cuh"
+#include "topology_prepass.cuh"
 #include "types.h"
 
 namespace {
@@ -351,6 +353,248 @@ gm::TileFacePorts tile_face_ports_from_gpu_uf(
     result.face_left  = copy_vec(ctx.h_face_left  + off, fc[2]);
     result.face_right = copy_vec(ctx.h_face_right + off, fc[3]);
     return result;
+}
+
+struct CompactAccumulator {
+    std::vector<uint8_t> blob;
+    std::vector<uint64_t> tile_offsets;
+    std::vector<uint32_t> component_counts;
+    uint32_t total_components = 0;
+};
+
+struct CampaignTopology {
+    gm::TopologyPrepass topo;
+    std::vector<uint8_t> manifest_exposed_face_masks;
+};
+
+struct GpuUfCompactStaging {
+    uint8_t* d_exposed_face_masks = nullptr;
+    uint8_t* d_compact_output = nullptr;
+    uint8_t* d_compact_status = nullptr;
+
+    ~GpuUfCompactStaging() {
+        if (d_exposed_face_masks != nullptr) cudaFree(d_exposed_face_masks);
+        if (d_compact_output != nullptr) cudaFree(d_compact_output);
+        if (d_compact_status != nullptr) cudaFree(d_compact_status);
+    }
+};
+
+template <typename Context>
+auto bind_exposed_face_masks(Context& ctx, uint8_t* ptr, int)
+    -> decltype(ctx.d_exposed_face_masks = ptr, void()) {
+    ctx.d_exposed_face_masks = ptr;
+}
+
+template <typename Context>
+void bind_exposed_face_masks(Context&, uint8_t*, long) {}
+
+template <typename Context>
+auto bind_compact_output(Context& ctx, uint8_t* ptr, int)
+    -> decltype(ctx.d_compact_output = ptr, void()) {
+    ctx.d_compact_output = ptr;
+}
+
+template <typename Context>
+void bind_compact_output(Context&, uint8_t*, long) {}
+
+template <typename Context>
+auto bind_compact_slots(Context& ctx, uint8_t* ptr, int)
+    -> decltype(ctx.d_compact_slots = ptr, void()) {
+    ctx.d_compact_slots = ptr;
+}
+
+template <typename Context>
+void bind_compact_slots(Context&, uint8_t*, long) {}
+
+template <typename Context>
+auto bind_compact_status(Context& ctx, uint8_t* ptr, int)
+    -> decltype(ctx.d_compact_status = ptr, void()) {
+    ctx.d_compact_status = ptr;
+}
+
+template <typename Context>
+void bind_compact_status(Context&, uint8_t*, long) {}
+
+template <typename Context>
+void bind_gpu_uf_compact_buffers(
+    Context& ctx,
+    uint8_t* d_exposed_face_masks,
+    uint8_t* d_compact_output,
+    uint8_t* d_compact_status
+) {
+    bind_exposed_face_masks(ctx, d_exposed_face_masks, 0);
+    bind_compact_output(ctx, d_compact_output, 0);
+    bind_compact_slots(ctx, d_compact_output, 0);
+    bind_compact_status(ctx, d_compact_status, 0);
+}
+
+template <typename... Args>
+auto run_gpu_uf_dispatch(int, Args&&... args)
+    -> decltype(gm::run_gpu_uf(std::forward<Args>(args)...)) {
+    return gm::run_gpu_uf(std::forward<Args>(args)...);
+}
+
+inline cudaError_t run_gpu_uf_dispatch(
+    long,
+    gm::GpuUfContext& ctx,
+    const uint32_t* d_bitmaps,
+    const TileJob* d_jobs,
+    uint32_t /*tile_base*/,
+    const uint8_t* /*d_exposed_face_masks*/,
+    uint32_t num_tiles,
+    uint32_t tile_side,
+    int64_t collar,
+    uint64_t k_sq,
+    uint64_t side_exp,
+    size_t bitmap_words
+) {
+    return gm::run_gpu_uf(
+        ctx,
+        d_bitmaps,
+        d_jobs,
+        num_tiles,
+        tile_side,
+        collar,
+        k_sq,
+        side_exp,
+        bitmap_words);
+}
+
+CampaignTopology compute_campaign_topology(
+    const std::vector<TileJob>& jobs,
+    uint32_t tile_side,
+    uint64_t k_sq
+) {
+    CampaignTopology campaign{};
+    campaign.manifest_exposed_face_masks.resize(jobs.size(), 0u);
+    if (jobs.empty()) {
+        return campaign;
+    }
+    if (k_sq > static_cast<uint64_t>(std::numeric_limits<uint32_t>::max())) {
+        fail(kExitBadArgs, "k_sq exceeds topology prepass uint32_t range");
+    }
+
+    int64_t r_min = static_cast<int64_t>(jobs.front().a_lo);
+    int64_t r_max = r_min + static_cast<int64_t>(tile_side);
+    int64_t b_max = static_cast<int64_t>(jobs.front().b_lo) + static_cast<int64_t>(tile_side);
+    for (const TileJob& job : jobs) {
+        const int64_t a_lo = static_cast<int64_t>(job.a_lo);
+        const int64_t b_lo = static_cast<int64_t>(job.b_lo);
+        r_min = std::min(r_min, a_lo);
+        r_max = std::max(r_max, a_lo + static_cast<int64_t>(tile_side));
+        b_max = std::max(b_max, b_lo + static_cast<int64_t>(tile_side));
+    }
+
+    campaign.topo = gm::compute_topology(
+        r_min,
+        r_max,
+        b_max,
+        tile_side,
+        static_cast<uint32_t>(k_sq));
+
+    if (campaign.topo.exposed_face_masks.empty()) {
+        return campaign;
+    }
+
+    const int64_t side = static_cast<int64_t>(campaign.topo.grid.tile_side);
+    if (side <= 0) {
+        fail(kExitIoError, "invalid topology tile_side");
+    }
+
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        const TileJob& job = jobs[i];
+        const int64_t a_delta = static_cast<int64_t>(job.a_lo) - campaign.topo.grid.r_min;
+        const int64_t b_delta = static_cast<int64_t>(job.b_lo);
+        if (a_delta < 0 || b_delta < 0 || (a_delta % side) != 0 || (b_delta % side) != 0) {
+            fail(kExitIoError, "job manifest does not align to topology prepass tile grid");
+        }
+
+        const uint32_t r_tile = static_cast<uint32_t>(a_delta / side);
+        const uint32_t b_tile = static_cast<uint32_t>(b_delta / side);
+        if (r_tile >= campaign.topo.grid.tiles_r || b_tile >= campaign.topo.grid.tiles_b) {
+            fail(kExitIoError, "job manifest tile falls outside topology prepass bounds");
+        }
+
+        const uint32_t topo_idx = r_tile * campaign.topo.grid.tiles_b + b_tile;
+        campaign.manifest_exposed_face_masks[i] = campaign.topo.exposed_face_masks[topo_idx];
+    }
+
+    return campaign;
+}
+
+uint32_t checked_compact_tile_size(const gm::CompactTileHeader& header) {
+    if (header.num_components > gm::kMaxPrimesPerTile) {
+        fail(kExitIoError, "compact tile num_components exceeds kMaxPrimesPerTile");
+    }
+    if (header.num_ports > gm::kMaxBoundaryPortsPerTile) {
+        fail(kExitIoError, "compact tile num_ports exceeds kMaxBoundaryPortsPerTile");
+    }
+
+    const uint32_t size = gm::compact_tile_size(header.num_components, header.num_ports);
+    if (size > gm::kMaxCompactTileBytes) {
+        fail(kExitIoError, "compact tile size exceeds kMaxCompactTileBytes");
+    }
+    return size;
+}
+
+void append_compact_batch(
+    CompactAccumulator& accumulator,
+    uint32_t batch_start,
+    uint32_t batch_count,
+    const std::vector<uint8_t>& compact_slots
+) {
+    const size_t slot_stride = static_cast<size_t>(gm::kMaxCompactTileBytes);
+    const size_t required_bytes = static_cast<size_t>(batch_count) * slot_stride;
+    if (compact_slots.size() < required_bytes) {
+        fail(kExitIoError, "compact slot host staging buffer is smaller than the batch payload");
+    }
+
+    for (uint32_t i = 0; i < batch_count; ++i) {
+        const uint32_t global_tile_idx = batch_start + i;
+        const uint8_t* slot =
+            compact_slots.data() + static_cast<size_t>(i) * slot_stride;
+        const auto* header = reinterpret_cast<const gm::CompactTileHeader*>(slot);
+        const uint32_t tile_bytes = checked_compact_tile_size(*header);
+        const size_t dst_offset = accumulator.blob.size();
+
+        accumulator.tile_offsets[global_tile_idx] = static_cast<uint64_t>(dst_offset);
+        accumulator.component_counts[global_tile_idx] = header->num_components;
+        accumulator.blob.resize(dst_offset + tile_bytes);
+        std::memcpy(accumulator.blob.data() + dst_offset, slot, tile_bytes);
+    }
+}
+
+void finalize_compact_accumulator(CompactAccumulator& accumulator) {
+    uint32_t component_base = 0u;
+    for (size_t tile_idx = 0; tile_idx < accumulator.tile_offsets.size(); ++tile_idx) {
+        const uint64_t tile_offset = accumulator.tile_offsets[tile_idx];
+        if (tile_offset > static_cast<uint64_t>(accumulator.blob.size())) {
+            fail(kExitIoError, "compact tile offset exceeds packed compact blob");
+        }
+
+        auto* header = reinterpret_cast<gm::CompactTileHeader*>(
+            accumulator.blob.data() + static_cast<size_t>(tile_offset));
+        const uint32_t tile_bytes = checked_compact_tile_size(*header);
+        if (tile_offset + tile_bytes > accumulator.blob.size()) {
+            fail(kExitIoError, "packed compact blob contains a truncated tile");
+        }
+        if (component_base >
+            std::numeric_limits<uint32_t>::max() - accumulator.component_counts[tile_idx]) {
+            fail(kExitIoError, "global component count exceeds uint32_t range");
+        }
+
+        header->tile_idx = static_cast<uint32_t>(tile_idx);
+        header->component_base = component_base;
+
+        gm::CompactPortRecord* ports = gm::compact_ports(header, header->num_components);
+        for (uint32_t p = 0; p < header->num_ports; ++p) {
+            ports[p].comp_id += component_base;
+        }
+
+        component_base += accumulator.component_counts[tile_idx];
+    }
+
+    accumulator.total_components = component_base;
 }
 
 struct TileFaceSpan {
@@ -896,6 +1140,9 @@ int main(int argc, char** argv) {
         }
 
         const TileGeometry sample_geom = make_tile_geometry(manifest.k_sq, 0, 0, manifest.tile_side);
+        const CampaignTopology campaign_topology =
+            cfg.gpu_uf ? compute_campaign_topology(jobs, manifest.tile_side, manifest.k_sq)
+                       : CampaignTopology{};
 
         uint32_t joint_batch_size = cfg.batch_size;
         if (cfg.gpu_uf && cfg.batch_size == 0 && manifest.num_jobs > 0u) {
@@ -915,10 +1162,17 @@ int main(int argc, char** argv) {
                 static_cast<size_t>(gm::kMaxPrimesPerTile) * (4u + 4u + 1u) + // parent + comp_id + rank
                 4u * static_cast<size_t>(gm::kMaxFacePortsPerFace) * sizeof(FacePortRecord) * 2u +
                 64u;
-            const size_t per_tile_total = per_tile_bitmap + per_tile_uf;
+            const size_t per_tile_compact =
+                static_cast<size_t>(gm::kMaxCompactTileBytes) + sizeof(uint8_t);
+            const size_t fixed_topology_bytes =
+                static_cast<size_t>(campaign_topology.manifest_exposed_face_masks.size()) *
+                sizeof(uint8_t);
+            const size_t per_tile_total = per_tile_bitmap + per_tile_uf + per_tile_compact;
+            const size_t usable_for_batches =
+                usable > fixed_topology_bytes ? usable - fixed_topology_bytes : 0u;
 
-            if (per_tile_total > 0u && usable >= per_tile_total) {
-                const size_t tiles_by_vram = usable / per_tile_total;
+            if (per_tile_total > 0u && usable_for_batches >= per_tile_total) {
+                const size_t tiles_by_vram = usable_for_batches / per_tile_total;
                 joint_batch_size = static_cast<uint32_t>(std::min<size_t>(
                     std::min<size_t>(tiles_by_vram, manifest.num_jobs),
                     std::numeric_limits<uint32_t>::max()));
@@ -931,9 +1185,10 @@ int main(int argc, char** argv) {
 
             std::fprintf(
                 stderr,
-                "gpu-uf: free VRAM %.1f GB, per-tile cost bitmap+uf=%.1f KB, joint_batch_cap=%u\n",
+                "gpu-uf: free VRAM %.1f GB, per-tile cost uf=%.1f KB + compact=%.1f KB, batch_cap=%u\n",
                 static_cast<double>(free_mem) / (1024.0 * 1024.0 * 1024.0),
-                static_cast<double>(per_tile_total) / 1024.0,
+                static_cast<double>(per_tile_bitmap + per_tile_uf) / 1024.0,
+                static_cast<double>(per_tile_compact) / 1024.0,
                 joint_batch_size);
         }
 
@@ -941,12 +1196,54 @@ int main(int argc, char** argv) {
         CUDA_CHECK(gm::create_batch_context(joint_batch_size, sample_geom.side_exp, &batch_ctx));
 
         gm::GpuUfContext gpu_uf_ctx{};
+        GpuUfCompactStaging gpu_uf_compact_staging;
         uint32_t effective_batch_capacity = batch_ctx.batch_capacity;
+        std::vector<uint8_t> h_compact_status;
+        std::vector<uint8_t> h_compact_output;
+        CompactAccumulator compact_accumulator;
         if (cfg.gpu_uf && manifest.num_jobs > 0u) {
             CUDA_CHECK(gm::create_gpu_uf_context(
                 effective_batch_capacity,
                 sample_geom.total_points,
                 &gpu_uf_ctx));
+
+            const size_t compact_output_bytes =
+                static_cast<size_t>(effective_batch_capacity) * gm::kMaxCompactTileBytes;
+            const size_t compact_status_bytes =
+                static_cast<size_t>(effective_batch_capacity) * sizeof(uint8_t);
+
+            CUDA_CHECK(cudaMalloc(
+                &gpu_uf_compact_staging.d_compact_output,
+                compact_output_bytes));
+            CUDA_CHECK(cudaMalloc(
+                &gpu_uf_compact_staging.d_compact_status,
+                compact_status_bytes));
+            CUDA_CHECK(cudaMemset(
+                gpu_uf_compact_staging.d_compact_status,
+                0,
+                compact_status_bytes));
+
+            if (!campaign_topology.manifest_exposed_face_masks.empty()) {
+                CUDA_CHECK(cudaMalloc(
+                    &gpu_uf_compact_staging.d_exposed_face_masks,
+                    campaign_topology.manifest_exposed_face_masks.size() * sizeof(uint8_t)));
+                CUDA_CHECK(cudaMemcpy(
+                    gpu_uf_compact_staging.d_exposed_face_masks,
+                    campaign_topology.manifest_exposed_face_masks.data(),
+                    campaign_topology.manifest_exposed_face_masks.size() * sizeof(uint8_t),
+                    cudaMemcpyHostToDevice));
+            }
+
+            bind_gpu_uf_compact_buffers(
+                gpu_uf_ctx,
+                gpu_uf_compact_staging.d_exposed_face_masks,
+                gpu_uf_compact_staging.d_compact_output,
+                gpu_uf_compact_staging.d_compact_status);
+
+            h_compact_status.resize(effective_batch_capacity, 0u);
+            h_compact_output.resize(compact_output_bytes, 0u);
+            compact_accumulator.tile_offsets.resize(static_cast<size_t>(manifest.num_jobs), 0u);
+            compact_accumulator.component_counts.resize(static_cast<size_t>(manifest.num_jobs), 0u);
         }
 
         FileHandle output = open_output_file(cfg.output_path);
@@ -992,16 +1289,51 @@ int main(int argc, char** argv) {
                 collar));
 
             if (cfg.gpu_uf) {
-                CUDA_CHECK(gm::run_gpu_uf(
+                CUDA_CHECK(cudaMemset(
+                    gpu_uf_compact_staging.d_compact_status,
+                    0,
+                    static_cast<size_t>(batch_count) * sizeof(uint8_t)));
+
+                CUDA_CHECK(run_gpu_uf_dispatch(
+                    0,
                     gpu_uf_ctx,
                     batch_ctx.d_bitmaps,
                     batch_ctx.d_jobs,
+                    batch_start,
+                    gpu_uf_compact_staging.d_exposed_face_masks == nullptr
+                        ? nullptr
+                        : gpu_uf_compact_staging.d_exposed_face_masks + batch_start,
                     batch_count,
                     manifest.tile_side,
                     collar,
                     manifest.k_sq,
                     sample_geom.side_exp,
                     batch_ctx.bitmap_words));
+
+                CUDA_CHECK(cudaMemcpy(
+                    h_compact_status.data(),
+                    gpu_uf_compact_staging.d_compact_status,
+                    static_cast<size_t>(batch_count) * sizeof(uint8_t),
+                    cudaMemcpyDeviceToHost));
+                for (uint32_t i = 0; i < batch_count; ++i) {
+                    if (h_compact_status[i] != 0u) {
+                        fail(
+                            kExitCudaFailure,
+                            "compact overflow on tile " +
+                                std::to_string(static_cast<uint64_t>(batch_start) + i));
+                    }
+                }
+
+                CUDA_CHECK(cudaMemcpy(
+                    h_compact_output.data(),
+                    gpu_uf_compact_staging.d_compact_output,
+                    static_cast<size_t>(batch_count) * gm::kMaxCompactTileBytes,
+                    cudaMemcpyDeviceToHost));
+                append_compact_batch(
+                    compact_accumulator,
+                    batch_start,
+                    batch_count,
+                    h_compact_output);
 
                 if (cfg.gpu_boundary_merge) {
                     for (uint32_t i = 0; i < batch_count; ++i) {
@@ -1115,6 +1447,10 @@ int main(int argc, char** argv) {
             }
         }
 
+        if (cfg.gpu_uf) {
+            finalize_compact_accumulator(compact_accumulator);
+        }
+
         if (cfg.gpu_boundary_merge) {
             const PreparedMergeData prepared = prepare_boundary_merge_data(
                 jobs,
@@ -1143,6 +1479,7 @@ int main(int argc, char** argv) {
         }
 
         if (cfg.gpu_uf) {
+            bind_gpu_uf_compact_buffers(gpu_uf_ctx, nullptr, nullptr, nullptr);
             gm::destroy_gpu_uf_context(&gpu_uf_ctx);
         }
         gm::destroy_batch_context(&batch_ctx);
