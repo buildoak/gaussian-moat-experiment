@@ -117,6 +117,10 @@ The Rust solver decomposes the first octant (0 to pi/4 radians) into angular wed
 
 All numbers measured February-March 2026. Validated on three GPU platforms with bitwise-identical prime counts across all devices at every tested scale.
 
+### Fat-Stripe GPU Boundary Merge (2026-03-27, RTX 3090)
+
+**40.8s for a 128K fat-stripe** (k^2=40) with the full GPU pipeline (`--gpu-uf --gpu-boundary-merge`): sieve, union-find, and cross-tile boundary merge all on-device. **13× faster** than the CPU composition baseline (533s), and 47× faster than GPU-UF without boundary merge (32m23s). See [PERFORMANCE.md](PERFORMANCE.md) for the full benchmark table, historical baselines, and correctness notes.
+
 ### CUDA Sieve (Gaussian primes/sec)
 
 - **Jetson Orin Nano** (SM 8.7, 1024 cores):
