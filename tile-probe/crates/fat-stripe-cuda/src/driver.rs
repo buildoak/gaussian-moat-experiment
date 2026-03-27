@@ -168,6 +168,7 @@ impl CudaDriver {
         tile_side: u32,
         jobs: &[TileJob],
         gpu_uf: bool,
+        compact_merge: bool,
     ) -> Result<CampaignMergeResult, CudaError> {
         if !self.binary_path.is_file() {
             return Err(CudaError::BinaryNotFound(self.binary_path.clone()));
@@ -195,6 +196,9 @@ impl CudaDriver {
             .arg("--gpu-boundary-merge");
         if gpu_uf {
             cmd.arg("--gpu-uf");
+        }
+        if compact_merge {
+            cmd.arg("--compact-merge");
         }
 
         let status = cmd.status()?;

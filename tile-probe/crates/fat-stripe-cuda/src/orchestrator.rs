@@ -103,6 +103,7 @@ fn run_campaign_gpu_merge(
         config.tile_side,
         &jobs,
         config.gpu_uf || config.gpu_boundary_merge,
+        config.compact_merge,
     )?;
     let elapsed = t0.elapsed();
     let cleanup = cleanup_dir(&batch_dir);
