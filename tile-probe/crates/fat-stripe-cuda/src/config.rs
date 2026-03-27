@@ -22,6 +22,8 @@ pub struct CudaFatStripeConfig {
     pub gpu_uf: bool,
     #[serde(default)]
     pub gpu_boundary_merge: bool,
+    #[serde(default)]
+    pub compact_merge: bool,
     #[serde(default = "default_work_dir")]
     pub work_dir: PathBuf,
 }
@@ -40,6 +42,7 @@ impl CudaFatStripeConfig {
         cuda_batch_size: u32,
         gpu_uf: bool,
         gpu_boundary_merge: bool,
+        compact_merge: bool,
     ) -> Self {
         Self {
             k_sq,
@@ -54,6 +57,7 @@ impl CudaFatStripeConfig {
             cuda_batch_size,
             gpu_uf,
             gpu_boundary_merge,
+            compact_merge,
             work_dir: default_work_dir(),
         }
     }

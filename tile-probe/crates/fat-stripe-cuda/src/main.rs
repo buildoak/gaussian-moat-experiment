@@ -44,6 +44,9 @@ struct Cli {
 
     #[arg(long, default_value = "false")]
     gpu_boundary_merge: bool,
+
+    #[arg(long, default_value = "false")]
+    compact_merge: bool,
 }
 
 fn main() -> ExitCode {
@@ -61,6 +64,7 @@ fn main() -> ExitCode {
         args.cuda_batch_size,
         args.gpu_uf,
         args.gpu_boundary_merge,
+        args.compact_merge,
     );
 
     match run_campaign(&config) {
