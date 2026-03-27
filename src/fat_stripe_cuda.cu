@@ -391,6 +391,10 @@ struct PreparedMergeData {
     std::vector<uint8_t> node_face_bits;
     uint64_t total_primes = 0;
     uint32_t num_tiles = 0;
+    int64_t a_min = 0;
+    int64_t a_max = 0;
+    int64_t b_min = 0;
+    int64_t b_max = 0;
 };
 
 uint64_t pack_tile_key(int32_t a_lo, int32_t b_lo) {
@@ -431,8 +435,35 @@ PreparedMergeData prepare_boundary_merge_data(
     out.horizontal_seams.reserve(jobs.size());
     out.vertical_seams.reserve(jobs.size());
 
+    std::unordered_map<uint64_t, uint32_t> tile_lookup;
+    tile_lookup.reserve(jobs.size() * 2u);
+
+    int32_t min_a_lo = 0;
+    int32_t max_a_lo = 0;
+    int32_t min_b_lo = 0;
+    int32_t max_b_lo = 0;
+    if (!jobs.empty()) {
+        min_a_lo = max_a_lo = jobs.front().a_lo;
+        min_b_lo = max_b_lo = jobs.front().b_lo;
+    }
+    for (size_t i = 0; i < jobs.size(); ++i) {
+        const TileJob& job = jobs[i];
+        tile_lookup.emplace(pack_tile_key(job.a_lo, job.b_lo), static_cast<uint32_t>(i));
+        min_a_lo = std::min(min_a_lo, job.a_lo);
+        max_a_lo = std::max(max_a_lo, job.a_lo);
+        min_b_lo = std::min(min_b_lo, job.b_lo);
+        max_b_lo = std::max(max_b_lo, job.b_lo);
+    }
+
+    const int64_t side = static_cast<int64_t>(tile_side);
+    out.a_min = static_cast<int64_t>(min_a_lo);
+    out.a_max = static_cast<int64_t>(max_a_lo) + side;
+    out.b_min = static_cast<int64_t>(min_b_lo);
+    out.b_max = static_cast<int64_t>(max_b_lo) + side;
+
     constexpr uint32_t kUnsetNode = 0xFFFFFFFFu;
     for (size_t tile_idx = 0; tile_idx < jobs.size(); ++tile_idx) {
+        const TileJob& tile = jobs[tile_idx];
         const TileFaceSpan& span = tile_spans[tile_idx];
         out.total_primes += static_cast<uint64_t>(span.num_primes);
 
@@ -442,7 +473,7 @@ PreparedMergeData prepare_boundary_merge_data(
         out.right_offsets[tile_idx] = static_cast<uint32_t>(out.right_ports.size());
 
         std::vector<uint32_t> comp_to_node(span.num_components, kUnsetNode);
-        auto node_for = [&](uint32_t component_id, uint8_t face_bit) -> uint32_t {
+        auto node_for = [&](uint32_t component_id) -> uint32_t {
             if (component_id >= span.num_components) {
                 fail(
                     kExitIoError,
@@ -454,14 +485,13 @@ PreparedMergeData prepare_boundary_merge_data(
                 comp_to_node[component_id] = node;
                 out.node_face_bits.push_back(0u);
             }
-            out.node_face_bits[node] |= face_bit;
             return node;
         };
 
         const auto append_face = [&](const std::vector<FacePortRecord>& source,
                                      uint32_t offset,
                                      uint32_t count,
-                                     uint8_t face_bit,
+                                     uint8_t boundary_bit,
                                      std::vector<MergePort>& target) {
             const size_t begin = static_cast<size_t>(offset);
             const size_t end = begin + static_cast<size_t>(count);
@@ -470,18 +500,49 @@ PreparedMergeData prepare_boundary_merge_data(
             }
             for (size_t i = begin; i < end; ++i) {
                 const FacePortRecord& port = source[i];
+                const uint32_t node = node_for(port.component_id);
+                if (boundary_bit != 0u) {
+                    out.node_face_bits[node] |= boundary_bit;
+                }
                 target.push_back(MergePort{
                     port.a,
                     port.b,
-                    node_for(port.component_id, face_bit),
+                    node,
                 });
             }
         };
 
-        append_face(all_inner, span.inner_offset, span.inner_count, gm::kFaceInnerBit, out.inner_ports);
-        append_face(all_outer, span.outer_offset, span.outer_count, gm::kFaceOuterBit, out.outer_ports);
-        append_face(all_left, span.left_offset, span.left_count, gm::kFaceLeftBit, out.left_ports);
-        append_face(all_right, span.right_offset, span.right_count, gm::kFaceRightBit, out.right_ports);
+        // Preserve seam ports for union, but only expose face bits on the
+        // campaign's actual outer rows/columns.
+        const bool touches_inner_boundary = tile.a_lo == min_a_lo;
+        const bool touches_outer_boundary = tile.a_lo == max_a_lo;
+        const bool touches_left_boundary = tile.b_lo == min_b_lo;
+        const bool touches_right_boundary = tile.b_lo == max_b_lo;
+
+        append_face(
+            all_inner,
+            span.inner_offset,
+            span.inner_count,
+            touches_inner_boundary ? gm::kFaceInnerBit : 0u,
+            out.inner_ports);
+        append_face(
+            all_outer,
+            span.outer_offset,
+            span.outer_count,
+            touches_outer_boundary ? gm::kFaceOuterBit : 0u,
+            out.outer_ports);
+        append_face(
+            all_left,
+            span.left_offset,
+            span.left_count,
+            touches_left_boundary ? gm::kFaceLeftBit : 0u,
+            out.left_ports);
+        append_face(
+            all_right,
+            span.right_offset,
+            span.right_count,
+            touches_right_boundary ? gm::kFaceRightBit : 0u,
+            out.right_ports);
     }
 
     out.inner_offsets[jobs.size()] = static_cast<uint32_t>(out.inner_ports.size());
@@ -489,13 +550,6 @@ PreparedMergeData prepare_boundary_merge_data(
     out.left_offsets[jobs.size()] = static_cast<uint32_t>(out.left_ports.size());
     out.right_offsets[jobs.size()] = static_cast<uint32_t>(out.right_ports.size());
 
-    std::unordered_map<uint64_t, uint32_t> tile_lookup;
-    tile_lookup.reserve(jobs.size() * 2u);
-    for (size_t i = 0; i < jobs.size(); ++i) {
-        tile_lookup.emplace(pack_tile_key(jobs[i].a_lo, jobs[i].b_lo), static_cast<uint32_t>(i));
-    }
-
-    const int64_t side = static_cast<int64_t>(tile_side);
     for (size_t i = 0; i < jobs.size(); ++i) {
         const TileJob& tile = jobs[i];
         const int64_t a_lo = static_cast<int64_t>(tile.a_lo);
@@ -761,9 +815,50 @@ CampaignSummary run_gpu_boundary_merge(const PreparedMergeData& data, uint64_t k
     }
 
     summary.num_components = static_cast<uint32_t>(dense_face_bits.size());
+
+    // Match the Rust moat verdict by testing merged face-port coordinates
+    // against radial thresholds instead of rectangular INNER|OUTER bits.
+    const long double collar = std::ceil(std::sqrt(static_cast<long double>(k_sq)));
+    const long double a_start = static_cast<long double>(data.a_min);
+    const long double a_end = static_cast<long double>(data.a_max);
+    const long double b_min = static_cast<long double>(data.b_min);
+    const long double b_max = static_cast<long double>(data.b_max);
+    const bool off_axis = data.b_min > 0;
+    const long double r_inner_geom =
+        off_axis ? std::sqrt(a_start * a_start + b_min * b_min) : a_start;
+    const long double r_outer_geom =
+        off_axis ? std::sqrt(a_end * a_end + b_max * b_max) : a_end;
+    const long double r_inner_thresh = r_inner_geom + collar;
+    const long double r_outer_thresh = std::max(r_outer_geom - collar, 0.0L);
+    const long double r_inner_sq = r_inner_thresh * r_inner_thresh;
+    const long double r_outer_sq = r_outer_thresh * r_outer_thresh;
+
+    std::vector<uint8_t> has_inner(summary.num_components, 0u);
+    std::vector<uint8_t> has_outer(summary.num_components, 0u);
+
+    const auto mark_ports = [&](const std::vector<MergePort>& ports) {
+        for (const MergePort& port : ports) {
+            const uint32_t root = parent[port.node_id];
+            const uint32_t dense = root_to_dense[root];
+            const long double a = static_cast<long double>(port.a);
+            const long double b = static_cast<long double>(port.b);
+            const long double r_sq = a * a + b * b;
+            if (r_sq <= r_inner_sq) {
+                has_inner[dense] = 1u;
+            }
+            if (r_sq >= r_outer_sq) {
+                has_outer[dense] = 1u;
+            }
+        }
+    };
+
+    mark_ports(data.inner_ports);
+    mark_ports(data.outer_ports);
+    mark_ports(data.left_ports);
+    mark_ports(data.right_ports);
+
     for (uint32_t i = 0; i < summary.num_components; ++i) {
-        const uint8_t bits = dense_face_bits[i];
-        if ((bits & gm::kFaceInnerBit) != 0u && (bits & gm::kFaceOuterBit) != 0u) {
+        if (has_inner[i] != 0u && has_outer[i] != 0u) {
             summary.spanning_component = static_cast<int32_t>(i);
             break;
         }
