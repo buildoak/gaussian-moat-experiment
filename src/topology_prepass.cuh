@@ -19,6 +19,7 @@ struct TileGridInfo {
     uint32_t total_tiles = 0;  // tiles_r * tiles_b
     int64_t r_min = 0;         // campaign r-min
     int64_t r_max = 0;         // campaign r-max
+    int64_t b_min = 0;         // campaign b-min (0 for on-axis, >0 for off-axis)
     int64_t b_max = 0;         // campaign b-max
     uint32_t tile_side = 0;    // tile side length
     uint32_t collar = 0;       // collar width (ceil(sqrt(k_sq)))
@@ -56,20 +57,21 @@ inline uint32_t tile_index(const TileGridInfo& grid, uint32_t r_tile, uint32_t b
 }
 
 inline TileGridInfo make_grid_info(
-    int64_t r_min, int64_t r_max, int64_t b_max, uint32_t tile_side, uint32_t k_sq) {
+    int64_t r_min, int64_t r_max, int64_t b_min, int64_t b_max, uint32_t tile_side, uint32_t k_sq) {
     TileGridInfo grid{};
     grid.r_min = r_min;
     grid.r_max = r_max;
+    grid.b_min = b_min;
     grid.b_max = b_max;
     grid.tile_side = tile_side;
     grid.collar = static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<double>(k_sq))));
 
-    if (tile_side == 0u || r_max <= r_min || b_max <= 0) {
+    if (tile_side == 0u || r_max <= r_min || b_max <= b_min) {
         return grid;
     }
 
     const uint64_t r_extent = static_cast<uint64_t>(r_max - r_min);
-    const uint64_t b_extent = static_cast<uint64_t>(b_max);
+    const uint64_t b_extent = static_cast<uint64_t>(b_max - b_min);
 
     grid.tiles_r = static_cast<uint32_t>(ceil_div_u64(r_extent, tile_side));
     grid.tiles_b = static_cast<uint32_t>(ceil_div_u64(b_extent, tile_side));
@@ -144,7 +146,7 @@ inline std::vector<TileOrigin> compute_tile_origins(const TileGridInfo& grid) {
     for (uint32_t r_tile = 0; r_tile < grid.tiles_r; ++r_tile) {
         const int64_t a_lo = grid.r_min + static_cast<int64_t>(r_tile) * tile_side;
         for (uint32_t b_tile = 0; b_tile < grid.tiles_b; ++b_tile) {
-            const int64_t b_lo = static_cast<int64_t>(b_tile) * tile_side;
+            const int64_t b_lo = grid.b_min + static_cast<int64_t>(b_tile) * tile_side;
             tile_origins.push_back(TileOrigin{a_lo, b_lo});
         }
     }
@@ -153,9 +155,9 @@ inline std::vector<TileOrigin> compute_tile_origins(const TileGridInfo& grid) {
 }
 
 inline TopologyPrepass compute_topology(
-    int64_t r_min, int64_t r_max, int64_t b_max, uint32_t tile_side, uint32_t k_sq) {
+    int64_t r_min, int64_t r_max, int64_t b_min, int64_t b_max, uint32_t tile_side, uint32_t k_sq) {
     TopologyPrepass topo{};
-    topo.grid = topology_prepass_detail::make_grid_info(r_min, r_max, b_max, tile_side, k_sq);
+    topo.grid = topology_prepass_detail::make_grid_info(r_min, r_max, b_min, b_max, tile_side, k_sq);
     topo.exposed_face_masks = compute_exposed_face_masks(topo.grid);
     topo.seam_pairs = enumerate_seam_pairs(topo.grid);
     topo.tile_origins = compute_tile_origins(topo.grid);

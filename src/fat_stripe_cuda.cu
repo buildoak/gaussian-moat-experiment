@@ -481,18 +481,21 @@ CampaignTopology compute_campaign_topology(
 
     int64_t r_min = static_cast<int64_t>(jobs.front().a_lo);
     int64_t r_max = r_min + static_cast<int64_t>(tile_side);
-    int64_t b_max = static_cast<int64_t>(jobs.front().b_lo) + static_cast<int64_t>(tile_side);
+    int64_t b_min = static_cast<int64_t>(jobs.front().b_lo);
+    int64_t b_max = b_min + static_cast<int64_t>(tile_side);
     for (const TileJob& job : jobs) {
         const int64_t a_lo = static_cast<int64_t>(job.a_lo);
         const int64_t b_lo = static_cast<int64_t>(job.b_lo);
         r_min = std::min(r_min, a_lo);
         r_max = std::max(r_max, a_lo + static_cast<int64_t>(tile_side));
+        b_min = std::min(b_min, b_lo);
         b_max = std::max(b_max, b_lo + static_cast<int64_t>(tile_side));
     }
 
     campaign.topo = gm::compute_topology(
         r_min,
         r_max,
+        b_min,
         b_max,
         tile_side,
         static_cast<uint32_t>(k_sq));
@@ -509,7 +512,7 @@ CampaignTopology compute_campaign_topology(
     for (size_t i = 0; i < jobs.size(); ++i) {
         const TileJob& job = jobs[i];
         const int64_t a_delta = static_cast<int64_t>(job.a_lo) - campaign.topo.grid.r_min;
-        const int64_t b_delta = static_cast<int64_t>(job.b_lo);
+        const int64_t b_delta = static_cast<int64_t>(job.b_lo) - campaign.topo.grid.b_min;
         if (a_delta < 0 || b_delta < 0 || (a_delta % side) != 0 || (b_delta % side) != 0) {
             fail(kExitIoError, "job manifest does not align to topology prepass tile grid");
         }
