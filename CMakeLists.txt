@@ -45,14 +45,6 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -O3 --use_fast_math -lineinfo --ptxas-
 
 find_package(OpenMP REQUIRED)
 
-# --- Main target ---
-add_executable(gm_cuda_primes
-    src/main.cu
-    src/kernel.cu
-    src/sieve_kernel.cu
-)
-target_include_directories(gm_cuda_primes PRIVATE src/)
-
 # --- Test targets ---
 add_executable(gm_cuda_tests
     tests/test_modular.cu
@@ -68,23 +60,6 @@ add_executable(gm_test_cornacchia
     tests/test_cornacchia.cu
 )
 target_include_directories(gm_test_cornacchia PRIVATE src/)
-
-add_executable(gm_test_integration
-    tests/test_integration.cu
-)
-target_include_directories(gm_test_integration PRIVATE src/)
-
-# --- Sieve test target ---
-add_executable(gm_test_sieve
-    tests/test_sieve.cu
-    src/sieve_kernel.cu
-)
-target_include_directories(gm_test_sieve PRIVATE src/)
-
-add_executable(tile_cuda
-    src/tile_main.cu
-)
-target_include_directories(tile_cuda PRIVATE src/)
 
 add_executable(fat_stripe_cuda
     src/fat_stripe_cuda.cu
