@@ -93,8 +93,8 @@ int main(int argc, char** argv) {
     std::printf("wall_ms=%lld\n", static_cast<long long>(wall_ms));
     const TileOpLayout layout = parse_tileop_v2(result.tileop);
     print_face_summary(layout);
-    std::printf("tileop_first_32_bytes=");
-    print_hex_prefix(result.tileop.bytes, 32);
+    std::printf("tileop_hex=");
+    print_hex_prefix(result.tileop.bytes, TILEOP_SIZE);
 
     return 0;
 }

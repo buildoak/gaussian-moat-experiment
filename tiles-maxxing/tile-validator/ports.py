@@ -184,16 +184,23 @@ def encode_tileop(
         return bytes([0xFF] * 128), True
 
     tileop = bytearray(128)
+    off_R = 3 + budget["o_cnt"] + budget["i_cnt"] + budget["l_cnt"]
     tileop[0] = 3 + budget["o_cnt"]
     tileop[1] = tileop[0] + budget["i_cnt"]
-    tileop[2] = tileop[1] + budget["l_cnt"]
+    tileop[2] = off_R
 
+    # Write group labels for O, I, L, R
     cursor = 3
     for face in ("O", "I", "L", "R"):
         for port in ports_by_face[face]:
             tileop[cursor] = port.group
             cursor += 1
 
+    # The parser derives r_cnt from the budget formula, not from actual R port
+    # count.  h1 bytes must be placed at the parser's expected h_start =
+    # off_R + derived_r_cnt.  Excess R group slots remain zero (group=0 = unused).
+    derived_r_cnt = (128 - off_R - budget["l_cnt"]) // 2
+    cursor = off_R + derived_r_cnt
     for face in ("L", "R"):
         for port in ports_by_face[face]:
             tileop[cursor] = port.h1 >> 1

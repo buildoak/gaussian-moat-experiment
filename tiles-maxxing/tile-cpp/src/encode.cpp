@@ -204,11 +204,21 @@ TileOp encode_tileop(const FaceData& face_data) {
     tileop.bytes[1] = static_cast<uint8_t>(TILEOP_HEADER_BYTES + o_cnt + i_cnt);
     tileop.bytes[2] = static_cast<uint8_t>(TILEOP_HEADER_BYTES + o_cnt + i_cnt + l_cnt);
 
+    const int off_R = TILEOP_HEADER_BYTES + o_cnt + i_cnt + l_cnt;
+    // The parser derives r_cnt from the budget formula, not from actual R port count.
+    // We must place h1 bytes at the parser's expected h_start = off_R + derived_r_cnt.
+    // Excess R group slots between actual_r and derived_r remain zero (group=0 = unused).
+    const int derived_r_cnt = (TILEOP_SIZE - off_R - l_cnt) / 2;
+    const int h_start = off_R + derived_r_cnt;
+
     int cursor = TILEOP_HEADER_BYTES;
     append_face_groups(&tileop, &cursor, face_data, FACE_O);
     append_face_groups(&tileop, &cursor, face_data, FACE_I);
     append_face_groups(&tileop, &cursor, face_data, FACE_L);
     append_face_groups(&tileop, &cursor, face_data, FACE_R);
+
+    // Skip to h_start — zero-padded R group slots are already 0 from make_empty_tileop()
+    cursor = h_start;
     append_face_h1(&tileop, &cursor, face_data, FACE_L);
     append_face_h1(&tileop, &cursor, face_data, FACE_R);
 
