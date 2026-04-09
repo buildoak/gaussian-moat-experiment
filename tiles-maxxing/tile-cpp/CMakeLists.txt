@@ -50,3 +50,6 @@ target_link_libraries(test_face_encode tile)
 
 add_executable(bench_tiles tests/bench_tiles.cpp)
 target_link_libraries(bench_tiles tile)
+
+add_executable(census_tiles tests/census_tiles.cpp)
+target_link_libraries(census_tiles tile)
