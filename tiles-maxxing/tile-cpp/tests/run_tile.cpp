@@ -1,4 +1,5 @@
 #include "process_tile.h"
+#include "encode.h"
 #include "union_find.h"
 
 #include <chrono>
@@ -31,6 +32,27 @@ void print_hex_prefix(const uint8_t* data, int len) {
         }
     }
     std::printf("\n");
+}
+
+void print_face_summary(const TileOpLayout& layout) {
+    std::printf("tileop_status=%s\n",
+                layout.is_overflow ? "overflow" : (layout.is_empty ? "empty" : (layout.is_valid ? "normal" : "invalid")));
+    if (!layout.is_valid || layout.is_overflow) {
+        return;
+    }
+
+    std::printf("tileop_offsets=%u,%u,%u\n",
+                static_cast<unsigned>(layout.off_I),
+                static_cast<unsigned>(layout.off_L),
+                static_cast<unsigned>(layout.off_R));
+    std::printf("tileop_face_counts=O:%u I:%u L:%u R:%u\n",
+                static_cast<unsigned>(layout.o_cnt),
+                static_cast<unsigned>(layout.i_cnt),
+                static_cast<unsigned>(layout.l_cnt),
+                static_cast<unsigned>(layout.r_cnt));
+    std::printf("tileop_payload=used:%u slack:%u\n",
+                static_cast<unsigned>(layout.payload_bytes_used),
+                static_cast<unsigned>(layout.payload_slack));
 }
 
 }  // namespace
@@ -69,6 +91,8 @@ int main(int argc, char** argv) {
     std::printf("ports_before_pruning=%u\n", result.ports_before_pruning);
     std::printf("ports_after_pruning=%u\n", result.ports_after_pruning);
     std::printf("wall_ms=%lld\n", static_cast<long long>(wall_ms));
+    const TileOpLayout layout = parse_tileop_v2(result.tileop);
+    print_face_summary(layout);
     std::printf("tileop_first_32_bytes=");
     print_hex_prefix(result.tileop.bytes, 32);
 

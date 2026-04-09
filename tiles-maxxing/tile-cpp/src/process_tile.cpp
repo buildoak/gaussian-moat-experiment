@@ -35,6 +35,7 @@ TileResult process_tile(const TileCoord& coord, const SieveTables& tables,
 
     TileResult result;
     std::memset(&result, 0, sizeof(result));
+    result.tileop = make_empty_tileop();
 
     // Phase 1: Sieve — produce the prime bitmap
     uint32_t bitmap[BITMAP_WORDS];

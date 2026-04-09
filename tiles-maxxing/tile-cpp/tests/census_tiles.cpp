@@ -1,4 +1,5 @@
 #include "process_tile.h"
+#include "encode.h"
 
 #include <algorithm>
 #include <chrono>
@@ -27,26 +28,13 @@ struct TileCensusRow {
     uint32_t  ports_before;
     uint32_t  ports_after;
     int       face_ports[NUM_FACES];  // I, O, L, R
-    bool      overflow;
+    int       off_I;
+    int       off_L;
+    int       off_R;
+    int       payload_bytes_used;
+    int       payload_slack;
+    const char* status;
 };
-
-// Count non-zero bytes in a 16-byte face slot
-int count_face_ports(const uint8_t* face_slot) {
-    int count = 0;
-    for (int i = 0; i < PORTS_PER_FACE; ++i) {
-        if (face_slot[i] != 0) ++count;
-    }
-    return count;
-}
-
-// Decode per-face port counts from TileOp bytes
-// Layout: bytes[0..15]=Face I, [16..31]=Face O, [32..47]=Face L, [48..63]=Face R
-void decode_face_ports(const TileOp& op, int face_ports[NUM_FACES]) {
-    face_ports[FACE_I] = count_face_ports(&op.bytes[0]);
-    face_ports[FACE_O] = count_face_ports(&op.bytes[16]);
-    face_ports[FACE_L] = count_face_ports(&op.bytes[32]);
-    face_ports[FACE_R] = count_face_ports(&op.bytes[48]);
-}
 
 template<typename T>
 double vec_mean(const std::vector<T>& v) {
@@ -237,13 +225,30 @@ int main(int argc, char** argv) {
         row.group_count   = results[i].group_count;
         row.ports_before  = results[i].ports_before_pruning;
         row.ports_after   = results[i].ports_after_pruning;
-        row.overflow      = (results[i].tileop.bytes[0] == OVERFLOW_SENTINEL);
-
-        if (row.overflow) {
-            // Face decode not meaningful for poisoned tiles
+        const TileOpLayout layout = parse_tileop_v2(results[i].tileop);
+        if (!layout.is_valid) {
             row.face_ports[0] = row.face_ports[1] = row.face_ports[2] = row.face_ports[3] = -1;
+            row.off_I = row.off_L = row.off_R = -1;
+            row.payload_bytes_used = -1;
+            row.payload_slack = -1;
+            row.status = "invalid";
+        } else if (layout.is_overflow) {
+            row.face_ports[0] = row.face_ports[1] = row.face_ports[2] = row.face_ports[3] = -1;
+            row.off_I = row.off_L = row.off_R = -1;
+            row.payload_bytes_used = TILEOP_PAYLOAD_BYTES;
+            row.payload_slack = 0;
+            row.status = "overflow";
         } else {
-            decode_face_ports(results[i].tileop, row.face_ports);
+            row.face_ports[FACE_I] = layout.i_cnt;
+            row.face_ports[FACE_O] = layout.o_cnt;
+            row.face_ports[FACE_L] = layout.l_cnt;
+            row.face_ports[FACE_R] = layout.r_cnt;
+            row.off_I = layout.off_I;
+            row.off_L = layout.off_L;
+            row.off_R = layout.off_R;
+            row.payload_bytes_used = layout.payload_bytes_used;
+            row.payload_slack = layout.payload_slack;
+            row.status = layout.is_empty ? "empty" : "normal";
         }
     }
 
@@ -262,18 +267,19 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::fprintf(csv, "tower_j,tile_k,a_lo,b_lo,prime_count,group_count,ports_before,ports_after,face_I_ports,face_O_ports,face_L_ports,face_R_ports,overflow\n");
+    std::fprintf(csv, "tower_j,tile_k,a_lo,b_lo,prime_count,group_count,ports_before,ports_after,off_I,off_L,off_R,face_I_ports,face_O_ports,face_L_ports,face_R_ports,payload_bytes_used,payload_slack,status\n");
     for (int i = 0; i < actual_total; ++i) {
         const auto& r = rows[i];
-        std::fprintf(csv, "%d,%d,%lld,%lld,%u,%u,%u,%u,%d,%d,%d,%d,%d\n",
+        std::fprintf(csv, "%d,%d,%lld,%lld,%u,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s\n",
                      r.tower_j, r.tile_k,
                      static_cast<long long>(r.a_lo),
                      static_cast<long long>(r.b_lo),
                      r.prime_count, r.group_count,
                      r.ports_before, r.ports_after,
+                     r.off_I, r.off_L, r.off_R,
                      r.face_ports[FACE_I], r.face_ports[FACE_O],
                      r.face_ports[FACE_L], r.face_ports[FACE_R],
-                     r.overflow ? 1 : 0);
+                     r.payload_bytes_used, r.payload_slack, r.status);
     }
     std::fclose(csv);
     std::printf("CSV written to: %s\n\n", csv_path);
@@ -281,7 +287,10 @@ int main(int argc, char** argv) {
     // Compute summary statistics
     std::vector<uint32_t> prime_counts, group_counts, ports_befores, ports_afters;
     std::vector<int> face_I, face_O, face_L, face_R;
+    std::vector<uint32_t> payload_used, payload_slacks;
     int overflow_count = 0;
+    int empty_count = 0;
+    int invalid_count = 0;
 
     for (int i = 0; i < actual_total; ++i) {
         const auto& r = rows[i];
@@ -290,9 +299,21 @@ int main(int argc, char** argv) {
         ports_befores.push_back(r.ports_before);
         ports_afters.push_back(r.ports_after);
 
-        if (r.overflow) {
+        if (std::strcmp(r.status, "overflow") == 0) {
             ++overflow_count;
+        } else if (std::strcmp(r.status, "empty") == 0) {
+            ++empty_count;
+            payload_used.push_back(static_cast<uint32_t>(r.payload_bytes_used));
+            payload_slacks.push_back(static_cast<uint32_t>(r.payload_slack));
+            face_I.push_back(r.face_ports[FACE_I]);
+            face_O.push_back(r.face_ports[FACE_O]);
+            face_L.push_back(r.face_ports[FACE_L]);
+            face_R.push_back(r.face_ports[FACE_R]);
+        } else if (std::strcmp(r.status, "invalid") == 0) {
+            ++invalid_count;
         } else {
+            payload_used.push_back(static_cast<uint32_t>(r.payload_bytes_used));
+            payload_slacks.push_back(static_cast<uint32_t>(r.payload_slack));
             face_I.push_back(r.face_ports[FACE_I]);
             face_O.push_back(r.face_ports[FACE_O]);
             face_L.push_back(r.face_ports[FACE_L]);
@@ -313,6 +334,8 @@ int main(int argc, char** argv) {
     print_stat_line("Group count:", group_counts);
     print_stat_line("Ports before:", ports_befores);
     print_stat_line("Ports after:", ports_afters);
+    print_stat_line("Payload used:", payload_used);
+    print_stat_line("Payload slack:", payload_slacks);
 
     std::printf("\nPer-face ports after pruning (non-overflow tiles only, n=%d):\n",
                 static_cast<int>(face_I.size()));
@@ -321,7 +344,12 @@ int main(int argc, char** argv) {
     print_face_stat_line("Face L:", face_L);
     print_face_stat_line("Face R:", face_R);
 
-    std::printf("\nOverflow tiles: %d / %d (%.2f%%)\n\n",
+    std::printf("\nStatus counts: normal=%d empty=%d overflow=%d invalid=%d\n",
+                actual_total - empty_count - overflow_count - invalid_count,
+                empty_count,
+                overflow_count,
+                invalid_count);
+    std::printf("Overflow tiles: %d / %d (%.2f%%)\n\n",
                 overflow_count, actual_total,
                 100.0 * static_cast<double>(overflow_count) / static_cast<double>(actual_total));
 
@@ -346,7 +374,7 @@ int main(int argc, char** argv) {
         std::printf("\nHistogram -- max face ports (across 4 faces, non-overflow only):\n");
         std::vector<int> max_face_ports;
         for (int i = 0; i < actual_total; ++i) {
-            if (rows[i].overflow) continue;
+            if (std::strcmp(rows[i].status, "overflow") == 0 || std::strcmp(rows[i].status, "invalid") == 0) continue;
             int mx = 0;
             for (int f = 0; f < NUM_FACES; ++f) {
                 mx = std::max(mx, rows[i].face_ports[f]);
@@ -356,15 +384,10 @@ int main(int argc, char** argv) {
 
         if (!max_face_ports.empty()) {
             int hist_max = *std::max_element(max_face_ports.begin(), max_face_ports.end());
-            hist_max = std::max(hist_max, PORTS_PER_FACE);  // always show up to 16
             std::vector<int> hist(hist_max + 1, 0);
             for (int v : max_face_ports) hist[v]++;
             for (int g = 0; g <= hist_max; ++g) {
-                if (g == PORTS_PER_FACE) {
-                    std::printf("  %3d: %d  <-- would overflow\n", g, hist[g]);
-                } else {
-                    std::printf("  %3d: %d\n", g, hist[g]);
-                }
+                std::printf("  %3d: %d\n", g, hist[g]);
             }
         }
     }

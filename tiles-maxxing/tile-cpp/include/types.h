@@ -12,6 +12,29 @@ struct TileOp {
     uint8_t bytes[TILEOP_SIZE];  // 128 bytes, layout per spec Section 8.1
 };
 
+struct TileOpFaceView {
+    const uint8_t* groups;
+    const uint8_t* h1_packed;
+    uint8_t count;
+};
+
+struct TileOpLayout {
+    bool is_valid;
+    bool is_empty;
+    bool is_overflow;
+    uint8_t off_I;
+    uint8_t off_L;
+    uint8_t off_R;
+    uint8_t o_cnt;
+    uint8_t i_cnt;
+    uint8_t l_cnt;
+    uint8_t r_cnt;
+    uint8_t h_start;
+    uint8_t payload_bytes_used;
+    uint8_t payload_slack;
+    TileOpFaceView faces[NUM_FACES];
+};
+
 // Port: a contiguous cluster of face primes on one face
 struct Port {
     int     face;       // FACE_I, FACE_O, FACE_L, FACE_R
@@ -22,6 +45,8 @@ struct Port {
 
 // Face extraction result, passed to encoder
 struct FaceData {
+    // Ports are emitted by extraction in face scan order I, O, L, R.
+    // TileOp v2 reorders them to packed payload order O, I, L, R.
     Port    ports[MAX_PORTS];
     int     port_count;
     int     group_count;   // total unique groups assigned

@@ -1,4 +1,5 @@
 #include "process_tile.h"
+#include "encode.h"
 #include "union_find.h"
 
 #include <cstdio>
@@ -32,12 +33,26 @@ bool run_tile(const char* label, const TileCoord& coord, const SieveTables& tabl
     std::printf("  group_count:          %u\n", result.group_count);
     std::printf("  ports_before_pruning: %u\n", result.ports_before_pruning);
     std::printf("  ports_after_pruning:  %u\n", result.ports_after_pruning);
+    const TileOpLayout layout = parse_tileop_v2(result.tileop);
+    std::printf("  tileop_status:        %s\n",
+                layout.is_overflow ? "overflow" : (layout.is_empty ? "empty" : (layout.is_valid ? "normal" : "invalid")));
+    if (layout.is_valid && !layout.is_overflow) {
+        std::printf("  tileop_offsets:       off_I=%u off_L=%u off_R=%u\n",
+                    static_cast<unsigned>(layout.off_I),
+                    static_cast<unsigned>(layout.off_L),
+                    static_cast<unsigned>(layout.off_R));
+        std::printf("  tileop_face_counts:   O=%u I=%u L=%u R=%u\n",
+                    static_cast<unsigned>(layout.o_cnt),
+                    static_cast<unsigned>(layout.i_cnt),
+                    static_cast<unsigned>(layout.l_cnt),
+                    static_cast<unsigned>(layout.r_cnt));
+    }
 
     std::printf("  TileOp first 64 bytes:\n    ");
     print_hex(result.tileop.bytes, 64);
 
-    if (result.prime_count == 0) {
-        std::fprintf(stderr, "FAIL: %s — prime_count is 0\n", label);
+    if (result.prime_count == 0 || !layout.is_valid) {
+        std::fprintf(stderr, "FAIL: %s — invalid empty processing result\n", label);
         return false;
     }
 
@@ -68,10 +83,10 @@ int main() {
     const TileCoord tile_a = {601040640, 601040640};
     all_pass &= run_tile("tile_a_45deg", tile_a, tables);
 
-    const TileCoord tile_b = {736121088, 424999936};
+    const TileCoord tile_b = {736121344, 424999936};
     all_pass &= run_tile("tile_b_30deg", tile_b, tables);
 
-    const TileCoord tile_c = {820888320, 220000000};
+    const TileCoord tile_c = {821036800, 219996160};
     all_pass &= run_tile("tile_c_15deg", tile_c, tables);
 
     if (all_pass) {

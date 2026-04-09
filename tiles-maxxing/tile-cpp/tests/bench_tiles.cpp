@@ -1,4 +1,5 @@
 #include "process_tile.h"
+#include "encode.h"
 
 #include <algorithm>
 #include <chrono>
@@ -140,6 +141,39 @@ void print_phase_stats(const std::vector<BenchSample>& samples, int tile_count) 
     std::printf("  max:    %10.1f\n", sorted_total.back());
 }
 
+void print_tileop_stats(const std::vector<TileResult>& results) {
+    int empty_count = 0;
+    int overflow_count = 0;
+    int live_count = 0;
+    double payload_sum = 0.0;
+
+    for (const TileResult& result : results) {
+        const TileOpLayout layout = parse_tileop_v2(result.tileop);
+        if (!layout.is_valid) {
+            continue;
+        }
+        if (layout.is_overflow) {
+            ++overflow_count;
+            continue;
+        }
+        if (layout.is_empty) {
+            ++empty_count;
+        } else {
+            ++live_count;
+        }
+        payload_sum += static_cast<double>(layout.payload_bytes_used);
+    }
+
+    const int normal_tiles = empty_count + live_count;
+    const double denom = results.empty() ? 1.0 : static_cast<double>(results.size());
+    const double avg_payload = normal_tiles > 0 ? payload_sum / static_cast<double>(normal_tiles) : 0.0;
+
+    std::printf("\n--- TileOp Summary ---\n");
+    std::printf("  empty tiles:    %10d (%.2f%%)\n", empty_count, 100.0 * empty_count / denom);
+    std::printf("  overflow tiles: %10d (%.2f%%)\n", overflow_count, 100.0 * overflow_count / denom);
+    std::printf("  avg payload:    %10.1f bytes\n", avg_payload);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -217,6 +251,7 @@ int main(int argc, char** argv) {
 
         // Print per-phase stats (measures individual tile cost, not parallelism)
         print_phase_stats(samples, tile_count);
+        print_tileop_stats(results);
 
         // Print wall clock / throughput
         const double tiles_per_sec = static_cast<double>(tile_count) / (wall_ms / 1000.0);
@@ -254,6 +289,7 @@ int main(int argc, char** argv) {
 
         // Print per-phase stats
         print_phase_stats(samples, tile_count);
+        print_tileop_stats(results);
 
         std::printf("\nWall clock: %.1f ms for %d tiles (%.1f tiles/sec)\n",
                     bench_wall_ms, tile_count,
