@@ -176,6 +176,7 @@ def validate_tileop_structure(tileop: bytes) -> list[str]:
     o_cnt = off_I - HEADER_BYTES
     i_cnt = off_L - off_I
     l_cnt = off_R - off_L
+
     residual = PAYLOAD_BUDGET - o_cnt - i_cnt - 2 * l_cnt
     if residual < 0:
         problems.append(
