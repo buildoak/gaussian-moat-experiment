@@ -32,7 +32,7 @@ Key properties:
 - **Offset-based TileOp parsing** — the compositor reads `off_I`, `off_L`,
   and `off_R`, derives face counts, and slices packed face sections.
 - **Same matching predicates** — shared-prime identity for aligned I/O faces,
-  h1 equality for offset L/R faces, and shared-boundary identity as the
+  decoded h1 equality for offset L/R faces, and shared-boundary identity as the
   `delta_h = 0` special case on L/R. (updated 2026-04-09: 257x257 shared
   boundary convention)
 - **Single-pass tower sweep** — I/O matching, pre-flattening, and L/R
@@ -132,8 +132,8 @@ O groups = tile[3 .. off_I]
 I groups = tile[off_I .. off_L]
 L groups = tile[off_L .. off_R]
 R groups = tile[off_R .. off_R + r_cnt]
-L h1     = tile[h_start .. h_start + l_cnt]
-R h1     = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
+L h1>>1  = tile[h_start .. h_start + l_cnt]
+R h1>>1  = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
 ```
 
 The optional pad at byte 127 is ignored.
@@ -312,9 +312,9 @@ fn match_lr(
     group_offset: &[u32],
 ) {
     let a_groups = face_groups(tile_ops, a, R);
-    let a_h1     = face_h1(tile_ops, a, R);
+    let a_h1     = face_h1(tile_ops, a, R); // decoded from stored h1>>1
     let b_groups = face_groups(tile_ops, b, L);
-    let b_h1     = face_h1(tile_ops, b, L);
+    let b_h1     = face_h1(tile_ops, b, L); // decoded from stored h1>>1
 
     for sa in 0..a_groups.len() {
         let target_h1 = (a_h1[sa] as i16) - delta_h;
@@ -398,7 +398,7 @@ allocated. Dead tiles are skipped in all phases.
 
 Exposure detection is still based on the `delta` geometry from grid_spec S5.
 The only update is that exposed-port tests now iterate the packed L/R face
-sections and their packed h1 arrays rather than fixed-size face arrays.
+sections and their packed `h1 >> 1` arrays rather than fixed-size face arrays.
 
 ---
 
@@ -410,7 +410,7 @@ One tower is still 32 tiles * 128 bytes = 4 KB of TileOps. TileOp v2 changes
 which bytes are hot:
 
 - O/I groups concentrate near the start of each TileOp.
-- L/R groups and h1 bytes concentrate later in each TileOp.
+- L/R groups and packed `h1 >> 1` bytes concentrate later in each TileOp.
 - There is no co-located UF metadata in the TileOp.
 
 ### S8.2 Two-Tower Working Set
@@ -429,13 +429,13 @@ Cache line 0 (bytes 0-63):
   header + O groups + I groups + early L/R groups
 
 Cache line 1 (bytes 64-127):
-  trailing L/R groups + L h1 + R h1 + optional pad
+  trailing L/R groups + L h1>>1 + R h1>>1 + optional pad
 ```
 
 | Operation | Data accessed | Cache lines touched |
 |-----------|---------------|---------------------|
 | I/O match | header + O/I groups | usually line 0 only |
-| L/R match | header + L/R groups + L/R h1 | 1 or 2 lines depending on offsets |
+| L/R match | header + L/R groups + decoded L/R h1 | 1 or 2 lines depending on offsets |
 | UF find/union | separate `parent[]` | not co-located with TileOp |
 
 The old v2 claim that h1 loads auto-prefetch UF parents is no longer true.
@@ -523,8 +523,9 @@ and directly addressable.
    per-tower `delta` geometry.
 2. **Octant stitching detail.** Reflection-adjusted face mapping and `delta_h`
    remain delegated to grid_spec.
-3. **h1 = 256 edge case.** TileOp v2 layout does not resolve the pre-existing
-   storage-width issue for the shared-boundary endpoint on L/R faces.
+3. **L/R h1 decode discipline.** All matching code must decode raw h1 as
+   `2*stored + face_parity`; comparing packed bytes directly is invalid when
+   the matched faces have different fixed-coordinate parity.
 
 ---
 

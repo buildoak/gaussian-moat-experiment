@@ -29,7 +29,7 @@ Key properties:
 - **O(1) neighbor lookup** — within a tower by row arithmetic, between towers
   by a precomputed delta table.
 - **Two matching modes** — I/O faces use the positional shortcut (groups
-  only); L/R faces use h1 equality with a per-tower-pair delta_h.
+  only); L/R faces use decoded h1 equality with a per-tower-pair delta_h.
 - **8-fold symmetry** — only one octant is tiled. Octant stitching at the
   y = x diagonal completes the annulus.
 - **Memory-bounded** — 9.38 GB TileOps + ~1.76 GB group-level UF metadata at
@@ -251,7 +251,7 @@ origin-corner x-coordinates (base_x[j]) and their shared face spans the same
 
 By tile_spec S5.2, when delta_h = 0 the positional shortcut applies:
 port[i] on tile A's O-face corresponds to port[i] on tile B's I-face. The
-compositor reads only group labels (16 bytes per face), not h1 values.
+compositor reads only the packed group sections, not any decoded h1 values.
 
 ### S5.3 L/R Face Geometry (Between Towers)
 
@@ -347,6 +347,11 @@ on tile B's L-face iff (all arithmetic in signed i16):
 (a.h1 as i16) == (b.h1 as i16) + delta_h    // delta_h: i16
 ```
 
+The compositor decodes raw h1 from the stored byte as
+`h1 = 2*h1_packed + face_parity`, where `face_parity` is the parity of the
+face's fixed x-coordinate (`tile_x & 1` for L, `(tile_x + S) & 1` for R).
+This is exact because every Gaussian prime on one face shares that parity.
+
 For the primary neighbor (delta_h = -f): a.h1 + f == b.h1.
 For the secondary neighbor (delta_h = S - f): a.h1 - (S - f) == b.h1,
 i.e., a.h1 + f == b.h1 + S.
@@ -355,7 +360,7 @@ i.e., a.h1 + f == b.h1 + S.
 matched port lies in the overlap zone. For the primary neighbor, the overlap
 spans the lower S - f units of the R-face, so valid ports have h1 < S - f.
 For the secondary neighbor, valid ports have h1 >= S - f (equivalently,
-h1 is in [S - f, S)).
+h1 is in [S - f, S] under the shared-boundary convention).
 
 Since h1 is the anchor of the port's minimum-offset prime, and ports are
 deterministic functions of the face primes, the h1 predicate automatically
@@ -651,8 +656,8 @@ O groups = tile[3 .. off_I]
 I groups = tile[off_I .. off_L]
 L groups = tile[off_L .. off_R]
 R groups = tile[off_R .. off_R + r_cnt]
-L h1     = tile[h_start .. h_start + l_cnt]
-R h1     = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
+L h1>>1  = tile[h_start .. h_start + l_cnt]
+R h1>>1  = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
 ```
 
 Dead tile:
@@ -746,9 +751,9 @@ Where:
 ```
 function match_lr(a, b, delta_h):
     a_groups = face_groups(a, R)
-    a_h1     = face_h1(a, R)
+    a_h1     = face_h1(a, R)   // decoded from stored h1>>1
     b_groups = face_groups(b, L)
-    b_h1     = face_h1(b, L)
+    b_h1     = face_h1(b, L)   // decoded from stored h1>>1
     for sa in 0..len(a_groups):
         target = a_h1[sa] - delta_h
         for sb in 0..len(b_groups):
@@ -1027,7 +1032,7 @@ Let N = total tiles, G = total active groups, and J = number of towers.
 |-------|-----------|------------|-------|
 | 0 (prefix-sum) | O(N) | header + packed group sections | One pass over all TileOps |
 | 1 (I/O matching) | O(P_IO) | packed O/I sections | Shared-prime identity |
-| 2 (L/R matching) | O(P_LR * avg_face_ports) | packed L/R sections + h1 | h1 matching, two faces per pair |
+| 2 (L/R matching) | O(P_LR * avg_face_ports) | packed L/R sections + decoded h1 | h1 matching, two faces per pair |
 | 4 (spanning check) | O(P_boundary) | boundary port roots | Hash set lookup |
 
 Where P_IO = total O-face ports matched (= I-face ports of the next row) and
@@ -1075,8 +1080,8 @@ Bytes 3 .. off_I - 1                 Face O groups
 Bytes off_I .. off_L - 1             Face I groups
 Bytes off_L .. off_R - 1             Face L groups
 Bytes off_R .. off_R + r_cnt - 1     Face R groups
-Bytes h_start .. h_start + l_cnt - 1 Face L h1
-Bytes h_start + l_cnt .. 127         Face R h1
+Bytes h_start .. h_start + l_cnt - 1 Face L h1>>1
+Bytes h_start + l_cnt .. 127         Face R h1>>1
 ```
 
 The payload order is **O-I-L-R** so that the most frequent I/O matching data
@@ -1088,7 +1093,7 @@ resides in the lowest byte offsets.
 - I/O matching usually stays within cache line 0 because O/I groups are packed
   immediately after the header.
 - L/R matching reads deeper into the TileOp, typically touching late group
-  bytes and h1 bytes.
+  bytes and packed `h1 >> 1` bytes.
 - The old split "all groups in line 0, h1 in line 1" no longer applies.
 
 ### S14.3 Octant Stitching and I/O h1
@@ -1111,7 +1116,7 @@ The exact face-mapping and delta_h formulas for stitching across y = x are
 outlined in S8.3 but not fully derived. The implementation must resolve:
 
 - Which tiles in our grid are their own reflections (tiles centered on y = x)?
-- How does the axis swap affect h1 computation (x-offset becomes y-offset)?
+- How does the axis swap affect raw-h1 recovery (x-offset becomes y-offset, with face parity recomputed after reflection)?
 - Can the stitching be expressed as additional match_lr calls with a
   transformed delta_h, or does it require a dedicated stitching pass?
 

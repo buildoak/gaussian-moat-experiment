@@ -25,7 +25,7 @@ Phase 1: SIEVE        row-by-row prime enumeration          --> bitmap
 Phase 2: COMPACT       prefix-popcount + bit extraction      --> dense prime list
 Phase 3: UNION-FIND    neighbor scan + component merging     --> component labels
 Phase 4: FACE EXTRACT  boundary scan + port clustering       --> face port groups
-Phase 5: ENCODE        pack groups, h1, dead-end prune       --> TileOp (128 B)
+Phase 5: ENCODE        pack groups, h1>>1, dead-end prune    --> TileOp (128 B)
 ```
 
 **Design principle:** the implementation path is C/C++ first (sequential, debuggable,
@@ -547,11 +547,11 @@ first (minimum-h) prime:
 port.h1 = min(prime.tile_row for prime in port)     // for L/R faces
 ```
 
-h1 now ranges over `0..256` on L/R faces because the shared boundary row/column
-is part of tile proper. TileOp v2 still stores packed L/R h1 bytes as `u8`, so
-the `h1 = 256` edge case remains an existing open issue outside the layout
-change itself. This spec updates the encoding format, not that unresolved field-
-width question. (updated 2026-04-09: 257x257 shared boundary convention)
+h1 is still the geometric along-face anchor, but TileOp v2 stores
+`h1_packed = h1 >> 1` instead of raw h1. All Gaussian primes on a given face
+share the same h1 parity because primality requires exactly one coordinate to
+be odd, and the face coordinate is fixed; decode is therefore exact:
+`h1 = 2*h1_packed + face_parity`.
 
 I/O faces do not store h1 — adjacent radial tiles share the exact boundary row,
 so composition is by shared-prime identity on that duplicated row; deterministic
@@ -577,8 +577,8 @@ Payload order:
   tileop[off_I .. off_L)                  = Face I groups
   tileop[off_L .. off_R)                  = Face L groups
   tileop[off_R .. off_R + r_cnt)          = Face R groups
-  tileop[h_start .. h_start + l_cnt)      = Face L h1
-  tileop[h_start + l_cnt .. 128 - pad)    = Face R h1
+  tileop[h_start .. h_start + l_cnt)      = Face L h1>>1
+  tileop[h_start + l_cnt .. 128 - pad)    = Face R h1>>1
   tileop[127] = 0                         // optional 1-byte pad only
 ```
 
@@ -657,10 +657,10 @@ for port in R.ports_after_pruning:
     cursor++
 
 for port in L.ports_after_pruning:
-    tileop[cursor] = port.h1
+    tileop[cursor] = port.h1 >> 1
     cursor++
 for port in R.ports_after_pruning:
-    tileop[cursor] = port.h1
+    tileop[cursor] = port.h1 >> 1
     cursor++
 
 if cursor < 128:
