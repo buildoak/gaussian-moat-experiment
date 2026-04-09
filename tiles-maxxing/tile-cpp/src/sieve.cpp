@@ -77,7 +77,7 @@ uint64_t mulmod64(uint64_t a, uint64_t b, uint64_t m) {
     return static_cast<uint64_t>(static_cast<u128>(a) * static_cast<u128>(b) % static_cast<u128>(m));
 }
 
-uint64_t powmod64(uint64_t base, uint64_t exp, uint64_t m) {
+[[maybe_unused]] uint64_t powmod64(uint64_t base, uint64_t exp, uint64_t m) {
     if (m == 1ULL) {
         return 0ULL;
     }
@@ -89,6 +89,85 @@ uint64_t powmod64(uint64_t base, uint64_t exp, uint64_t m) {
             result = mulmod64(result, base, m);
         }
         base = mulmod64(base, base, m);
+        exp >>= 1;
+    }
+    return result;
+}
+
+struct MontCtx {
+    uint64_t m;
+    uint64_t m_inv;
+    uint64_t r2;
+    uint64_t one;
+    uint64_t nm1;
+};
+
+inline uint64_t addmod64_no_div(uint64_t a, uint64_t b, uint64_t m) {
+    return (a >= m - b) ? static_cast<uint64_t>(a - (m - b)) : static_cast<uint64_t>(a + b);
+}
+
+uint64_t mont_compute_m_inv(uint64_t m) {
+    uint64_t x = 1ULL;
+    for (uint32_t i = 0; i < 6; ++i) {
+        x *= 2ULL - m * x;
+    }
+    return static_cast<uint64_t>(0ULL - x);
+}
+
+uint64_t mont_compute_r2(uint64_t m) {
+    uint64_t r = 1ULL % m;
+    for (uint32_t i = 0; i < 128; ++i) {
+        r = addmod64_no_div(r, r, m);
+    }
+    return r;
+}
+
+uint64_t mont_reduce(uint64_t t_hi, uint64_t t_lo, const MontCtx& ctx) {
+    const uint64_t q = t_lo * ctx.m_inv;
+    const u128 sum = (static_cast<u128>(t_hi) << 64U) +
+                     static_cast<u128>(t_lo) +
+                     static_cast<u128>(q) * static_cast<u128>(ctx.m);
+    uint64_t r = static_cast<uint64_t>(sum >> 64U);
+    if (r >= ctx.m) {
+        r -= ctx.m;
+    }
+    return r;
+}
+
+uint64_t mont_mul(uint64_t a, uint64_t b, const MontCtx& ctx) {
+    const u128 product = static_cast<u128>(a) * static_cast<u128>(b);
+    return mont_reduce(static_cast<uint64_t>(product >> 64U), static_cast<uint64_t>(product), ctx);
+}
+
+uint64_t mont_to(uint64_t a, const MontCtx& ctx) {
+    return mont_mul(a % ctx.m, ctx.r2, ctx);
+}
+
+[[maybe_unused]] uint64_t mont_from(uint64_t a, const MontCtx& ctx) {
+    return mont_reduce(0ULL, a, ctx);
+}
+
+MontCtx mont_init(uint64_t m) {
+    MontCtx ctx{
+        m,
+        mont_compute_m_inv(m),
+        mont_compute_r2(m),
+        0ULL,
+        0ULL,
+    };
+    ctx.one = mont_to(1ULL, ctx);
+    ctx.nm1 = mont_to(m - 1ULL, ctx);
+    return ctx;
+}
+
+uint64_t mont_powmod(uint64_t base, uint64_t exp, const MontCtx& ctx) {
+    uint64_t result = ctx.one;
+    uint64_t base_mont = mont_to(base, ctx);
+    while (exp != 0ULL) {
+        if ((exp & 1ULL) != 0ULL) {
+            result = mont_mul(result, base_mont, ctx);
+        }
+        base_mont = mont_mul(base_mont, base_mont, ctx);
         exp >>= 1;
     }
     return result;
@@ -114,7 +193,7 @@ bool miller_rabin_witness_small(uint64_t n, uint64_t d, uint32_t s, uint64_t a) 
     return false;
 }
 
-bool miller_rabin_witness(uint64_t n, uint64_t d, uint32_t s, uint64_t a) {
+[[maybe_unused]] bool miller_rabin_witness(uint64_t n, uint64_t d, uint32_t s, uint64_t a) {
     if (a >= n) {
         return true;
     }
@@ -127,6 +206,26 @@ bool miller_rabin_witness(uint64_t n, uint64_t d, uint32_t s, uint64_t a) {
     for (uint32_t r = 1; r < s; ++r) {
         x = mulmod64(x, x, n);
         if (x == n - 1ULL) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool miller_rabin_witness_mont(const MontCtx& ctx, uint64_t d, uint32_t s, uint64_t a) {
+    if (a >= ctx.m) {
+        return true;
+    }
+
+    uint64_t x = mont_powmod(a, d, ctx);
+    if (x == ctx.one || x == ctx.nm1) {
+        return true;
+    }
+
+    for (uint32_t r = 1; r < s; ++r) {
+        x = mont_mul(x, x, ctx);
+        if (x == ctx.nm1) {
             return true;
         }
     }
@@ -182,8 +281,9 @@ bool is_prime(uint64_t n) {
                miller_rabin_witness_small(n, d, s, 11ULL);
     }
 
+    const MontCtx ctx = mont_init(n);
     for (uint64_t witness : kLargeWitnesses) {
-        if (!miller_rabin_witness(n, d, s, witness)) {
+        if (!miller_rabin_witness_mont(ctx, d, s, witness)) {
             return false;
         }
     }
