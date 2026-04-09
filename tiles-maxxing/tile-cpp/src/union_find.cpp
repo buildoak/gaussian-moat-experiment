@@ -36,12 +36,11 @@ inline void union_sets(uint16_t* parent, uint16_t x, uint16_t y) {
 }
 
 const BackwardOffsets& get_backward_offsets() {
-    static BackwardOffsets offsets;
-    static bool initialized = false;
-    if (!initialized) {
-        init_backward_offsets(offsets);
-        initialized = true;
-    }
+    static BackwardOffsets offsets = []() {
+        BackwardOffsets o;
+        init_backward_offsets(o);
+        return o;
+    }();
     return offsets;
 }
 
