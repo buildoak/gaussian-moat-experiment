@@ -11,16 +11,28 @@ static __device__ __forceinline__ bool gpu_bitmap_test_union_find(const uint32_t
     return ((bitmap[row * BITMAP_WORDS_PER_ROW + (col >> 5)] >> (col & 31)) & 1u) != 0u;
 }
 
+// Optimized prime index lookup: uses word-level prefix sums precomputed per row
+// in row_prefix[], plus inline popcount over partial words.
+// Instead of looping over all words up to col, leverages the fact that
+// BITMAP_WORDS_PER_ROW=9 to fully unroll the prefix accumulation.
 static __device__ __forceinline__ int gpu_uf_index_union_find(
     int row, int col, const uint32_t* bitmap, const uint16_t* row_prefix) {
     uint32_t idx = row_prefix[row];
+    const int base = row * BITMAP_WORDS_PER_ROW;
     const int full_words = col >> 5;
-    for (int w = 0; w < full_words; ++w) {
-        idx += __popc(bitmap[row * BITMAP_WORDS_PER_ROW + w]);
-    }
+
+    // Unrolled prefix popcount: BITMAP_WORDS_PER_ROW=9, max full_words=8
+    if (full_words > 0) idx += __popc(bitmap[base + 0]);
+    if (full_words > 1) idx += __popc(bitmap[base + 1]);
+    if (full_words > 2) idx += __popc(bitmap[base + 2]);
+    if (full_words > 3) idx += __popc(bitmap[base + 3]);
+    if (full_words > 4) idx += __popc(bitmap[base + 4]);
+    if (full_words > 5) idx += __popc(bitmap[base + 5]);
+    if (full_words > 6) idx += __popc(bitmap[base + 6]);
+    if (full_words > 7) idx += __popc(bitmap[base + 7]);
 
     const uint32_t bit_mask = (col & 31) == 0 ? 0u : ((1u << (col & 31)) - 1u);
-    idx += __popc(bitmap[row * BITMAP_WORDS_PER_ROW + full_words] & bit_mask);
+    idx += __popc(bitmap[base + full_words] & bit_mask);
     return static_cast<int>(idx);
 }
 
