@@ -1,0 +1,565 @@
+// Multi-kernel tile processing pipeline: K1 Sieve -> K2 MR -> K3 Compact -> K4 UF -> K5 FaceEncode
+// Host orchestration: allocate inter-kernel buffers, upload FJ64 table, launch 5 kernels in sequence.
+
+#include "gpu_constants.cuh"
+#include "gpu_types.cuh"
+#include "fj64_262k_table.h"
+
+#include <cuda_runtime.h>
+
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
+#include <limits>
+#include <vector>
+
+// ---- Kernel declarations ----
+__global__ void kernel_sieve(
+    const TileCoord* __restrict__ coords,
+    uint32_t* __restrict__ d_cand_list,
+    uint32_t* __restrict__ d_total_cands,
+    int num_tiles);
+
+__global__ void kernel_mr(
+    const TileCoord* __restrict__ coords,
+    const uint32_t* __restrict__ d_cand_list,
+    const uint32_t* __restrict__ d_total_cands,
+    uint32_t* __restrict__ d_bitmap,
+    const uint16_t* __restrict__ d_fj64_table,
+    int num_tiles);
+
+__global__ void kernel_compact(
+    const uint32_t* __restrict__ d_bitmap,
+    uint16_t* __restrict__ d_row_prefix,
+    uint32_t* __restrict__ d_prime_pos,
+    uint32_t* __restrict__ d_prime_count,
+    int num_tiles);
+
+__global__ void kernel_uf(
+    const uint32_t* __restrict__ d_bitmap,
+    const uint16_t* __restrict__ d_row_prefix,
+    const uint32_t* __restrict__ d_prime_pos,
+    const uint32_t* __restrict__ d_prime_count,
+    uint16_t* __restrict__ d_parent,
+    int num_tiles);
+
+__global__ void kernel_face_encode(
+    const uint32_t* __restrict__ d_prime_pos,
+    const uint32_t* __restrict__ d_prime_count,
+    const uint16_t* __restrict__ d_parent,
+    TileOp* __restrict__ d_output,
+    uint32_t* __restrict__ d_prime_counts_out,
+    int num_tiles);
+
+// External functions from kernel_sieve.cu
+void upload_sieve_tables(const SieveTablesBarrett& tables);
+void upload_backward_offsets(const int8_t* bk_dr, const int8_t* bk_dc, int count);
+void upload_constants();
+
+// External functions from kernel_compact.cu / kernel_face_encode.cu
+size_t kernel_compact_shared_bytes();
+size_t kernel_face_encode_shared_bytes();
+
+namespace {
+
+constexpr uint32_t HOST_SIEVE_LIMIT = 10000U;
+
+inline void check_cuda(cudaError_t status, const char* what) {
+    if (status != cudaSuccess) {
+        std::fprintf(stderr, "%s failed: %s\n", what, cudaGetErrorString(status));
+        std::abort();
+    }
+}
+
+uint64_t mulmod_small(uint64_t a, uint64_t b, uint64_t m) {
+    return (a * b) % m;
+}
+
+uint64_t fast_sqrt_neg1(uint64_t p) {
+    for (uint64_t x = 1; x < p; ++x) {
+        if (mulmod_small(x, x, p) == (p - 1ULL)) return x;
+    }
+    return std::numeric_limits<uint64_t>::max();
+}
+
+uint32_t barrett_host_mod(uint32_t x, uint32_t p, uint32_t mu) {
+    uint32_t q = static_cast<uint32_t>((static_cast<uint64_t>(x) * mu) >> 32);
+    uint32_t r = x - q * p;
+    if (r >= p) r -= p;
+    return r;
+}
+
+bool init_sieve_tables_host(SieveTablesBarrett& tables) {
+    std::memset(&tables, 0, sizeof(tables));
+
+    uint8_t is_prime_table[HOST_SIEVE_LIMIT + 1];
+    std::memset(is_prime_table, 1, sizeof(is_prime_table));
+    is_prime_table[0] = 0U;
+    is_prime_table[1] = 0U;
+
+    for (uint32_t p = 2U; p * p <= HOST_SIEVE_LIMIT; ++p) {
+        if (is_prime_table[p] == 0U) continue;
+        for (uint32_t multiple = p * p; multiple <= HOST_SIEVE_LIMIT; multiple += p) {
+            is_prime_table[multiple] = 0U;
+        }
+    }
+
+    for (uint32_t p = 2U; p <= HOST_SIEVE_LIMIT; ++p) {
+        if (is_prime_table[p] == 0U) continue;
+
+        const uint32_t mu = static_cast<uint32_t>((1ULL << 32) / static_cast<uint64_t>(p));
+
+        if ((p & 3U) == 1U) {
+            const uint64_t root_raw = fast_sqrt_neg1(static_cast<uint64_t>(p));
+            if (root_raw == std::numeric_limits<uint64_t>::max()) return false;
+
+            uint64_t root = root_raw;
+            const uint64_t neg_root = static_cast<uint64_t>(p) - root;
+            if (neg_root < root) root = neg_root;
+
+            if (mulmod_small(root, root, static_cast<uint64_t>(p)) != static_cast<uint64_t>(p - 1U))
+                return false;
+            if (tables.split_count >= SPLIT_PRIMES_COUNT) return false;
+
+            const uint32_t root32 = static_cast<uint32_t>(root);
+            if (barrett_host_mod(root32 * root32, p, mu) != p - 1U) {
+                std::fprintf(stderr, "Barrett validation failed for split prime %u\n", p);
+                return false;
+            }
+
+            tables.split_table[tables.split_count++] = SplitPrimeBarrettGPU{
+                static_cast<uint16_t>(p), static_cast<uint16_t>(root), mu};
+        } else if ((p & 3U) == 3U) {
+            if (tables.inert_count >= INERT_PRIMES_COUNT) return false;
+            tables.inert_primes[tables.inert_count++] = InertPrimeBarrettGPU{
+                static_cast<uint16_t>(p), 0, mu};
+        }
+    }
+
+    return tables.split_count == SPLIT_PRIMES_COUNT &&
+           tables.inert_count == INERT_PRIMES_COUNT;
+}
+
+struct BackwardOffsetsHost {
+    int8_t dr[NUM_BACKWARD_OFFSETS];
+    int8_t dc[NUM_BACKWARD_OFFSETS];
+    int count;
+};
+
+void init_backward_offsets_host(BackwardOffsetsHost& offsets) {
+    int count = 0;
+    for (int dr = -6; dr <= 0; ++dr) {
+        for (int dc = -6; dc <= 6; ++dc) {
+            if ((dr > 0) || (dr == 0 && dc >= 0)) continue;
+            if ((dr * dr + dc * dc) > K_SQ) continue;
+            if (count >= NUM_BACKWARD_OFFSETS) {
+                std::fprintf(stderr, "backward offset overflow\n");
+                std::abort();
+            }
+            offsets.dr[count] = static_cast<int8_t>(dr);
+            offsets.dc[count] = static_cast<int8_t>(dc);
+            ++count;
+        }
+    }
+    offsets.count = count;
+    if (offsets.count != NUM_BACKWARD_OFFSETS) {
+        std::fprintf(stderr, "backward offset count mismatch: expected %d got %d\n",
+                     NUM_BACKWARD_OFFSETS, offsets.count);
+        std::abort();
+    }
+}
+
+std::vector<TileCoord> default_tiles() {
+    return {
+        TileCoord{600000000LL, 600000000LL},
+        TileCoord{699999744LL, 400000000LL},
+    };
+}
+
+std::vector<TileCoord> generate_bench_tiles(int n) {
+    std::vector<TileCoord> coords;
+    coords.reserve(n);
+    constexpr int64_t A_ORIGIN = 608000000LL;
+    constexpr int64_t B_ORIGIN = 608000000LL;
+    const int grid_w = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(n))));
+    for (int i = 0; i < n; ++i) {
+        const int col = i % grid_w;
+        const int row = i / grid_w;
+        coords.push_back(TileCoord{
+            A_ORIGIN + static_cast<int64_t>(row) * TILE_SIDE,
+            B_ORIGIN + static_cast<int64_t>(col) * TILE_SIDE,
+        });
+    }
+    return coords;
+}
+
+void print_device_info() {
+    int device = 0;
+    check_cuda(cudaGetDevice(&device), "cudaGetDevice");
+    cudaDeviceProp prop{};
+    check_cuda(cudaGetDeviceProperties(&prop, device), "cudaGetDeviceProperties");
+    std::printf("device: %s\n", prop.name);
+    std::printf("  SMs: %d\n", prop.multiProcessorCount);
+    std::printf("  max threads/SM: %d\n", prop.maxThreadsPerMultiProcessor);
+    std::printf("  max shared mem/SM: %zu bytes\n", prop.sharedMemPerMultiprocessor);
+    std::printf("  max shared mem/block: %zu bytes\n", prop.sharedMemPerBlock);
+    std::printf("  max shared mem/block (optin): %zu bytes\n", prop.sharedMemPerBlockOptin);
+    std::printf("  clock rate: %d MHz\n", prop.clockRate / 1000);
+    std::printf("  memory clock: %d MHz\n", prop.memoryClockRate / 1000);
+}
+
+void print_kernel_occupancy_generic(const char* name, const void* func, size_t shared_bytes) {
+    int num_blocks = 0;
+    cudaError_t occ_err = cudaOccupancyMaxActiveBlocksPerMultiprocessor(
+        &num_blocks, func, BLOCK_THREADS, shared_bytes);
+    if (occ_err == cudaSuccess) {
+        std::printf("  %-20s blocks/SM=%d  occupancy=%.1f%%  shared=%zu\n",
+                    name, num_blocks,
+                    100.0 * static_cast<double>(num_blocks * BLOCK_THREADS) / 1536.0,
+                    shared_bytes);
+    } else {
+        std::printf("  %-20s occupancy query failed: %s\n", name, cudaGetErrorString(occ_err));
+    }
+
+    cudaFuncAttributes attr{};
+    cudaError_t attr_err = cudaFuncGetAttributes(&attr, func);
+    if (attr_err == cudaSuccess) {
+        std::printf("  %-20s regs/thread=%d  static_smem=%zu\n",
+                    name, attr.numRegs, attr.sharedSizeBytes);
+    }
+}
+
+struct TileBatchDeviceMemory {
+    TileBatchBuffers buf;
+    uint16_t* d_fj64_table;
+    int num_tiles;
+
+    void allocate(int n) {
+        num_tiles = n;
+        const size_t N = static_cast<size_t>(n);
+
+        check_cuda(cudaMalloc(&buf.d_coords, sizeof(TileCoord) * N), "alloc d_coords");
+        check_cuda(cudaMalloc(&buf.d_cand_list, sizeof(uint32_t) * N * MAX_CANDIDATES_GPU), "alloc d_cand_list");
+        check_cuda(cudaMalloc(&buf.d_total_cands, sizeof(uint32_t) * N), "alloc d_total_cands");
+        check_cuda(cudaMalloc(&buf.d_bitmap, sizeof(uint32_t) * N * BITMAP_WORDS), "alloc d_bitmap");
+        check_cuda(cudaMalloc(&buf.d_row_prefix, sizeof(uint16_t) * N * (ACTIVE_ROWS + 1)), "alloc d_row_prefix");
+        check_cuda(cudaMalloc(&buf.d_prime_pos, sizeof(uint32_t) * N * MAX_PRIMES_GPU), "alloc d_prime_pos");
+        check_cuda(cudaMalloc(&buf.d_prime_count, sizeof(uint32_t) * N), "alloc d_prime_count");
+        check_cuda(cudaMalloc(&buf.d_parent, sizeof(uint16_t) * N * MAX_PRIMES_GPU), "alloc d_parent");
+        check_cuda(cudaMalloc(&buf.d_output, sizeof(TileOp) * N), "alloc d_output");
+        check_cuda(cudaMalloc(&buf.d_prime_counts_out, sizeof(uint32_t) * N), "alloc d_prime_counts_out");
+
+        // Upload FJ64_262K table to device
+        check_cuda(cudaMalloc(&d_fj64_table, sizeof(uint16_t) * 262144), "alloc d_fj64_table");
+        check_cuda(cudaMemcpy(d_fj64_table, FJ64_262K_TABLE, sizeof(uint16_t) * 262144,
+                              cudaMemcpyHostToDevice), "upload fj64_table");
+    }
+
+    void free() {
+        cudaFree(buf.d_coords);
+        cudaFree(buf.d_cand_list);
+        cudaFree(buf.d_total_cands);
+        cudaFree(buf.d_bitmap);
+        cudaFree(buf.d_row_prefix);
+        cudaFree(buf.d_prime_pos);
+        cudaFree(buf.d_prime_count);
+        cudaFree(buf.d_parent);
+        cudaFree(buf.d_output);
+        cudaFree(buf.d_prime_counts_out);
+        cudaFree(d_fj64_table);
+    }
+};
+
+struct KernelTimings {
+    float sieve_ms;
+    float mr_ms;
+    float compact_ms;
+    float uf_ms;
+    float face_encode_ms;
+    float total_ms;
+};
+
+void launch_pipeline(TileBatchDeviceMemory& mem, int num_tiles,
+                     KernelTimings* timings = nullptr) {
+    const dim3 grid(static_cast<unsigned int>(num_tiles));
+    const dim3 block(BLOCK_THREADS);
+    const size_t compact_smem = kernel_compact_shared_bytes();
+    const size_t face_smem = kernel_face_encode_shared_bytes();
+
+    // Set max dynamic shared memory for face encode kernel
+    check_cuda(cudaFuncSetAttribute(kernel_face_encode,
+                                    cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                    static_cast<int>(face_smem)),
+               "setattr face_encode smem");
+
+    if (timings) {
+        cudaEvent_t e[6];
+        for (int i = 0; i < 6; ++i) {
+            check_cuda(cudaEventCreate(&e[i]), "event create");
+        }
+
+        check_cuda(cudaEventRecord(e[0]), "record e0");
+        kernel_sieve<<<grid, block>>>(
+            mem.buf.d_coords, mem.buf.d_cand_list, mem.buf.d_total_cands, num_tiles);
+        check_cuda(cudaEventRecord(e[1]), "record e1");
+
+        kernel_mr<<<grid, block>>>(
+            mem.buf.d_coords, mem.buf.d_cand_list, mem.buf.d_total_cands,
+            mem.buf.d_bitmap, mem.d_fj64_table, num_tiles);
+        check_cuda(cudaEventRecord(e[2]), "record e2");
+
+        kernel_compact<<<grid, block, compact_smem>>>(
+            mem.buf.d_bitmap, mem.buf.d_row_prefix, mem.buf.d_prime_pos,
+            mem.buf.d_prime_count, num_tiles);
+        check_cuda(cudaEventRecord(e[3]), "record e3");
+
+        kernel_uf<<<grid, block>>>(
+            mem.buf.d_bitmap, mem.buf.d_row_prefix, mem.buf.d_prime_pos,
+            mem.buf.d_prime_count, mem.buf.d_parent, num_tiles);
+        check_cuda(cudaEventRecord(e[4]), "record e4");
+
+        kernel_face_encode<<<grid, block, face_smem>>>(
+            mem.buf.d_prime_pos, mem.buf.d_prime_count, mem.buf.d_parent,
+            mem.buf.d_output, mem.buf.d_prime_counts_out, num_tiles);
+        check_cuda(cudaEventRecord(e[5]), "record e5");
+
+        check_cuda(cudaGetLastError(), "pipeline launch");
+        check_cuda(cudaEventSynchronize(e[5]), "sync pipeline");
+
+        cudaEventElapsedTime(&timings->sieve_ms, e[0], e[1]);
+        cudaEventElapsedTime(&timings->mr_ms, e[1], e[2]);
+        cudaEventElapsedTime(&timings->compact_ms, e[2], e[3]);
+        cudaEventElapsedTime(&timings->uf_ms, e[3], e[4]);
+        cudaEventElapsedTime(&timings->face_encode_ms, e[4], e[5]);
+        cudaEventElapsedTime(&timings->total_ms, e[0], e[5]);
+
+        for (int i = 0; i < 6; ++i) cudaEventDestroy(e[i]);
+    } else {
+        kernel_sieve<<<grid, block>>>(
+            mem.buf.d_coords, mem.buf.d_cand_list, mem.buf.d_total_cands, num_tiles);
+        kernel_mr<<<grid, block>>>(
+            mem.buf.d_coords, mem.buf.d_cand_list, mem.buf.d_total_cands,
+            mem.buf.d_bitmap, mem.d_fj64_table, num_tiles);
+        kernel_compact<<<grid, block, compact_smem>>>(
+            mem.buf.d_bitmap, mem.buf.d_row_prefix, mem.buf.d_prime_pos,
+            mem.buf.d_prime_count, num_tiles);
+        kernel_uf<<<grid, block>>>(
+            mem.buf.d_bitmap, mem.buf.d_row_prefix, mem.buf.d_prime_pos,
+            mem.buf.d_prime_count, mem.buf.d_parent, num_tiles);
+        kernel_face_encode<<<grid, block, face_smem>>>(
+            mem.buf.d_prime_pos, mem.buf.d_prime_count, mem.buf.d_parent,
+            mem.buf.d_output, mem.buf.d_prime_counts_out, num_tiles);
+        check_cuda(cudaGetLastError(), "pipeline launch");
+        check_cuda(cudaDeviceSynchronize(), "pipeline sync");
+    }
+}
+
+enum class Mode { TEST, BENCH };
+
+struct Args {
+    Mode mode;
+    int tile_count;
+};
+
+Args parse_args(int argc, char** argv) {
+    if (argc < 2) return Args{Mode::TEST, 2};
+    if (std::strcmp(argv[1], "test") == 0) return Args{Mode::TEST, 2};
+    const int n = std::atoi(argv[1]);
+    if (n <= 0) {
+        std::fprintf(stderr, "usage: %s [test | <tile_count>]\n", argv[0]);
+        std::fprintf(stderr, "  test          - 2-tile smoke test (default)\n");
+        std::fprintf(stderr, "  <tile_count>  - benchmark N tiles\n");
+        std::exit(1);
+    }
+    return Args{Mode::BENCH, n};
+}
+
+void run_test() {
+    std::vector<TileCoord> coords = default_tiles();
+    const int num_tiles = static_cast<int>(coords.size());
+
+    TileBatchDeviceMemory mem{};
+    mem.allocate(num_tiles);
+
+    check_cuda(cudaMemcpy(mem.buf.d_coords, coords.data(),
+                          sizeof(TileCoord) * coords.size(),
+                          cudaMemcpyHostToDevice), "upload coords");
+
+    KernelTimings timings{};
+    launch_pipeline(mem, num_tiles, &timings);
+
+    std::vector<TileOp> output(num_tiles);
+    std::vector<uint32_t> prime_counts(num_tiles, 0U);
+    check_cuda(cudaMemcpy(output.data(), mem.buf.d_output,
+                          sizeof(TileOp) * num_tiles, cudaMemcpyDeviceToHost), "dl output");
+    check_cuda(cudaMemcpy(prime_counts.data(), mem.buf.d_prime_counts_out,
+                          sizeof(uint32_t) * num_tiles, cudaMemcpyDeviceToHost), "dl prime_counts");
+
+    std::printf("=== SMOKE TEST (multi-kernel) ===\n");
+    std::printf("processed %d tile(s) in %.3f ms (%.3f ms/tile)\n",
+                num_tiles, timings.total_ms,
+                timings.total_ms / static_cast<float>(num_tiles));
+
+    std::printf("\n--- per-kernel timing ---\n");
+    std::printf("K1 Sieve:       %8.3f ms  (%.1f%%)\n", timings.sieve_ms,
+                100.0 * timings.sieve_ms / timings.total_ms);
+    std::printf("K2 MR:          %8.3f ms  (%.1f%%)\n", timings.mr_ms,
+                100.0 * timings.mr_ms / timings.total_ms);
+    std::printf("K3 Compact:     %8.3f ms  (%.1f%%)\n", timings.compact_ms,
+                100.0 * timings.compact_ms / timings.total_ms);
+    std::printf("K4 UF:          %8.3f ms  (%.1f%%)\n", timings.uf_ms,
+                100.0 * timings.uf_ms / timings.total_ms);
+    std::printf("K5 FaceEncode:  %8.3f ms  (%.1f%%)\n", timings.face_encode_ms,
+                100.0 * timings.face_encode_ms / timings.total_ms);
+
+    for (int i = 0; i < num_tiles; ++i) {
+        std::printf("tile[%d] coord=(%lld,%lld) prime_count=%u tileop[0..3]=%02x %02x %02x %02x\n",
+                    i,
+                    static_cast<long long>(coords[i].a_lo),
+                    static_cast<long long>(coords[i].b_lo),
+                    prime_counts[i],
+                    output[i].bytes[0],
+                    output[i].bytes[1],
+                    output[i].bytes[2],
+                    output[i].bytes[3]);
+    }
+
+    mem.free();
+}
+
+void run_bench(int tile_count) {
+    std::printf("=== BENCHMARK (multi-kernel): %d tiles ===\n", tile_count);
+    print_device_info();
+
+    std::printf("\nkernel occupancy:\n");
+    print_kernel_occupancy_generic("K1_sieve", reinterpret_cast<const void*>(kernel_sieve), 0);
+    print_kernel_occupancy_generic("K2_mr", reinterpret_cast<const void*>(kernel_mr), 0);
+    print_kernel_occupancy_generic("K3_compact", reinterpret_cast<const void*>(kernel_compact),
+                                   kernel_compact_shared_bytes());
+    print_kernel_occupancy_generic("K4_uf", reinterpret_cast<const void*>(kernel_uf), 0);
+    print_kernel_occupancy_generic("K5_face_encode", reinterpret_cast<const void*>(kernel_face_encode),
+                                   kernel_face_encode_shared_bytes());
+
+    std::vector<TileCoord> coords = generate_bench_tiles(tile_count);
+    std::printf("\ntile grid: %d tiles, origin=(%lld,%lld)\n",
+                tile_count,
+                static_cast<long long>(coords[0].a_lo),
+                static_cast<long long>(coords[0].b_lo));
+
+    TileBatchDeviceMemory mem{};
+    mem.allocate(tile_count);
+
+    check_cuda(cudaMemcpy(mem.buf.d_coords, coords.data(),
+                          sizeof(TileCoord) * tile_count,
+                          cudaMemcpyHostToDevice), "upload coords");
+
+    // Need to set shared memory attribute before warmup too
+    const size_t face_smem = kernel_face_encode_shared_bytes();
+    check_cuda(cudaFuncSetAttribute(kernel_face_encode,
+                                    cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                    static_cast<int>(face_smem)),
+               "setattr face_encode smem");
+
+    // Warmup
+    {
+        const int warmup_tiles = (tile_count < 10) ? tile_count : 10;
+        // Use a subset for warmup
+        launch_pipeline(mem, warmup_tiles, nullptr);
+        std::printf("warmup: %d tiles done\n", warmup_tiles);
+    }
+
+    // Benchmark
+    KernelTimings timings{};
+    launch_pipeline(mem, tile_count, &timings);
+
+    const double tiles_per_sec = static_cast<double>(tile_count) /
+                                 (static_cast<double>(timings.total_ms) / 1000.0);
+    const double ms_per_tile = static_cast<double>(timings.total_ms) /
+                               static_cast<double>(tile_count);
+
+    std::printf("\n--- per-kernel timing ---\n");
+    std::printf("K1 Sieve:       %8.3f ms  (%.1f%%)\n", timings.sieve_ms,
+                100.0 * timings.sieve_ms / timings.total_ms);
+    std::printf("K2 MR:          %8.3f ms  (%.1f%%)\n", timings.mr_ms,
+                100.0 * timings.mr_ms / timings.total_ms);
+    std::printf("K3 Compact:     %8.3f ms  (%.1f%%)\n", timings.compact_ms,
+                100.0 * timings.compact_ms / timings.total_ms);
+    std::printf("K4 UF:          %8.3f ms  (%.1f%%)\n", timings.uf_ms,
+                100.0 * timings.uf_ms / timings.total_ms);
+    std::printf("K5 FaceEncode:  %8.3f ms  (%.1f%%)\n", timings.face_encode_ms,
+                100.0 * timings.face_encode_ms / timings.total_ms);
+
+    std::printf("\n--- results ---\n");
+    std::printf("total:      %.3f ms\n", timings.total_ms);
+    std::printf("tiles:      %d\n", tile_count);
+    std::printf("ms/tile:    %.4f\n", ms_per_tile);
+    std::printf("tiles/sec:  %.1f\n", tiles_per_sec);
+
+    // Spot-check
+    std::vector<uint32_t> prime_counts_host(tile_count, 0U);
+    check_cuda(cudaMemcpy(prime_counts_host.data(), mem.buf.d_prime_counts_out,
+                          sizeof(uint32_t) * tile_count, cudaMemcpyDeviceToHost), "dl prime_counts");
+
+    std::vector<TileOp> output_host(tile_count);
+    check_cuda(cudaMemcpy(output_host.data(), mem.buf.d_output,
+                          sizeof(TileOp) * tile_count, cudaMemcpyDeviceToHost), "dl output");
+
+    int overflow_count = 0;
+    for (int i = 0; i < tile_count; ++i) {
+        if (output_host[i].bytes[0] == OVERFLOW_SENTINEL) ++overflow_count;
+    }
+    if (overflow_count > 0) {
+        std::printf("WARNING: %d/%d tiles hit overflow sentinel\n", overflow_count, tile_count);
+    } else {
+        std::printf("all %d tiles completed without overflow\n", tile_count);
+    }
+
+    // Print first few tile results for verification
+    const int show_tiles = tile_count < 8 ? tile_count : 8;
+    std::printf("\nfirst %d tiles:\n", show_tiles);
+    for (int i = 0; i < show_tiles; ++i) {
+        std::printf("  tile[%d] coord=(%lld,%lld) primes=%u tileop[0..3]=%02x %02x %02x %02x\n",
+                    i,
+                    static_cast<long long>(coords[i].a_lo),
+                    static_cast<long long>(coords[i].b_lo),
+                    prime_counts_host[i],
+                    output_host[i].bytes[0],
+                    output_host[i].bytes[1],
+                    output_host[i].bytes[2],
+                    output_host[i].bytes[3]);
+    }
+
+    mem.free();
+}
+
+}  // namespace
+
+int main(int argc, char** argv) {
+    Args args = parse_args(argc, argv);
+
+    SieveTablesBarrett tables{};
+    if (!init_sieve_tables_host(tables)) {
+        std::fprintf(stderr, "failed to initialize sieve tables\n");
+        return 1;
+    }
+
+    BackwardOffsetsHost offsets{};
+    init_backward_offsets_host(offsets);
+
+    upload_sieve_tables(tables);
+    upload_backward_offsets(offsets.dr, offsets.dc, offsets.count);
+    upload_constants();
+
+    if (args.mode == Mode::TEST) {
+        run_test();
+    } else {
+        run_bench(args.tile_count);
+    }
+
+    return 0;
+}
