@@ -235,6 +235,7 @@ Args parse_args(int argc, char** argv) {
 }
 
 void run_test() {
+    const size_t shared_bytes = tile_kernel_shared_bytes();
     std::vector<TileCoord> coords = default_tiles();
     const int num_tiles = static_cast<int>(coords.size());
 
@@ -256,12 +257,11 @@ void run_test() {
 
     check_cuda(cudaFuncSetAttribute(process_tiles_kernel,
                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                    36864),
+                                    static_cast<int>(shared_bytes)),
                "cudaFuncSetAttribute(process_tiles_kernel)");
 
     const dim3 block(BLOCK_THREADS);
     const dim3 grid(static_cast<unsigned int>(num_tiles));
-    const size_t shared_bytes = tile_kernel_shared_bytes();
 
     cudaEvent_t start{};
     cudaEvent_t stop{};
@@ -351,7 +351,7 @@ void run_bench(int tile_count) {
 
     check_cuda(cudaFuncSetAttribute(process_tiles_kernel,
                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
-                                    36864),
+                                    static_cast<int>(shared_bytes)),
                "cudaFuncSetAttribute(process_tiles_kernel)");
 
     const dim3 block(BLOCK_THREADS);

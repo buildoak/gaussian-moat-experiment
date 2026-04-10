@@ -12,7 +12,7 @@ static __device__ __forceinline__ bool gpu_bitmap_test_union_find(const uint32_t
 }
 
 static __device__ __forceinline__ int gpu_uf_index_union_find(
-    int row, int col, const uint32_t* bitmap, const uint32_t* row_prefix) {
+    int row, int col, const uint32_t* bitmap, const uint16_t* row_prefix) {
     uint32_t idx = row_prefix[row];
     const int full_words = col >> 5;
     for (int w = 0; w < full_words; ++w) {
@@ -24,53 +24,46 @@ static __device__ __forceinline__ int gpu_uf_index_union_find(
     return static_cast<int>(idx);
 }
 
-__device__ uint32_t atomic_find(uint32_t* parent, uint32_t x) {
-    uint32_t p = parent[x];
-    while (p != x) {
-        const uint32_t gp = parent[p];
-        atomicCAS(&parent[x], p, gp);
-        x = p;
-        p = gp;
+__device__ uint16_t find_root_local(uint16_t* parent, uint16_t x) {
+    while (parent[x] != x) {
+        parent[x] = parent[parent[x]];
+        x = parent[x];
     }
     return x;
 }
 
-__device__ void atomic_union(uint32_t* parent, uint32_t x, uint32_t y) {
-    while (true) {
-        uint32_t rx = atomic_find(parent, x);
-        uint32_t ry = atomic_find(parent, y);
-        if (rx == ry) {
-            return;
-        }
-        if (rx > ry) {
-            const uint32_t tmp = rx;
-            rx = ry;
-            ry = tmp;
-        }
-        if (atomicCAS(&parent[ry], ry, rx) == ry) {
-            return;
-        }
+__device__ void union_local(uint16_t* parent, uint16_t x, uint16_t y) {
+    uint16_t rx = find_root_local(parent, x);
+    uint16_t ry = find_root_local(parent, y);
+    if (rx == ry) {
+        return;
     }
+    if (rx > ry) {
+        const uint16_t tmp = rx;
+        rx = ry;
+        ry = tmp;
+    }
+    parent[ry] = rx;
 }
 
 __device__ void build_components_gpu(
     const uint32_t* bitmap,
-    const uint32_t* row_prefix,
+    const uint16_t* row_prefix,
     const uint32_t* prime_pos,
     int prime_count,
-    uint32_t* parent,
+    uint16_t* parent,
     int lane) {
     const int bounded_prime_count = prime_count < MAX_PRIMES_GPU ? prime_count : MAX_PRIMES_GPU;
 
     for (int i = lane; i < bounded_prime_count; i += warpSize) {
-        parent[i] = static_cast<uint32_t>(i);
+        parent[i] = static_cast<uint16_t>(i);
     }
     __syncwarp();
 
     for (int i = lane; i < bounded_prime_count; i += warpSize) {
         const uint32_t packed = prime_pos[i];
-        const int row = static_cast<int>(packed >> 16);
-        const int col = static_cast<int>(packed & 0xFFFFu);
+        const int row = static_cast<int>(packed / SIDE_EXP);
+        const int col = static_cast<int>(packed % SIDE_EXP);
 
         for (int k = 0; k < NUM_BACKWARD_OFFSETS; ++k) {
             const int nr = row + static_cast<int>(c_bk_dr[k]);
@@ -84,13 +77,13 @@ __device__ void build_components_gpu(
 
             const int j = gpu_uf_index_union_find(nr, nc, bitmap, row_prefix);
             if (j >= 0 && j < bounded_prime_count) {
-                atomic_union(parent, static_cast<uint32_t>(i), static_cast<uint32_t>(j));
+                union_local(parent, static_cast<uint16_t>(i), static_cast<uint16_t>(j));
             }
         }
     }
     __syncwarp();
 
     for (int i = lane; i < bounded_prime_count; i += warpSize) {
-        parent[i] = atomic_find(parent, static_cast<uint32_t>(i));
+        parent[i] = find_root_local(parent, static_cast<uint16_t>(i));
     }
 }

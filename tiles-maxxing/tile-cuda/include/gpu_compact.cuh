@@ -35,9 +35,29 @@ __device__ void block_exclusive_scan(uint32_t* data, int n, int tid) {
     __syncthreads();
 }
 
+__device__ void block_exclusive_scan_u16(uint16_t* data, int n, int tid) {
+    const uint16_t original = tid < n ? data[tid] : 0u;
+    for (int offset = 1; offset < n; offset <<= 1) {
+        uint16_t addend = 0u;
+        if (tid < n && tid >= offset) {
+            addend = data[tid - offset];
+        }
+        __syncthreads();
+        if (tid < n) {
+            data[tid] = static_cast<uint16_t>(data[tid] + addend);
+        }
+        __syncthreads();
+    }
+
+    if (tid < n) {
+        data[tid] = static_cast<uint16_t>(data[tid] - original);
+    }
+    __syncthreads();
+}
+
 __device__ int compact_row(
     const uint32_t* bitmap,
-    uint32_t* row_prefix,
+    uint16_t* row_prefix,
     uint32_t* prime_pos,
     int tid) {
     uint32_t row_count = 0;
@@ -51,20 +71,20 @@ __device__ int compact_row(
             }
             row_count += __popc(word);
         }
-        row_prefix[tid] = row_count;
+        row_prefix[tid] = static_cast<uint16_t>(row_count);
     }
     __syncthreads();
 
-    block_exclusive_scan(row_prefix, ACTIVE_ROWS, tid);
+    block_exclusive_scan_u16(row_prefix, ACTIVE_ROWS, tid);
     __syncthreads();
 
     if (tid == (ACTIVE_ROWS - 1)) {
-        row_prefix[ACTIVE_ROWS] = row_prefix[ACTIVE_ROWS - 1] + row_count;
+        row_prefix[ACTIVE_ROWS] = static_cast<uint16_t>(row_prefix[ACTIVE_ROWS - 1] + row_count);
     }
     __syncthreads();
 
     if (tid < ACTIVE_ROWS) {
-        uint32_t offset = row_prefix[tid];
+        uint16_t offset = row_prefix[tid];
         #pragma unroll
         for (int w = 0; w < BITMAP_WORDS_PER_ROW; ++w) {
             uint32_t word = bitmap[tid * BITMAP_WORDS_PER_ROW + w];
@@ -75,9 +95,9 @@ __device__ int compact_row(
                 const int bit = __ffs(word) - 1;
                 if (offset < MAX_PRIMES_GPU) {
                     prime_pos[offset] =
-                        (static_cast<uint32_t>(tid) << 16) | static_cast<uint32_t>(w * 32 + bit);
+                        static_cast<uint32_t>(tid * SIDE_EXP + (w * 32 + bit));
                 }
-                ++offset;
+                offset = static_cast<uint16_t>(offset + 1u);
                 word &= (word - 1u);
             }
         }
@@ -87,7 +107,7 @@ __device__ int compact_row(
     return static_cast<int>(row_prefix[ACTIVE_ROWS]);
 }
 
-__device__ int uf_index_gpu(int row, int col, const uint32_t* bitmap, const uint32_t* row_prefix) {
+__device__ int uf_index_gpu(int row, int col, const uint32_t* bitmap, const uint16_t* row_prefix) {
     uint32_t idx = row_prefix[row];
     const int full_words = col >> 5;
     for (int w = 0; w < full_words; ++w) {

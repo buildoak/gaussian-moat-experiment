@@ -9,184 +9,79 @@
 
 namespace gpu_face_encode_detail {
 
-struct FacePrimeGPU {
-    uint16_t uf_index;
-    uint16_t h;
-    uint16_t tile_row;
-    uint16_t tile_col;
-};
-
-struct TempPortGPU {
-    uint16_t component_root;
-    uint16_t h1;
-};
-
 struct FaceCountsGPU {
     uint8_t counts[NUM_FACES];
 };
 
 static __device__ __forceinline__ int count_faces(uint8_t mask) {
-    int count = 0;
-    while (mask != 0u) {
-        count += static_cast<int>(mask & 1u);
-        mask = static_cast<uint8_t>(mask >> 1);
-    }
-    return count;
+    return __popc(static_cast<unsigned int>(mask));
 }
 
-static __device__ __forceinline__ uint16_t boundary_depth(int face, uint16_t tile_row, uint16_t tile_col) {
+static __device__ __forceinline__ void decode_prime_pos(uint32_t packed, int* row, int* col) {
+    *row = static_cast<int>(packed / SIDE_EXP);
+    *col = static_cast<int>(packed % SIDE_EXP);
+}
+
+static __device__ __forceinline__ bool face_membership(
+    int face, int tile_row, int tile_col, uint16_t* h, uint16_t* depth) {
     switch (face) {
         case FACE_I:
-            return tile_row;
-        case FACE_O:
-            return static_cast<uint16_t>(TILE_SIDE - static_cast<int>(tile_row));
-        case FACE_L:
-            return tile_col;
-        case FACE_R:
-            return static_cast<uint16_t>(TILE_SIDE - static_cast<int>(tile_col));
-        default:
-            return 0;
-    }
-}
-
-static __device__ __forceinline__ bool face_prime_less(
-    const FacePrimeGPU& lhs, const FacePrimeGPU& rhs, int face) {
-    if (lhs.h != rhs.h) {
-        return lhs.h < rhs.h;
-    }
-
-    const uint16_t lhs_depth = boundary_depth(face, lhs.tile_row, lhs.tile_col);
-    const uint16_t rhs_depth = boundary_depth(face, rhs.tile_row, rhs.tile_col);
-    if (lhs_depth != rhs_depth) {
-        return lhs_depth < rhs_depth;
-    }
-    if (lhs.tile_row != rhs.tile_row) {
-        return lhs.tile_row < rhs.tile_row;
-    }
-    return lhs.tile_col < rhs.tile_col;
-}
-
-static __device__ void sort_face_primes(FacePrimeGPU* primes, int count, int face) {
-    for (int i = 1; i < count; ++i) {
-        const FacePrimeGPU key = primes[i];
-        int j = i - 1;
-        while (j >= 0 && face_prime_less(key, primes[j], face)) {
-            primes[j + 1] = primes[j];
-            --j;
-        }
-        primes[j + 1] = key;
-    }
-}
-
-static __device__ __forceinline__ int face_encode_uf_index(
-    int row, int col, const uint32_t* bitmap, const uint32_t* row_prefix) {
-    uint32_t idx = row_prefix[row];
-    const int full_words = col >> 5;
-    for (int w = 0; w < full_words; ++w) {
-        idx += __popc(bitmap[row * BITMAP_WORDS_PER_ROW + w]);
-    }
-
-    const uint32_t bit_mask = (col & 31) == 0 ? 0u : ((1u << (col & 31)) - 1u);
-    idx += __popc(bitmap[row * BITMAP_WORDS_PER_ROW + full_words] & bit_mask);
-    return static_cast<int>(idx);
-}
-
-static __device__ int collect_face_primes(
-    int face,
-    const uint32_t* bitmap,
-    const uint32_t* row_prefix,
-    const uint32_t* prime_pos,
-    int prime_count,
-    FacePrimeGPU* out_primes) {
-    int count = 0;
-    const int bounded_prime_count = prime_count < MAX_PRIMES_GPU ? prime_count : MAX_PRIMES_GPU;
-
-    for (int i = 0; i < bounded_prime_count; ++i) {
-        const uint32_t packed = prime_pos[i];
-        const int row = static_cast<int>(packed >> 16);
-        const int col = static_cast<int>(packed & 0xFFFFu);
-        const int tile_row = row - COLLAR;
-        const int tile_col = col - COLLAR;
-
-        if (tile_row < 0 || tile_row > TILE_SIDE || tile_col < 0 || tile_col > TILE_SIDE) {
-            continue;
-        }
-
-        bool on_face = false;
-        uint16_t h = 0;
-        switch (face) {
-            case FACE_I:
-                on_face = tile_row < COLLAR;
-                h = static_cast<uint16_t>(tile_col);
-                break;
-            case FACE_O:
-                on_face = tile_row >= (TILE_SIDE - COLLAR + 1);
-                h = static_cast<uint16_t>(tile_col);
-                break;
-            case FACE_L:
-                on_face = tile_col < COLLAR;
-                h = static_cast<uint16_t>(tile_row);
-                break;
-            case FACE_R:
-                on_face = tile_col >= (TILE_SIDE - COLLAR + 1);
-                h = static_cast<uint16_t>(tile_row);
-                break;
-            default:
-                break;
-        }
-
-        if (!on_face) {
-            continue;
-        }
-
-        out_primes[count].uf_index = static_cast<uint16_t>(face_encode_uf_index(row, col, bitmap, row_prefix));
-        out_primes[count].h = h;
-        out_primes[count].tile_row = static_cast<uint16_t>(tile_row);
-        out_primes[count].tile_col = static_cast<uint16_t>(tile_col);
-        ++count;
-    }
-
-    sort_face_primes(out_primes, count, face);
-    return count;
-}
-
-static __device__ int cluster_face_ports(
-    int face,
-    const FacePrimeGPU* face_primes,
-    int face_prime_count,
-    const uint32_t* component_parent,
-    TempPortGPU* out_ports) {
-    if (face_prime_count == 0) {
-        return 0;
-    }
-
-    int port_count = 0;
-    if (port_count >= MAX_PORTS_GPU) {
-        return port_count;
-    }
-    out_ports[port_count].component_root =
-        static_cast<uint16_t>(component_parent[face_primes[0].uf_index]);
-    out_ports[port_count].h1 = face_primes[0].h;
-    ++port_count;
-
-    for (int i = 1; i < face_prime_count; ++i) {
-        const int dx = static_cast<int>(face_primes[i].tile_col) -
-                       static_cast<int>(face_primes[i - 1].tile_col);
-        const int dy = static_cast<int>(face_primes[i].tile_row) -
-                       static_cast<int>(face_primes[i - 1].tile_row);
-        if (dx * dx + dy * dy > K_SQ) {
-            if (port_count >= MAX_PORTS_GPU) {
-                return port_count;
+            if (tile_row < 0 || tile_row >= COLLAR) {
+                return false;
             }
-            out_ports[port_count].component_root =
-                static_cast<uint16_t>(component_parent[face_primes[i].uf_index]);
-            out_ports[port_count].h1 = face_primes[i].h;
-            ++port_count;
-        }
+            *h = static_cast<uint16_t>(tile_col);
+            *depth = static_cast<uint16_t>(tile_row);
+            return true;
+        case FACE_O:
+            if (tile_row < (TILE_SIDE - COLLAR + 1) || tile_row > TILE_SIDE) {
+                return false;
+            }
+            *h = static_cast<uint16_t>(tile_col);
+            *depth = static_cast<uint16_t>(TILE_SIDE - tile_row);
+            return true;
+        case FACE_L:
+            if (tile_col < 0 || tile_col >= COLLAR) {
+                return false;
+            }
+            *h = static_cast<uint16_t>(tile_row);
+            *depth = static_cast<uint16_t>(tile_col);
+            return true;
+        case FACE_R:
+            if (tile_col < (TILE_SIDE - COLLAR + 1) || tile_col > TILE_SIDE) {
+                return false;
+            }
+            *h = static_cast<uint16_t>(tile_row);
+            *depth = static_cast<uint16_t>(TILE_SIDE - tile_col);
+            return true;
+        default:
+            return false;
     }
+}
 
-    (void)face;
-    return port_count;
+static __device__ __forceinline__ void face_coords(
+    int face, uint16_t h, uint16_t depth, int* tile_row, int* tile_col) {
+    switch (face) {
+        case FACE_I:
+            *tile_row = depth;
+            *tile_col = h;
+            return;
+        case FACE_O:
+            *tile_row = TILE_SIDE - static_cast<int>(depth);
+            *tile_col = h;
+            return;
+        case FACE_L:
+            *tile_row = h;
+            *tile_col = depth;
+            return;
+        case FACE_R:
+            *tile_row = h;
+            *tile_col = TILE_SIDE - static_cast<int>(depth);
+            return;
+        default:
+            *tile_row = 0;
+            *tile_col = 0;
+            return;
+    }
 }
 
 static __device__ __forceinline__ uint8_t encode_group_byte(uint8_t group_id, uint16_t h1) {
@@ -232,110 +127,241 @@ static __device__ void append_face_h1(TileOp* tileop, int* cursor, const FaceDat
     }
 }
 
-}  // namespace gpu_face_encode_detail
-
-__device__ void extract_faces_gpu(
-    const uint32_t* bitmap,
-    const uint32_t* row_prefix,
-    const uint32_t* prime_pos,
-    int prime_count,
-    const uint32_t* parent,
-    FaceDataGPU* face_data) {
-    for (int i = 0; i < MAX_PORTS_GPU; ++i) {
-        face_data->ports[i].face = 0;
-        face_data->ports[i].group = 0;
-        face_data->ports[i].h1 = 0;
-    }
-    face_data->port_count = 0;
-    face_data->group_count = 0;
-
-    uint16_t root_to_group[MAX_PRIMES_GPU];
-    for (int i = 0; i < MAX_PRIMES_GPU; ++i) {
-        root_to_group[i] = 0;
-    }
-
-    gpu_face_encode_detail::FacePrimeGPU face_primes[MAX_PRIMES_GPU];
-    gpu_face_encode_detail::TempPortGPU face_ports[MAX_PORTS_GPU];
-    int next_group = 1;
-
-    for (int face = 0; face < NUM_FACES; ++face) {
-        const int face_prime_count = gpu_face_encode_detail::collect_face_primes(
-            face, bitmap, row_prefix, prime_pos, prime_count, face_primes);
-        const int face_port_count = gpu_face_encode_detail::cluster_face_ports(
-            face, face_primes, face_prime_count, parent, face_ports);
-
-        for (int i = 0; i < face_port_count && face_data->port_count < MAX_PORTS_GPU; ++i) {
-            const int component_root = static_cast<int>(face_ports[i].component_root);
-            if (component_root < 0 || component_root >= MAX_PRIMES_GPU) {
-                continue;
-            }
-            if (root_to_group[component_root] == 0) {
-                root_to_group[component_root] = static_cast<uint16_t>(next_group++);
-            }
-
-            PortGPU& port = face_data->ports[face_data->port_count++];
-            port.face = static_cast<uint8_t>(face);
-            port.group = static_cast<uint8_t>(root_to_group[component_root]);
-            port.h1 = face_ports[i].h1;
+static __device__ __forceinline__ GroupEntryGPU* find_group_entry(
+    GroupEntryGPU* entries, uint16_t root) {
+    const int start = static_cast<int>(root % MAX_GROUPS_GPU);
+    for (int probe = 0; probe < MAX_GROUPS_GPU; ++probe) {
+        GroupEntryGPU* entry = &entries[(start + probe) % MAX_GROUPS_GPU];
+        if (entry->port_count == 0u || entry->root == root) {
+            return entry;
         }
     }
-
-    face_data->group_count = next_group - 1;
+    return nullptr;
 }
 
-__device__ void prune_dead_ends_gpu(FaceDataGPU* face_data) {
-    FaceDataGPU pruned;
-    for (int i = 0; i < MAX_PORTS_GPU; ++i) {
-        pruned.ports[i].face = 0;
-        pruned.ports[i].group = 0;
-        pruned.ports[i].h1 = 0;
-    }
-    pruned.port_count = 0;
-    pruned.group_count = 0;
+}  // namespace gpu_face_encode_detail
 
-    uint8_t group_faces[MAX_PORTS_GPU + 1];
-    uint16_t group_ports[MAX_PORTS_GPU + 1];
-    uint8_t dead_end[MAX_PORTS_GPU + 1];
-    int remap[MAX_PORTS_GPU + 1];
-    for (int i = 0; i <= MAX_PORTS_GPU; ++i) {
-        group_faces[i] = 0;
-        group_ports[i] = 0;
-        dead_end[i] = 0;
-        remap[i] = 0;
+__device__ void extract_faces_gpu_parallel(
+    const uint32_t* prime_pos,
+    int prime_count,
+    const uint16_t* parent,
+    FaceCellGPU* face_cells,
+    FaceScratchGPU* scratch,
+    int tid) {
+    const int warp_id = tid / WARP_SIZE;
+    const int lane = tid & (WARP_SIZE - 1);
+
+    const int face_cell_words =
+        static_cast<int>((NUM_FACES * TILE_POINTS * sizeof(FaceCellGPU)) / sizeof(uint32_t));
+    uint32_t* const face_cell_words_ptr = reinterpret_cast<uint32_t*>(face_cells);
+    for (int i = tid; i < face_cell_words; i += BLOCK_THREADS) {
+        face_cell_words_ptr[i] = 0u;
     }
 
-    for (int i = 0; i < face_data->port_count; ++i) {
-        const PortGPU& port = face_data->ports[i];
-        if (port.group == 0) {
-            continue;
+    const int scratch_words =
+        static_cast<int>((sizeof(FaceScratchGPU) + sizeof(uint32_t) - 1) / sizeof(uint32_t));
+    uint32_t* const scratch_words_ptr = reinterpret_cast<uint32_t*>(scratch);
+    for (int i = tid; i < scratch_words; i += BLOCK_THREADS) {
+        scratch_words_ptr[i] = 0u;
+    }
+    __syncthreads();
+
+    const int bounded_prime_count = prime_count < MAX_PRIMES_GPU ? prime_count : MAX_PRIMES_GPU;
+    if (warp_id < NUM_FACES) {
+        const int face = warp_id;
+        for (int chunk_base = 0; chunk_base < TILE_POINTS; chunk_base += WARP_SIZE) {
+            const int h = chunk_base + lane;
+            FaceCellGPU local_cell{};
+
+            if (h < TILE_POINTS) {
+                for (int i = 0; i < bounded_prime_count; ++i) {
+                    int row = 0;
+                    int col = 0;
+                    gpu_face_encode_detail::decode_prime_pos(prime_pos[i], &row, &col);
+
+                    const int tile_row = row - COLLAR;
+                    const int tile_col = col - COLLAR;
+                    if (tile_row < 0 || tile_row > TILE_SIDE || tile_col < 0 || tile_col > TILE_SIDE) {
+                        continue;
+                    }
+
+                    uint16_t prime_h = 0;
+                    uint16_t depth = 0;
+                    if (!gpu_face_encode_detail::face_membership(
+                            face, tile_row, tile_col, &prime_h, &depth) ||
+                        prime_h != h) {
+                        continue;
+                    }
+
+                    local_cell.roots[depth] = parent[i];
+                    local_cell.mask = static_cast<uint8_t>(local_cell.mask | (1u << depth));
+                }
+
+                face_cells[face * TILE_POINTS + h] = local_cell;
+            }
         }
-        group_faces[port.group] = static_cast<uint8_t>(group_faces[port.group] | (1u << port.face));
-        ++group_ports[port.group];
-    }
+        __syncwarp();
 
-    for (int group = 1; group <= face_data->group_count && group <= MAX_PORTS_GPU; ++group) {
-        if (group_ports[group] == 1u && gpu_face_encode_detail::count_faces(group_faces[group]) == 1) {
-            dead_end[group] = 1;
+        if (lane == 0) {
+            int port_count = 0;
+            bool have_prev = false;
+            int prev_row = 0;
+            int prev_col = 0;
+
+            for (int h = 0; h < TILE_POINTS; ++h) {
+                const FaceCellGPU& cell = face_cells[face * TILE_POINTS + h];
+                const uint8_t mask = cell.mask;
+                if (mask == 0u) {
+                    continue;
+                }
+
+                for (int depth = 0; depth < COLLAR; ++depth) {
+                    if ((mask & (1u << depth)) == 0u) {
+                        continue;
+                    }
+
+                    int tile_row = 0;
+                    int tile_col = 0;
+                    gpu_face_encode_detail::face_coords(
+                        face, static_cast<uint16_t>(h), static_cast<uint16_t>(depth), &tile_row, &tile_col);
+
+                    bool start_port = false;
+                    if (!have_prev) {
+                        start_port = true;
+                    } else {
+                        const int dx = tile_col - prev_col;
+                        const int dy = tile_row - prev_row;
+                        start_port = (dx * dx + dy * dy) > K_SQ;
+                    }
+
+                    if (start_port) {
+                        const int slot = face * MAX_FACE_PORTS_GPU + port_count;
+                        if (port_count < MAX_FACE_PORTS_GPU && slot < MAX_TOTAL_PORTS_GPU) {
+                            RawPortGPU& out = scratch->raw_ports[slot];
+                            out.root = cell.roots[depth];
+                            out.h1 = static_cast<uint16_t>(h);
+                            out.face = static_cast<uint8_t>(face);
+                            out.live = 1u;
+                            out.pad = 0u;
+                        }
+                        ++port_count;
+                    }
+
+                    prev_row = tile_row;
+                    prev_col = tile_col;
+                    have_prev = true;
+                }
+            }
+
+            if (port_count > MAX_FACE_PORTS_GPU) {
+                scratch->overflow = 1u;
+            }
+            scratch->face_port_counts[face] = static_cast<uint16_t>(port_count);
         }
     }
+    __syncthreads();
 
-    int next_group = 1;
-    for (int i = 0; i < face_data->port_count && pruned.port_count < MAX_PORTS_GPU; ++i) {
-        const PortGPU& port = face_data->ports[i];
-        if (port.group == 0 || dead_end[port.group] != 0) {
-            continue;
+    if (tid == 0) {
+        scratch->raw_port_count = 0u;
+        for (int face = 0; face < NUM_FACES; ++face) {
+            scratch->raw_port_count = static_cast<uint16_t>(
+                scratch->raw_port_count + scratch->face_port_counts[face]);
         }
-        if (remap[port.group] == 0) {
-            remap[port.group] = next_group++;
+        if (scratch->raw_port_count > MAX_TOTAL_PORTS_GPU) {
+            scratch->overflow = 1u;
         }
-
-        PortGPU& out = pruned.ports[pruned.port_count++];
-        out = port;
-        out.group = static_cast<uint8_t>(remap[port.group]);
     }
+    __syncthreads();
+}
 
-    pruned.group_count = next_group - 1;
-    *face_data = pruned;
+__device__ void prune_dead_ends_gpu(
+    FaceScratchGPU* scratch,
+    FaceDataGPU* face_data,
+    int tid) {
+    const int warp_id = tid / WARP_SIZE;
+    const int lane = tid & (WARP_SIZE - 1);
+
+    if (warp_id == 4) {
+        for (int i = lane; i < MAX_GROUPS_GPU; i += WARP_SIZE) {
+            scratch->group_entries[i].root = 0u;
+            scratch->group_entries[i].face_mask = 0u;
+            scratch->group_entries[i].port_count = 0u;
+            scratch->group_entries[i].new_group = 0u;
+            scratch->group_entries[i].dead = 0u;
+            scratch->group_entries[i].pad = 0u;
+        }
+    }
+    __syncthreads();
+
+    if (warp_id == 4 && lane == 0) {
+        face_data->port_count = 0;
+        face_data->group_count = 0;
+        for (int i = 0; i < MAX_PORTS_GPU; ++i) {
+            face_data->ports[i].face = 0u;
+            face_data->ports[i].group = 0u;
+            face_data->ports[i].h1 = 0u;
+        }
+
+        if (scratch->overflow != 0u) {
+            face_data->group_count = MAX_GROUPS_GPU + 1;
+            return;
+        }
+
+        for (int face = 0; face < NUM_FACES; ++face) {
+            const int base = face * MAX_FACE_PORTS_GPU;
+            const int count = scratch->face_port_counts[face];
+            for (int i = 0; i < count; ++i) {
+                const RawPortGPU& raw = scratch->raw_ports[base + i];
+                GroupEntryGPU* entry =
+                    gpu_face_encode_detail::find_group_entry(scratch->group_entries, raw.root);
+                if (entry == nullptr) {
+                    face_data->group_count = MAX_GROUPS_GPU + 1;
+                    return;
+                }
+                if (entry->port_count == 0u) {
+                    entry->root = raw.root;
+                }
+                entry->face_mask = static_cast<uint8_t>(entry->face_mask | (1u << raw.face));
+                entry->port_count = static_cast<uint8_t>(entry->port_count + 1u);
+            }
+        }
+
+        for (int i = 0; i < MAX_GROUPS_GPU; ++i) {
+            GroupEntryGPU& entry = scratch->group_entries[i];
+            if (entry.port_count == 1u &&
+                gpu_face_encode_detail::count_faces(entry.face_mask) == 1) {
+                entry.dead = 1u;
+            }
+        }
+
+        int next_group = 1;
+        for (int face = 0; face < NUM_FACES && face_data->port_count < MAX_PORTS_GPU; ++face) {
+            const int base = face * MAX_FACE_PORTS_GPU;
+            const int count = scratch->face_port_counts[face];
+            for (int i = 0; i < count && face_data->port_count < MAX_PORTS_GPU; ++i) {
+                const RawPortGPU& raw = scratch->raw_ports[base + i];
+                GroupEntryGPU* entry =
+                    gpu_face_encode_detail::find_group_entry(scratch->group_entries, raw.root);
+                if (entry == nullptr || entry->dead != 0u) {
+                    continue;
+                }
+                if (entry->new_group == 0u) {
+                    if (next_group > MAX_GROUPS_GPU) {
+                        face_data->group_count = MAX_GROUPS_GPU + 1;
+                        return;
+                    }
+                    entry->new_group = static_cast<uint8_t>(next_group++);
+                }
+
+                PortGPU& out = face_data->ports[face_data->port_count++];
+                out.face = raw.face;
+                out.group = entry->new_group;
+                out.h1 = raw.h1;
+            }
+        }
+        face_data->group_count = next_group - 1;
+    }
+    __syncthreads();
 }
 
 __device__ void encode_tileop_gpu(const FaceDataGPU* face_data, TileOp* output) {

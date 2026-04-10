@@ -32,7 +32,12 @@ constexpr uint32_t kTrialPrimes[NUM_TRIAL_PRIMES] = {
 
 constexpr int kBitmapWords = ACTIVE_ROWS * BITMAP_WORDS_PER_ROW;
 constexpr int kPhase1Words = BLOCK_THREADS + (BLOCK_THREADS + 1) + MAX_PRIMES_GPU;
-constexpr int kPhase24Words = (ACTIVE_ROWS + 1) + MAX_PRIMES_GPU + MAX_PRIMES_GPU;
+constexpr size_t kBitmapBytes = sizeof(uint32_t) * static_cast<size_t>(kBitmapWords);
+constexpr size_t kPhase1Bytes = sizeof(uint32_t) * static_cast<size_t>(kPhase1Words);
+constexpr size_t kPhase24Bytes =
+    sizeof(uint16_t) * static_cast<size_t>(ACTIVE_ROWS + 1 + MAX_PRIMES_GPU) +
+    sizeof(uint32_t) * static_cast<size_t>(MAX_PRIMES_GPU) +
+    sizeof(FaceCellGPU) * static_cast<size_t>(NUM_FACES * TILE_POINTS);
 
 __device__ void poison_tileop(TileOp* tileop) {
     for (int i = 0; i < TILEOP_SIZE; ++i) {
@@ -58,18 +63,21 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
         return;
     }
 
-    extern __shared__ uint32_t smem[];
+    extern __shared__ uint32_t smem_words[];
+    uint8_t* const smem = reinterpret_cast<uint8_t*>(smem_words);
 
-    uint32_t* const bitmap = smem;
-    uint32_t* const overlay = bitmap + kBitmapWords;
+    uint32_t* const bitmap = reinterpret_cast<uint32_t*>(smem);
+    uint8_t* const overlay = smem + kBitmapBytes;
 
-    uint32_t* const cand_counts = overlay;
+    uint32_t* const cand_counts = reinterpret_cast<uint32_t*>(overlay);
     uint32_t* const cand_prefix = cand_counts + BLOCK_THREADS;
     uint32_t* const cand_list = cand_prefix + (BLOCK_THREADS + 1);
 
-    uint32_t* const row_prefix = overlay;
-    uint32_t* const prime_pos = row_prefix + (ACTIVE_ROWS + 1);
-    uint32_t* const parent = prime_pos + MAX_PRIMES_GPU;
+    uint16_t* const row_prefix = reinterpret_cast<uint16_t*>(overlay);
+    uint32_t* const prime_pos = reinterpret_cast<uint32_t*>(row_prefix + (ACTIVE_ROWS + 1));
+    uint16_t* const parent = reinterpret_cast<uint16_t*>(prime_pos + MAX_PRIMES_GPU);
+    FaceCellGPU* const face_cells = reinterpret_cast<FaceCellGPU*>(parent + MAX_PRIMES_GPU);
+    FaceScratchGPU* const face_scratch = reinterpret_cast<FaceScratchGPU*>(smem);
 
     __shared__ uint32_t total_cands;
 
@@ -118,9 +126,7 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
                        bitmap, tid, BLOCK_THREADS);
     __syncthreads();
 
-    if (tid < ACTIVE_ROWS) {
-        (void)compact_row(bitmap, row_prefix, prime_pos, tid);
-    }
+    (void)compact_row(bitmap, row_prefix, prime_pos, tid);
     __syncthreads();
 
     const int prime_count = static_cast<int>(row_prefix[ACTIVE_ROWS]);
@@ -139,10 +145,12 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
     }
     __syncthreads();
 
+    __shared__ FaceDataGPU face_data;
+
+    extract_faces_gpu_parallel(prime_pos, prime_count, parent, face_cells, face_scratch, tid);
+    prune_dead_ends_gpu(face_scratch, &face_data, tid);
+
     if (tid == 0) {
-        FaceDataGPU face_data{};
-        extract_faces_gpu(bitmap, row_prefix, prime_pos, prime_count, parent, &face_data);
-        prune_dead_ends_gpu(&face_data);
         encode_tileop_gpu(&face_data, &output[tile_idx]);
         if (prime_counts != nullptr) {
             prime_counts[tile_idx] = static_cast<uint32_t>(prime_count);
@@ -180,8 +188,6 @@ void upload_constants() {
 }
 
 size_t tile_kernel_shared_bytes() {
-    const size_t overlay_words = static_cast<size_t>(kPhase1Words > kPhase24Words
-                                                         ? kPhase1Words
-                                                         : kPhase24Words);
-    return sizeof(uint32_t) * (static_cast<size_t>(kBitmapWords) + overlay_words);
+    const size_t overlay_bytes = kPhase1Bytes > kPhase24Bytes ? kPhase1Bytes : kPhase24Bytes;
+    return kBitmapBytes + overlay_bytes;
 }

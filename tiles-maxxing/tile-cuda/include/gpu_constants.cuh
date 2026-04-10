@@ -8,6 +8,7 @@ constexpr int32_t COLLAR = 7;
 constexpr int32_t TILE_POINTS = TILE_SIDE + 1;
 constexpr int32_t SIDE_EXP = TILE_POINTS + 2 * COLLAR;
 constexpr int32_t K_SQ = 40;
+static_assert(SIDE_EXP <= 512, "packed prime positions require SIDE_EXP <= 512");
 
 constexpr int SPLIT_PRIMES_COUNT = 609;
 constexpr int INERT_PRIMES_COUNT = 619;
@@ -21,6 +22,10 @@ constexpr uint32_t LAST_WORD_MASK = (1u << LAST_WORD_VALID_BITS) - 1u;
 
 constexpr int MAX_PRIMES_GPU = 3072;
 constexpr int MAX_PORTS_GPU = 256;
+constexpr int MAX_FACE_PRIMES_GPU = 900;
+constexpr int MAX_FACE_PORTS_GPU = 32;
+constexpr int MAX_TOTAL_PORTS_GPU = 128;
+constexpr int MAX_GROUPS_GPU = 127;
 
 constexpr int TILEOP_SIZE = 128;
 constexpr int TILEOP_HEADER_BYTES = 3;
