@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from analysis import category_histogram, classify_surviving_groups, packed_budget_counts
 from tile import DEFAULT_K, process_tile
-from tileop import face_h1_parity
 
 
 def diagnose(a_lo: int, b_lo: int, k_sq: int = DEFAULT_K) -> None:
@@ -32,16 +31,11 @@ def diagnose(a_lo: int, b_lo: int, k_sq: int = DEFAULT_K) -> None:
         "  face_counts="
         + ", ".join(f"{face}={len(result['ports'][face])}" for face in ("I", "O", "L", "R"))
     )
-    print(
-        "  face_parity="
-        f"L:{face_h1_parity('L', (a_lo, b_lo))} "
-        f"R:{face_h1_parity('R', (a_lo, b_lo))}"
-    )
     for face in ("I", "O", "L", "R"):
         decoded = result["tileop_decoded"][face]
         print(
             f"  {face}: groups={decoded['groups']}"
-            + (f" h1_packed={decoded['h1_packed']} h1={decoded['h1']}" if face in ('L', 'R') else "")
+            + (f" h1_bytes={decoded['h1_packed']} h1={decoded['h1']}" if face in ('L', 'R') else "")
         )
     print(f"  classifications={category_histogram(classifications)}")
 

@@ -11,7 +11,7 @@ HEADER_BYTES = 3
 TILEOP_SIZE = 128
 OVERFLOW_BYTE = 0xFF
 EMPTY_OFFSET = 3
-TILE_SIDE = 256
+GROUP_LABEL_MAX = 127
 
 
 @dataclass(frozen=True)
@@ -44,16 +44,22 @@ def is_dead_tileop(tileop: bytes) -> bool:
     )
 
 
-def face_h1_parity(face: str, tile_origin: tuple[int, int]) -> int:
-    a_lo, b_lo = tile_origin
-    if face not in ("L", "R"):
-        return 0
-    fixed_b = b_lo if face == "L" else b_lo + TILE_SIDE
-    return (1 ^ (a_lo & 1) ^ (fixed_b & 1)) & 1
+def encode_lr_group_byte(group_id: int, h1: int) -> int:
+    if not 0 <= h1 <= 256:
+        raise ValueError(f"h1={h1} out of range for TileOp v2 L/R encoding")
+    if not 1 <= group_id <= GROUP_LABEL_MAX:
+        raise ValueError(f"group_id={group_id} out of range for TileOp v2 L/R encoding")
+    return ((h1 >> 8) << 7) | (group_id & 0x7F)
 
 
-def decode_packed_h1(stored: int, face: str, tile_origin: tuple[int, int]) -> int:
-    return 2 * stored + face_h1_parity(face, tile_origin)
+def encode_lr_h1_byte(h1: int) -> int:
+    if not 0 <= h1 <= 256:
+        raise ValueError(f"h1={h1} out of range for TileOp v2 L/R encoding")
+    return h1 & 0xFF
+
+
+def decode_packed_h1(group_byte: int, h1_byte: int) -> int:
+    return ((group_byte >> 7) << 8) | h1_byte
 
 
 def parse_tileop(tileop: bytes) -> ParsedTileOp:
@@ -81,17 +87,22 @@ def parse_tileop(tileop: bytes) -> ParsedTileOp:
     r_cnt = (PAYLOAD_BUDGET - o_cnt - i_cnt - 2 * l_cnt) >> 1
     h_start = off_R + r_cnt
 
+    r_groups = list(tileop[off_R:off_R + max(r_cnt, 0)])
+    live_r_cnt = len(r_groups)
+    while live_r_cnt > 0 and r_groups[live_r_cnt - 1] == 0:
+        live_r_cnt -= 1
+
     groups = {
         "O": list(tileop[HEADER_BYTES:off_I]),
         "I": list(tileop[off_I:off_L]),
         "L": list(tileop[off_L:off_R]),
-        "R": list(tileop[off_R:off_R + max(r_cnt, 0)]),
+        "R": r_groups[:live_r_cnt],
     }
     h1_packed = {
         "I": [],
         "O": [],
         "L": list(tileop[h_start:h_start + max(l_cnt, 0)]),
-        "R": list(tileop[h_start + max(l_cnt, 0):h_start + max(l_cnt, 0) + max(r_cnt, 0)]),
+        "R": list(tileop[h_start + max(l_cnt, 0):h_start + max(l_cnt, 0) + live_r_cnt]),
     }
     status = "dead" if is_dead_tileop(tileop) else "normal"
     return ParsedTileOp(
@@ -123,8 +134,12 @@ def decode_face_h1(tileop: bytes, face: str, *, tile_origin: tuple[int, int]) ->
     parsed = parse_tileop(tileop)
     if parsed.status == "overflow":
         return []
+    assert parsed.groups is not None
     assert parsed.h1_packed is not None
-    return [decode_packed_h1(stored, face, tile_origin) for stored in parsed.h1_packed[face]]
+    return [
+        decode_packed_h1(group_byte, h1_byte)
+        for group_byte, h1_byte in zip(parsed.groups[face], parsed.h1_packed[face], strict=False)
+    ]
 
 
 def decode_tileop(
@@ -142,9 +157,15 @@ def decode_tileop(
     for face in FACES:
         h1 = []
         if face in ("L", "R") and tile_origin is not None:
-            h1 = [decode_packed_h1(stored, face, tile_origin) for stored in parsed.h1_packed[face]]
+            h1 = [
+                decode_packed_h1(group_byte, h1_byte)
+                for group_byte, h1_byte in zip(parsed.groups[face], parsed.h1_packed[face], strict=False)
+            ]
         decoded[face] = {
-            "groups": list(parsed.groups[face]),
+            "groups": [
+                (group_byte & 0x7F) if face in ("L", "R") else group_byte
+                for group_byte in parsed.groups[face]
+            ],
             "h1_packed": list(parsed.h1_packed[face]),
             "h1": h1,
         }
@@ -198,12 +219,32 @@ def validate_tileop_structure(tileop: bytes) -> list[str]:
         )
         return problems
 
+    l_groups = list(tileop[off_L:off_R])
+    r_groups = list(tileop[off_R:off_R + r_cnt])
+    live_r_cnt = len(r_groups)
+    while live_r_cnt > 0 and r_groups[live_r_cnt - 1] == 0:
+        live_r_cnt -= 1
+
     for face, groups in {
         "O": list(tileop[HEADER_BYTES:off_I]),
         "I": list(tileop[off_I:off_L]),
-        "L": list(tileop[off_L:off_R]),
+        "L": l_groups,
+        "R": r_groups[:live_r_cnt],
     }.items():
         for group in groups:
-            if not 1 <= group <= 255:
+            max_group = GROUP_LABEL_MAX if face in ("L", "R") else 255
+            decoded_group = group & 0x7F if face in ("L", "R") else group
+            if not 1 <= decoded_group <= max_group:
                 problems.append(f"{face} group out of range: {group}")
+
+    l_h1 = list(tileop[h_start:h_start + l_cnt])
+    r_h1 = list(tileop[h_start + l_cnt:h_start + l_cnt + live_r_cnt])
+    for face, groups, h1_bytes in (("L", l_groups, l_h1), ("R", r_groups[:live_r_cnt], r_h1)):
+        if len(groups) != len(h1_bytes):
+            problems.append(f"{face} groups/h1 length mismatch: {len(groups)} vs {len(h1_bytes)}")
+            continue
+        for group_byte, h1_byte in zip(groups, h1_bytes, strict=False):
+            h1 = decode_packed_h1(group_byte, h1_byte)
+            if not 0 <= h1 <= 256:
+                problems.append(f"{face} h1 out of range: group_byte={group_byte} h1_byte={h1_byte} decoded={h1}")
     return problems

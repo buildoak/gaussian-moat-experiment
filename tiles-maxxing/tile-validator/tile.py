@@ -10,6 +10,7 @@ from __future__ import annotations
 from primes import is_gaussian_prime
 from uf import build_components, make_backward_offsets
 from analysis import packed_budget_counts
+from tileop import decode_tileop, parse_tileop
 
 TILE_SIDE = 256
 S = TILE_SIDE
@@ -159,28 +160,21 @@ def process_tile(a_lo: int, b_lo: int, k_sq: int = DEFAULT_K) -> dict:
         tileop_counts = None
         tileop_decoded = {face: {"groups": [], "h1_packed": [], "h1": []} for face in ("I", "O", "L", "R")}
     else:
-        tileop_status = "dead" if final_port_count == 0 else "normal"
+        parsed = parse_tileop(tileop)
+        tileop_status = parsed.status
         tileop_offsets = {
-            "off_I": 3 + budget["o_cnt"],
-            "off_L": 3 + budget["o_cnt"] + budget["i_cnt"],
-            "off_R": 3 + budget["o_cnt"] + budget["i_cnt"] + budget["l_cnt"],
+            "off_I": parsed.off_I,
+            "off_L": parsed.off_L,
+            "off_R": parsed.off_R,
         }
         tileop_counts = {
-            "o_cnt": budget["o_cnt"],
-            "i_cnt": budget["i_cnt"],
-            "l_cnt": budget["l_cnt"],
-            "r_cnt": budget["r_cnt"],
-            "h_start": tileop_offsets["off_R"] + budget["r_cnt"],
+            "o_cnt": parsed.o_cnt,
+            "i_cnt": parsed.i_cnt,
+            "l_cnt": parsed.l_cnt,
+            "r_cnt": parsed.r_cnt,
+            "h_start": parsed.h_start,
         }
-        tileop_decoded = {}
-        for face in ("I", "O", "L", "R"):
-            groups = [port["group"] for port in ports_to_public_dict(ports_after_pruning)[face]]
-            h1 = [port["h1"] for port in ports_to_public_dict(ports_after_pruning)[face]] if face in ("L", "R") else []
-            tileop_decoded[face] = {
-                "groups": groups,
-                "h1_packed": [value >> 1 for value in h1],
-                "h1": h1,
-            }
+        tileop_decoded = decode_tileop(tileop, tile_origin=(a_lo, b_lo))
     final_groups = _finalize_prime_groups(
         prime_count=bitmap_prime_count,
         component_roots=component_roots,

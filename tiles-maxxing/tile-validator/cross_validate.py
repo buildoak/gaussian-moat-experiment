@@ -2,7 +2,7 @@
 """Cross-validate C++ tile-cpp/build/run_tile against Python tile validator.
 
 Primary gate: byte-for-byte TileOp identity + metadata match.
-Secondary check: h1 half-step round-trip (spec-level finding).
+Secondary check: group-bit-steal h1 round-trip.
 """
 
 from __future__ import annotations
@@ -105,7 +105,7 @@ def byte_diff(a: bytes, b: bytes) -> list[str]:
 def check_h1_round_trip(
     tileop: bytes, a_lo: int, b_lo: int, ports: dict[str, list[dict]]
 ) -> tuple[int, int, list[str]]:
-    """Check h1 round-trip. Returns (total_checked, failures, details)."""
+    """Check group-bit-steal h1 round-trip. Returns (total_checked, failures, details)."""
     if is_overflow_tileop(tileop) or is_dead_tileop(tileop):
         return 0, 0, []
 
@@ -119,27 +119,47 @@ def check_h1_round_trip(
 
     for face in ("L", "R"):
         face_ports = ports.get(face, [])
-        # Get the actual h1_packed bytes for live ports only
+        group_bytes = parsed.groups.get(face, []) if parsed.groups is not None else []
         all_packed = parsed.h1_packed.get(face, [])
-        # Live ports = non-zero R groups (for R face) or all L groups
-        live_count = len(face_ports)
+        live_count = min(len(face_ports), len(all_packed), len(group_bytes))
 
-        for idx in range(min(live_count, len(all_packed))):
+        for idx in range(live_count):
             port = face_ports[idx]
+            group_byte = group_bytes[idx]
             stored = all_packed[idx]
             original_h1 = port["h1"]
+            original_group = port["group"]
             total += 1
 
-            expected_stored = original_h1 >> 1
+            expected_group = ((original_h1 >> 8) << 7) | (original_group & 0x7F)
+            expected_stored = original_h1 & 0xFF
+            if group_byte != expected_group:
+                failures += 1
+                details.append(
+                    f"{face}[{idx}]: group_byte mismatch stored={group_byte} vs expected={expected_group}"
+                )
+                continue
             if stored != expected_stored:
                 failures += 1
-                details.append(f"{face}[{idx}]: encode mismatch stored={stored} vs h1>>1={expected_stored}")
+                details.append(
+                    f"{face}[{idx}]: h1_byte mismatch stored={stored} vs expected={expected_stored}"
+                )
                 continue
 
-            decoded = decode_packed_h1(stored, face, (a_lo, b_lo))
+            decoded_group = group_byte & 0x7F
+            if decoded_group != original_group:
+                failures += 1
+                details.append(
+                    f"{face}[{idx}]: group={original_group} -> group_byte={group_byte} -> decoded={decoded_group}"
+                )
+                continue
+
+            decoded = decode_packed_h1(group_byte, stored)
             if decoded != original_h1:
                 failures += 1
-                details.append(f"{face}[{idx}]: h1={original_h1} -> stored={stored} -> decoded={decoded} (off by {decoded - original_h1:+d})")
+                details.append(
+                    f"{face}[{idx}]: h1={original_h1} -> group_byte={group_byte} h1_byte={stored} -> decoded={decoded}"
+                )
 
     return total, failures, details
 
@@ -235,7 +255,7 @@ def main():
             tile_result["status"] = "PASS"
             encoding_pass += 1
             f = face_summary
-            h1_note = f" h1-parity-issues={h1_fail}/{h1_total}" if h1_fail else ""
+            h1_note = f" h1-roundtrip-failures={h1_fail}/{h1_total}" if h1_fail else ""
             print(
                 f"{tag} ({a_lo},{b_lo}) R={r/1e9:.3f}B {angle:.1f}deg -- PASS  "
                 f"primes={int(cpp.get('prime_count',0))} groups={int(cpp.get('group_count',0))} "
@@ -263,18 +283,12 @@ def main():
     else:
         verdict = "PASS"
 
-    print(f"\nSecondary check (h1 half-step round-trip decode):")
+    print(f"\nSecondary check (group-bit-steal h1 round-trip):")
     print(f"  Total h1 values checked:  {total_h1_checked}")
     print(f"  Round-trip failures:      {total_h1_failures}")
     if total_h1_checked > 0:
         pct = total_h1_failures / total_h1_checked * 100
         print(f"  Failure rate:             {pct:.1f}%")
-    if total_h1_failures > 0:
-        print(f"  NOTE: This is a spec-level issue, not an implementation divergence.")
-        print(f"  Both C++ and Python encode h1>>1 identically; the parity-based decode")
-        print(f"  assumes all face primes share one parity class, but port anchors can")
-        print(f"  sit at any collar depth, breaking that assumption.")
-
     print(f"\n  Per-tile h1 breakdown:")
     for r in results:
         if r.get("h1_total", 0) > 0:

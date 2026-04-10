@@ -6,6 +6,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from analysis import compute_group_face_incidence, identify_dead_ends, overflow_reason, packed_budget_counts
+from tileop import encode_lr_group_byte, encode_lr_h1_byte
 
 FACES = ("I", "O", "L", "R")
 GROUP_EMPTY = 0
@@ -191,19 +192,20 @@ def encode_tileop(
 
     # Write group labels for O, I, L, R
     cursor = 3
-    for face in ("O", "I", "L", "R"):
+    for face in ("O", "I"):
         for port in ports_by_face[face]:
             tileop[cursor] = port.group
             cursor += 1
+    for face in ("L", "R"):
+        for port in ports_by_face[face]:
+            tileop[cursor] = encode_lr_group_byte(port.group, port.h1)
+            cursor += 1
 
-    # The parser derives r_cnt from the budget formula, not from actual R port
-    # count.  h1 bytes must be placed at the parser's expected h_start =
-    # off_R + derived_r_cnt.  Excess R group slots remain zero (group=0 = unused).
     derived_r_cnt = (128 - off_R - budget["l_cnt"]) // 2
     cursor = off_R + derived_r_cnt
     for face in ("L", "R"):
         for port in ports_by_face[face]:
-            tileop[cursor] = port.h1 >> 1
+            tileop[cursor] = encode_lr_h1_byte(port.h1)
             cursor += 1
 
     return bytes(tileop), False

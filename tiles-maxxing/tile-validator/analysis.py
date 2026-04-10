@@ -7,6 +7,7 @@ from collections import Counter, defaultdict
 
 FACES = ("I", "O", "L", "R")
 PAYLOAD_BUDGET = 125
+GROUP_LABEL_MAX = 127
 
 
 def compute_group_face_incidence(ports_by_face: dict[str, list[dict]]) -> dict[int, dict[str, int]]:
@@ -65,7 +66,7 @@ def packed_budget_counts(ports_by_face: dict[str, list[dict]]) -> dict[str, int]
 
 def overflow_reason(ports_by_face: dict[str, list[dict]], group_count: int) -> str | None:
     budget = packed_budget_counts(ports_by_face)
-    if group_count > 255:
+    if group_count > GROUP_LABEL_MAX:
         return "group_count"
     if budget["packed_bytes_used"] > PAYLOAD_BUDGET:
         return "packed_budget"
