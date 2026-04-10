@@ -37,7 +37,7 @@ constexpr size_t kPhase1Bytes = sizeof(uint32_t) * static_cast<size_t>(kPhase1Wo
 constexpr size_t kPhase24Bytes =
     sizeof(uint16_t) * static_cast<size_t>(ACTIVE_ROWS + 1 + MAX_PRIMES_GPU) +
     sizeof(uint32_t) * static_cast<size_t>(MAX_PRIMES_GPU) +
-    sizeof(FaceCellGPU) * static_cast<size_t>(NUM_FACES * TILE_POINTS);
+    sizeof(FaceCellGPU) * static_cast<size_t>(FACES_PER_PASS * TILE_POINTS);
 
 __device__ void poison_tileop(TileOp* tileop) {
     for (int i = 0; i < TILEOP_SIZE; ++i) {

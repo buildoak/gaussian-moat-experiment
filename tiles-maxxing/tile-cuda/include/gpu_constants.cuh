@@ -20,12 +20,13 @@ constexpr int BITMAP_ROWS = SIDE_EXP;
 constexpr int LAST_WORD_VALID_BITS = 15;
 constexpr uint32_t LAST_WORD_MASK = (1u << LAST_WORD_VALID_BITS) - 1u;
 
-constexpr int MAX_PRIMES_GPU = 2304;
+constexpr int MAX_PRIMES_GPU = 2560;
 constexpr int MAX_PORTS_GPU = 256;
 constexpr int MAX_FACE_PRIMES_GPU = 900;
 constexpr int MAX_FACE_PORTS_GPU = 32;
 constexpr int MAX_TOTAL_PORTS_GPU = 128;
 constexpr int MAX_GROUPS_GPU = 127;
+constexpr int FACES_PER_PASS = 2;
 
 constexpr int TILEOP_SIZE = 128;
 constexpr int TILEOP_HEADER_BYTES = 3;
