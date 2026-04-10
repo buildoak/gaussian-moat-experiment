@@ -221,14 +221,18 @@ void test_prune_and_encode_v2_round_trip() {
     const TileOpFaceView r_view = tileop_face_view(layout, FACE_R);
     expect_eq_u8(o_view.groups[0], 2, "O group[0]");
     expect_eq_u8(i_view.groups[0], 1, "I group[0]");
-    expect_eq_u8(l_view.groups[0], 3, "L group[0]");
-    expect_eq_u8(l_view.groups[1], 3, "L group[1]");
-    expect_eq_u8(r_view.groups[0], 4, "R group[0]");
-    expect_eq_u8(r_view.groups[58], 4, "R group[last]");
-    expect_eq_u8(l_view.h1_packed[0], 5, "L h1_packed[0]");
-    expect_eq_u8(l_view.h1_packed[1], 6, "L h1_packed[1]");
-    expect_eq_u8(r_view.h1_packed[0], 1, "R h1_packed[0]");
-    expect_eq_u8(r_view.h1_packed[58], 59, "R h1_packed[last]");
+    expect_eq_u8(decode_group_id(l_view.groups[0]), 3, "L group[0]");
+    expect_eq_u8(decode_group_id(l_view.groups[1]), 3, "L group[1]");
+    expect_eq_u8(decode_group_id(r_view.groups[0]), 4, "R group[0]");
+    expect_eq_u8(decode_group_id(r_view.groups[58]), 4, "R group[last]");
+    expect_eq_u8(l_view.h1_packed[0], 11, "L h1_byte[0]");
+    expect_eq_u8(l_view.h1_packed[1], 13, "L h1_byte[1]");
+    expect_eq_u8(r_view.h1_packed[0], 2, "R h1_byte[0]");
+    expect_eq_u8(r_view.h1_packed[58], 118, "R h1_byte[last]");
+    expect_eq_u16(decode_h1(l_view.groups[0], l_view.h1_packed[0]), 11, "decoded L h1[0]");
+    expect_eq_u16(decode_h1(l_view.groups[1], l_view.h1_packed[1]), 13, "decoded L h1[1]");
+    expect_eq_u16(decode_h1(r_view.groups[0], r_view.h1_packed[0]), 2, "decoded R h1[0]");
+    expect_eq_u16(decode_h1(r_view.groups[58], r_view.h1_packed[58]), 118, "decoded R h1[last]");
     expect_eq_u8(max_group_label(tileop), 4, "max group label");
 }
 
@@ -264,34 +268,51 @@ void test_dynamic_budget_and_overflow() {
     expect_eq_u8(overflow_tileop.bytes[127], OVERFLOW_SENTINEL, "payload overflow poisons tail");
 }
 
-void test_h1_half_step_round_trip() {
-    auto make_half_step_tile = [](uint16_t left_h1) {
+void test_group_bit_steal_round_trip() {
+    auto make_group_bit_tile = [](uint16_t left_h1, int left_group) {
         FaceData face_data;
         std::memset(&face_data, 0, sizeof(face_data));
         face_data.group_count = 2;
         face_data.port_count = 62;
-        face_data.ports[0] = {FACE_L, 1, left_h1};
+        face_data.ports[0] = {FACE_L, left_group, left_h1};
         for (int i = 0; i < 61; ++i) {
             face_data.ports[1 + i] = {FACE_R, 2, static_cast<uint16_t>(2 * i + 136)};
         }
         return encode_tileop(face_data);
     };
 
-    const TileOp odd_tileop = make_half_step_tile(255);
-    const TileOpLayout odd_layout = parse_tileop_v2(odd_tileop);
-    expect_true(odd_layout.is_valid, "odd half-step tile parses");
-    expect_eq_int(odd_layout.l_cnt, 1, "odd half-step l_cnt");
-    expect_eq_int(odd_layout.r_cnt, 61, "odd half-step r_cnt");
-    const TileOpFaceView odd_l_view = tileop_face_view(odd_layout, FACE_L);
-    expect_eq_u8(odd_l_view.h1_packed[0], 127, "packed odd h1");
-    expect_eq_u16(face_h1(TileCoord{601040640, 601040640}, FACE_L, odd_l_view.h1_packed[0]), 255, "decode odd h1");
+    const TileOp interior_tileop = make_group_bit_tile(255, 1);
+    const TileOpLayout interior_layout = parse_tileop_v2(interior_tileop);
+    expect_true(interior_layout.is_valid, "interior group-bit tile parses");
+    expect_eq_int(interior_layout.l_cnt, 1, "interior l_cnt");
+    expect_eq_int(interior_layout.r_cnt, 61, "interior r_cnt");
+    const TileOpFaceView interior_l_view = tileop_face_view(interior_layout, FACE_L);
+    expect_eq_u8(interior_l_view.groups[0], 1, "group byte preserves interior group");
+    expect_eq_u8(interior_l_view.h1_packed[0], 255, "interior h1 byte");
+    expect_eq_u8(decode_group_id(interior_l_view.groups[0]), 1, "decode interior group");
+    expect_eq_u16(decode_h1(interior_l_view.groups[0], interior_l_view.h1_packed[0]), 255, "decode interior h1");
 
-    const TileOp even_tileop = make_half_step_tile(256);
-    const TileOpLayout even_layout = parse_tileop_v2(even_tileop);
-    expect_true(even_layout.is_valid, "even half-step tile parses");
-    const TileOpFaceView even_l_view = tileop_face_view(even_layout, FACE_L);
-    expect_eq_u8(even_l_view.h1_packed[0], 128, "packed even h1=256");
-    expect_eq_u16(face_h1(TileCoord{601040641, 601040640}, FACE_L, even_l_view.h1_packed[0]), 256, "decode h1=256");
+    const TileOp boundary_tileop = make_group_bit_tile(256, 1);
+    const TileOpLayout boundary_layout = parse_tileop_v2(boundary_tileop);
+    expect_true(boundary_layout.is_valid, "boundary group-bit tile parses");
+    const TileOpFaceView boundary_l_view = tileop_face_view(boundary_layout, FACE_L);
+    expect_eq_u8(boundary_l_view.groups[0], 0x81, "group bit carries h1 ninth bit");
+    expect_eq_u8(boundary_l_view.h1_packed[0], 0, "boundary h1 low byte");
+    expect_eq_u8(decode_group_id(boundary_l_view.groups[0]), 1, "decode boundary group");
+    expect_eq_u16(decode_h1(boundary_l_view.groups[0], boundary_l_view.h1_packed[0]), 256, "decode boundary h1");
+}
+
+void test_group_cap_overflow() {
+    FaceData overflow;
+    std::memset(&overflow, 0, sizeof(overflow));
+    overflow.group_count = 128;
+    overflow.port_count = 1;
+    overflow.ports[0] = {FACE_O, 1, 0};
+
+    const TileOp overflow_tileop = encode_tileop(overflow);
+    expect_eq_u8(overflow_tileop.bytes[0], OVERFLOW_SENTINEL, "group cap overflow sentinel");
+    expect_eq_u8(overflow_tileop.bytes[64], OVERFLOW_SENTINEL, "group cap poisons middle bytes");
+    expect_eq_u8(overflow_tileop.bytes[127], OVERFLOW_SENTINEL, "group cap poisons tail");
 }
 
 }  // namespace
@@ -302,7 +323,8 @@ int main() {
     test_extract_shared_boundary_points();
     test_prune_and_encode_v2_round_trip();
     test_dynamic_budget_and_overflow();
-    test_h1_half_step_round_trip();
+    test_group_bit_steal_round_trip();
+    test_group_cap_overflow();
     std::puts("test_face_encode: OK");
     return 0;
 }

@@ -11,12 +11,12 @@ struct FaceCounts {
     uint8_t counts[NUM_FACES];
 };
 
-inline uint8_t pack_h1(uint16_t h1) {
-    return static_cast<uint8_t>(h1 >> 1);
+inline uint8_t encode_group_byte(uint8_t group_id, uint16_t h1) {
+    return static_cast<uint8_t>(((h1 >> 8) << 7) | (group_id & 0x7FU));
 }
 
-inline uint16_t decode_h1(uint8_t packed_h1, uint8_t parity) {
-    return static_cast<uint16_t>(2U * static_cast<uint16_t>(packed_h1) + parity);
+inline uint8_t encode_h1_byte(uint16_t h1) {
+    return static_cast<uint8_t>(h1 & 0xFFU);
 }
 
 FaceCounts count_ports_by_face(const FaceData& face_data) {
@@ -37,7 +37,11 @@ void append_face_groups(TileOp* tileop, int* cursor, const FaceData& face_data, 
         if (port.face != face) {
             continue;
         }
-        tileop->bytes[*cursor] = static_cast<uint8_t>(port.group);
+        if (face == FACE_L || face == FACE_R) {
+            tileop->bytes[*cursor] = encode_group_byte(static_cast<uint8_t>(port.group), port.h1);
+        } else {
+            tileop->bytes[*cursor] = static_cast<uint8_t>(port.group);
+        }
         ++(*cursor);
     }
 }
@@ -48,23 +52,8 @@ void append_face_h1(TileOp* tileop, int* cursor, const FaceData& face_data, int 
         if (port.face != face) {
             continue;
         }
-        tileop->bytes[*cursor] = pack_h1(port.h1);
+        tileop->bytes[*cursor] = encode_h1_byte(port.h1);
         ++(*cursor);
-    }
-}
-
-uint8_t fixed_coordinate_parity(const TileCoord& coord, int face) {
-    switch (face) {
-        case FACE_I:
-            return static_cast<uint8_t>(coord.b_lo & 1LL);
-        case FACE_O:
-            return static_cast<uint8_t>((coord.b_lo + TILE_SIDE) & 1LL);
-        case FACE_L:
-            return static_cast<uint8_t>(coord.a_lo & 1LL);
-        case FACE_R:
-            return static_cast<uint8_t>((coord.a_lo + TILE_SIDE) & 1LL);
-        default:
-            return 0;
     }
 }
 
@@ -160,6 +149,15 @@ TileOpLayout parse_tileop_v2(const TileOp& tileop) {
     return layout;
 }
 
+uint8_t decode_group_id(uint8_t group_byte) {
+    return static_cast<uint8_t>(group_byte & 0x7FU);
+}
+
+uint16_t decode_h1(uint8_t group_byte, uint8_t h1_byte) {
+    return static_cast<uint16_t>((static_cast<uint16_t>(group_byte >> 7) << 8) |
+                                 static_cast<uint16_t>(h1_byte));
+}
+
 uint8_t max_group_label(const TileOp& tileop) {
     const TileOpLayout layout = parse_tileop_v2(tileop);
     if (!layout.is_valid || layout.is_empty || layout.is_overflow) {
@@ -170,23 +168,21 @@ uint8_t max_group_label(const TileOp& tileop) {
     for (int face = 0; face < NUM_FACES; ++face) {
         const TileOpFaceView view = tileop_face_view(layout, face);
         for (uint8_t i = 0; i < view.count; ++i) {
-            if (view.groups[i] > max_label) {
-                max_label = view.groups[i];
+            const uint8_t group_label = (face == FACE_L || face == FACE_R)
+                ? decode_group_id(view.groups[i])
+                : view.groups[i];
+            if (group_label > max_label) {
+                max_label = group_label;
             }
         }
     }
     return max_label;
 }
 
-uint16_t face_h1(const TileCoord& coord, int face, uint8_t packed_h1) {
-    const uint8_t parity = static_cast<uint8_t>(1U - fixed_coordinate_parity(coord, face));
-    return decode_h1(packed_h1, parity);
-}
-
 TileOp encode_tileop(const FaceData& face_data) {
     TileOp tileop = make_empty_tileop();
 
-    if (face_data.group_count >= OVERFLOW_SENTINEL) {
+    if (face_data.group_count > 127) {
         return make_overflow_tileop();
     }
 
