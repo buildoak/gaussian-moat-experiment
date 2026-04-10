@@ -1,12 +1,18 @@
-#include "process_tile.h"
+#include "compact.h"
 #include "encode.h"
+#include "face_extract.h"
+#include "prune.h"
+#include "sieve.h"
+#include "union_find.h"
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <numeric>
 #include <sys/stat.h>
 #include <thread>
@@ -33,7 +39,31 @@ struct TileCensusRow {
     int       off_R;
     int       payload_bytes_used;
     int       payload_slack;
+    int       multi_face_groups;
+    int       max_group_ports;
+    int       has_all_4_faces;
+    int       h1_256_lr_ports;
+    int       lr_ports;
+    int       overflow_reason_group_cap;
+    int       overflow_reason_budget;
+    int       overflow_reason_h1;
     const char* status;
+};
+
+struct TileCensusMetrics {
+    TileResult result;
+    FaceData   pruned_face_data;
+    bool       encode_group_cap_overflow;
+    bool       encode_budget_overflow;
+    bool       encode_h1_failure;
+    int        face_ports[NUM_FACES];
+    int        payload_bytes_used;
+    int        payload_slack;
+    int        multi_face_groups;
+    int        max_group_ports;
+    int        has_all_4_faces;
+    int        h1_256_lr_ports;
+    int        lr_ports;
 };
 
 template<typename T>
@@ -71,22 +101,123 @@ T vec_max(const std::vector<T>& v) {
 }
 
 void print_stat_line(const char* label, std::vector<uint32_t>& v) {
-    std::printf("  %-16s min=%-6u  mean=%-10.1f  median=%-8.1f  max=%-6u  p99=%-8.1f\n",
+    std::printf("  %-16s min=%-6u  mean=%-10.1f  median=%-8.1f  p95=%-8.1f  p99=%-8.1f  max=%-6u\n",
                 label,
                 vec_min(v),
                 vec_mean(v),
                 vec_median(v),
-                vec_max(v),
-                vec_percentile(v, 99.0));
+                vec_percentile(v, 95.0),
+                vec_percentile(v, 99.0),
+                vec_max(v));
 }
 
 void print_face_stat_line(const char* label, std::vector<int>& v) {
-    std::printf("    %-14s min=%-4d  mean=%-8.1f  max=%-4d  p99=%-6.1f\n",
+    std::printf("    %-14s min=%-4d  mean=%-8.1f  median=%-6.1f  p95=%-6.1f  p99=%-6.1f  max=%-4d\n",
                 label,
                 vec_min(v),
                 vec_mean(v),
-                vec_max(v),
-                vec_percentile(v, 99.0));
+                vec_median(v),
+                vec_percentile(v, 95.0),
+                vec_percentile(v, 99.0),
+                vec_max(v));
+}
+
+int payload_bytes_from_face_counts(const int face_ports[NUM_FACES]) {
+    return face_ports[FACE_O] + face_ports[FACE_I] + 2 * face_ports[FACE_L] + 2 * face_ports[FACE_R];
+}
+
+TileCensusMetrics analyze_tile(const TileCoord& coord, const SieveTables& tables) {
+    TileCensusMetrics metrics{};
+    std::memset(&metrics, 0, sizeof(metrics));
+    metrics.result.tileop = make_empty_tileop();
+    metrics.payload_slack = TILEOP_PAYLOAD_BYTES;
+
+    uint32_t bitmap[BITMAP_WORDS];
+    uint32_t prefix[BITMAP_WORDS];
+    uint32_t prime_pos[MAX_PRIMES];
+    uint16_t parent[MAX_PRIMES];
+
+    std::memset(bitmap, 0, sizeof(bitmap));
+    sieve_tile(coord, tables, bitmap);
+
+    const int bitmap_prime_count = compact_primes(bitmap, prefix, prime_pos);
+    for (int i = 0; i < bitmap_prime_count; ++i) {
+        const uint32_t pos = prime_pos[i];
+        const int row = static_cast<int>(pos / SIDE_EXP);
+        const int col = static_cast<int>(pos % SIDE_EXP);
+        const int tile_row = row - COLLAR;
+        const int tile_col = col - COLLAR;
+        if (tile_row >= 0 && tile_row <= TILE_SIDE && tile_col >= 0 && tile_col <= TILE_SIDE) {
+            ++metrics.result.prime_count;
+        }
+    }
+
+    if (bitmap_prime_count == 0) {
+        return metrics;
+    }
+
+    build_components(bitmap, prefix, prime_pos, bitmap_prime_count, parent);
+    const FaceData face_data = extract_faces(coord, bitmap, prefix, prime_pos, bitmap_prime_count, parent);
+    metrics.result.ports_before_pruning = static_cast<uint32_t>(face_data.port_count);
+
+    metrics.pruned_face_data = prune_dead_ends(face_data);
+    metrics.result.ports_after_pruning = static_cast<uint32_t>(metrics.pruned_face_data.port_count);
+    metrics.result.group_count = static_cast<uint32_t>(metrics.pruned_face_data.group_count);
+
+    std::array<uint8_t, MAX_PORTS + 1> group_faces{};
+    std::array<int, MAX_PORTS + 1> group_ports{};
+
+    for (int i = 0; i < metrics.pruned_face_data.port_count; ++i) {
+        const Port& port = metrics.pruned_face_data.ports[i];
+        if (port.face >= 0 && port.face < NUM_FACES) {
+            ++metrics.face_ports[port.face];
+            if ((port.face == FACE_L || port.face == FACE_R) && port.h1 == TILE_SIDE) {
+                ++metrics.h1_256_lr_ports;
+            }
+            if (port.face == FACE_L || port.face == FACE_R) {
+                ++metrics.lr_ports;
+            }
+        }
+        if (port.h1 > TILE_SIDE) {
+            metrics.encode_h1_failure = true;
+        }
+        if (port.group > 0 && port.group <= MAX_PORTS) {
+            group_faces[port.group] = static_cast<uint8_t>(group_faces[port.group] | (1U << port.face));
+            ++group_ports[port.group];
+        }
+    }
+
+    metrics.has_all_4_faces = 1;
+    for (int face = 0; face < NUM_FACES; ++face) {
+        if (metrics.face_ports[face] == 0) {
+            metrics.has_all_4_faces = 0;
+        }
+    }
+
+    for (int group = 1; group <= metrics.pruned_face_data.group_count && group <= MAX_PORTS; ++group) {
+        if (group_ports[group] == 0) {
+            continue;
+        }
+        metrics.max_group_ports = std::max(metrics.max_group_ports, group_ports[group]);
+
+        int face_count = 0;
+        uint8_t mask = group_faces[group];
+        while (mask != 0) {
+            face_count += static_cast<int>(mask & 1U);
+            mask = static_cast<uint8_t>(mask >> 1);
+        }
+        if (face_count >= 2) {
+            ++metrics.multi_face_groups;
+        }
+    }
+
+    metrics.payload_bytes_used = payload_bytes_from_face_counts(metrics.face_ports);
+    metrics.payload_slack = TILEOP_PAYLOAD_BYTES - metrics.payload_bytes_used;
+    metrics.encode_group_cap_overflow = metrics.pruned_face_data.group_count > 127;
+    metrics.encode_budget_overflow = metrics.payload_bytes_used > TILEOP_PAYLOAD_BYTES;
+
+    metrics.result.tileop = encode_tileop(metrics.pruned_face_data);
+    return metrics;
 }
 
 void mkdirs(const char* path) {
@@ -190,22 +321,22 @@ int main(int argc, char** argv) {
     std::printf("Generated %d tile coordinates across %d towers.\n\n", actual_total, num_towers);
 
     // Process tiles
-    std::vector<TileResult> results(actual_total);
+    std::vector<TileCensusMetrics> metrics(actual_total);
 
     const auto wall_start = std::chrono::steady_clock::now();
 
     if (multithreaded) {
-        TileResult*      results_ptr = results.data();
+        TileCensusMetrics* metrics_ptr = metrics.data();
         const TileCoord* coords_ptr  = coords.data();
 
         dispatch_apply(static_cast<size_t>(actual_total),
                        dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0),
                        ^(size_t i) {
-            results_ptr[i] = process_tile(coords_ptr[i], tables, nullptr);
+            metrics_ptr[i] = analyze_tile(coords_ptr[i], tables);
         });
     } else {
         for (int i = 0; i < actual_total; ++i) {
-            results[i] = process_tile(coords[i], tables, nullptr);
+            metrics[i] = analyze_tile(coords[i], tables);
         }
     }
 
@@ -221,11 +352,19 @@ int main(int argc, char** argv) {
         row.tile_k        = tile_indices[i];
         row.a_lo          = coords[i].a_lo;
         row.b_lo          = coords[i].b_lo;
-        row.prime_count   = results[i].prime_count;
-        row.group_count   = results[i].group_count;
-        row.ports_before  = results[i].ports_before_pruning;
-        row.ports_after   = results[i].ports_after_pruning;
-        const TileOpLayout layout = parse_tileop_v2(results[i].tileop);
+        row.prime_count   = metrics[i].result.prime_count;
+        row.group_count   = metrics[i].result.group_count;
+        row.ports_before  = metrics[i].result.ports_before_pruning;
+        row.ports_after   = metrics[i].result.ports_after_pruning;
+        row.multi_face_groups = metrics[i].multi_face_groups;
+        row.max_group_ports = metrics[i].max_group_ports;
+        row.has_all_4_faces = metrics[i].has_all_4_faces;
+        row.h1_256_lr_ports = metrics[i].h1_256_lr_ports;
+        row.lr_ports = metrics[i].lr_ports;
+        row.overflow_reason_group_cap = metrics[i].encode_group_cap_overflow ? 1 : 0;
+        row.overflow_reason_budget = metrics[i].encode_budget_overflow ? 1 : 0;
+        row.overflow_reason_h1 = metrics[i].encode_h1_failure ? 1 : 0;
+        const TileOpLayout layout = parse_tileop_v2(metrics[i].result.tileop);
         if (!layout.is_valid) {
             row.face_ports[0] = row.face_ports[1] = row.face_ports[2] = row.face_ports[3] = -1;
             row.off_I = row.off_L = row.off_R = -1;
@@ -233,21 +372,23 @@ int main(int argc, char** argv) {
             row.payload_slack = -1;
             row.status = "invalid";
         } else if (layout.is_overflow) {
-            row.face_ports[0] = row.face_ports[1] = row.face_ports[2] = row.face_ports[3] = -1;
+            for (int face = 0; face < NUM_FACES; ++face) {
+                row.face_ports[face] = metrics[i].face_ports[face];
+            }
             row.off_I = row.off_L = row.off_R = -1;
-            row.payload_bytes_used = TILEOP_PAYLOAD_BYTES;
-            row.payload_slack = 0;
+            row.payload_bytes_used = metrics[i].payload_bytes_used;
+            row.payload_slack = metrics[i].payload_slack;
             row.status = "overflow";
         } else {
-            row.face_ports[FACE_I] = layout.i_cnt;
-            row.face_ports[FACE_O] = layout.o_cnt;
-            row.face_ports[FACE_L] = layout.l_cnt;
-            row.face_ports[FACE_R] = layout.r_cnt;
+            row.face_ports[FACE_I] = metrics[i].face_ports[FACE_I];
+            row.face_ports[FACE_O] = metrics[i].face_ports[FACE_O];
+            row.face_ports[FACE_L] = metrics[i].face_ports[FACE_L];
+            row.face_ports[FACE_R] = metrics[i].face_ports[FACE_R];
             row.off_I = layout.off_I;
             row.off_L = layout.off_L;
             row.off_R = layout.off_R;
-            row.payload_bytes_used = layout.payload_bytes_used;
-            row.payload_slack = layout.payload_slack;
+            row.payload_bytes_used = metrics[i].payload_bytes_used;
+            row.payload_slack = metrics[i].payload_slack;
             row.status = layout.is_empty ? "empty" : "normal";
         }
     }
@@ -267,10 +408,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 
-    std::fprintf(csv, "tower_j,tile_k,a_lo,b_lo,prime_count,group_count,ports_before,ports_after,off_I,off_L,off_R,face_I_ports,face_O_ports,face_L_ports,face_R_ports,payload_bytes_used,payload_slack,status\n");
+    std::fprintf(csv, "tower_j,tile_k,a_lo,b_lo,prime_count,group_count,ports_before,ports_after,off_I,off_L,off_R,face_I_ports,face_O_ports,face_L_ports,face_R_ports,payload_bytes_used,payload_slack,multi_face_groups,max_group_ports,has_all_4_faces,h1_256_lr_ports,lr_ports,overflow_reason_group_cap,overflow_reason_budget,overflow_reason_h1,status\n");
     for (int i = 0; i < actual_total; ++i) {
         const auto& r = rows[i];
-        std::fprintf(csv, "%d,%d,%lld,%lld,%u,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s\n",
+        std::fprintf(csv, "%d,%d,%lld,%lld,%u,%u,%u,%u,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%s\n",
                      r.tower_j, r.tile_k,
                      static_cast<long long>(r.a_lo),
                      static_cast<long long>(r.b_lo),
@@ -279,7 +420,11 @@ int main(int argc, char** argv) {
                      r.off_I, r.off_L, r.off_R,
                      r.face_ports[FACE_I], r.face_ports[FACE_O],
                      r.face_ports[FACE_L], r.face_ports[FACE_R],
-                     r.payload_bytes_used, r.payload_slack, r.status);
+                     r.payload_bytes_used, r.payload_slack,
+                     r.multi_face_groups, r.max_group_ports,
+                     r.has_all_4_faces, r.h1_256_lr_ports, r.lr_ports,
+                     r.overflow_reason_group_cap, r.overflow_reason_budget, r.overflow_reason_h1,
+                     r.status);
     }
     std::fclose(csv);
     std::printf("CSV written to: %s\n\n", csv_path);
@@ -287,10 +432,21 @@ int main(int argc, char** argv) {
     // Compute summary statistics
     std::vector<uint32_t> prime_counts, group_counts, ports_befores, ports_afters;
     std::vector<int> face_I, face_O, face_L, face_R;
-    std::vector<uint32_t> payload_used, payload_slacks;
+    std::vector<uint32_t> payload_used, payload_slacks, multi_face_groups, max_group_ports;
+    std::vector<uint32_t> total_ports;
     int overflow_count = 0;
     int empty_count = 0;
     int invalid_count = 0;
+    int all_4_faces_tiles = 0;
+    int zero_ports_tiles = 0;
+    int overflow_budget_count = 0;
+    int overflow_group_cap_count = 0;
+    int overflow_h1_count = 0;
+    int tiles_with_h1_256 = 0;
+    int64_t total_h1_256_ports = 0;
+    int64_t total_lr_ports = 0;
+    int max_payload_overflow = 0;
+    std::vector<int> overflow_indices;
 
     for (int i = 0; i < actual_total; ++i) {
         const auto& r = rows[i];
@@ -298,9 +454,28 @@ int main(int argc, char** argv) {
         group_counts.push_back(r.group_count);
         ports_befores.push_back(r.ports_before);
         ports_afters.push_back(r.ports_after);
+        total_ports.push_back(static_cast<uint32_t>(r.ports_after));
+        multi_face_groups.push_back(static_cast<uint32_t>(r.multi_face_groups));
+        max_group_ports.push_back(static_cast<uint32_t>(r.max_group_ports));
+        if (r.ports_after == 0) {
+            ++zero_ports_tiles;
+        }
+        if (r.has_all_4_faces != 0) {
+            ++all_4_faces_tiles;
+        }
+        if (r.h1_256_lr_ports > 0) {
+            ++tiles_with_h1_256;
+        }
+        total_h1_256_ports += r.h1_256_lr_ports;
+        total_lr_ports += r.lr_ports;
 
         if (std::strcmp(r.status, "overflow") == 0) {
             ++overflow_count;
+            overflow_group_cap_count += r.overflow_reason_group_cap;
+            overflow_budget_count += r.overflow_reason_budget;
+            overflow_h1_count += r.overflow_reason_h1;
+            max_payload_overflow = std::max(max_payload_overflow, r.payload_bytes_used);
+            overflow_indices.push_back(i);
         } else if (std::strcmp(r.status, "empty") == 0) {
             ++empty_count;
             payload_used.push_back(static_cast<uint32_t>(r.payload_bytes_used));
@@ -336,6 +511,8 @@ int main(int argc, char** argv) {
     print_stat_line("Ports after:", ports_afters);
     print_stat_line("Payload used:", payload_used);
     print_stat_line("Payload slack:", payload_slacks);
+    print_stat_line("Multi-face grp:", multi_face_groups);
+    print_stat_line("Max grp ports:", max_group_ports);
 
     std::printf("\nPer-face ports after pruning (non-overflow tiles only, n=%d):\n",
                 static_cast<int>(face_I.size()));
@@ -352,6 +529,37 @@ int main(int argc, char** argv) {
     std::printf("Overflow tiles: %d / %d (%.2f%%)\n\n",
                 overflow_count, actual_total,
                 100.0 * static_cast<double>(overflow_count) / static_cast<double>(actual_total));
+    std::printf("Overflow causes: budget=%d group_cap=%d h1_failure=%d\n",
+                overflow_budget_count, overflow_group_cap_count, overflow_h1_count);
+    std::printf("Zero-port tiles: %d\n", zero_ports_tiles);
+    std::printf("Tiles with all 4 faces populated: %d\n", all_4_faces_tiles);
+    std::printf("Tiles with >=1 h1=256 L/R port: %d\n", tiles_with_h1_256);
+    std::printf("Total h1=256 L/R ports: %lld / %lld (%.4f%% of L/R ports)\n\n",
+                static_cast<long long>(total_h1_256_ports),
+                static_cast<long long>(total_lr_ports),
+                total_lr_ports == 0 ? 0.0
+                                    : 100.0 * static_cast<double>(total_h1_256_ports) / static_cast<double>(total_lr_ports));
+
+    if (!overflow_indices.empty()) {
+        std::printf("Overflow tiles (first 20):\n");
+        const int limit = std::min<int>(20, overflow_indices.size());
+        for (int n = 0; n < limit; ++n) {
+            const auto& r = rows[overflow_indices[n]];
+            std::printf("  (%lld,%lld) ports=%u faces=[I:%d O:%d L:%d R:%d] groups=%u payload=%d slack=%d causes=%s%s%s\n",
+                        static_cast<long long>(r.a_lo),
+                        static_cast<long long>(r.b_lo),
+                        r.ports_after,
+                        r.face_ports[FACE_I], r.face_ports[FACE_O],
+                        r.face_ports[FACE_L], r.face_ports[FACE_R],
+                        r.group_count,
+                        r.payload_bytes_used,
+                        r.payload_slack,
+                        r.overflow_reason_budget ? "budget " : "",
+                        r.overflow_reason_group_cap ? "group_cap " : "",
+                        r.overflow_reason_h1 ? "h1 " : "");
+        }
+        std::printf("\n");
+    }
 
     // Histogram: group count distribution
     {
