@@ -40,6 +40,10 @@ The grid sweeps from the Y axis (tower j=0, x≈0) rightward to y=x (45°). Spli
 
 **Implication:** `MAX_CANDIDATES_GPU = 6144` is safe for the operating range (4.5% headroom over observed max). The near-origin elevation is irrelevant — operating radii guarantee at least one large coordinate per tile.
 
+## Performance Record
+
+- **2026-04-10:** 2,818 tiles/s on Jetson Orin (SM 8.7), ~2.8x Mac Mini 12-core CPU baseline. Sinclair 7-base MR, Barrett sieve, per-prime face extraction. 43 regs/thread, 4 blocks/SM. Commit `5997aa1`. Session `a913f1dc`. Full log: `docs/supportive/2026-04-10-cuda-kernel-optimization-spree.md`.
+
 ## Working Documents
 
 All documents produced during tiles-maxxing work go to `docs/supportive/`. No exceptions — audits, analyses, benchmarks, investigations, design notes, all land there.
