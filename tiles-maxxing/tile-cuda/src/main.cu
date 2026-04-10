@@ -10,12 +10,16 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <algorithm>
 #include <limits>
 #include <vector>
 
 __global__ void process_tiles_kernel(const TileCoord* coords,
                                      TileOp* output,
                                      uint32_t* prime_counts,
+#ifdef PROFILE_PHASES
+                                     PhaseTimingGPU* phase_timings,
+#endif
                                      int num_tiles);
 
 void upload_sieve_tables(const SieveTables& tables);
@@ -101,6 +105,88 @@ bool init_sieve_tables_host(SieveTables& tables) {
     return tables.split_count == SPLIT_PRIMES_COUNT &&
            tables.inert_count == INERT_PRIMES_COUNT;
 }
+
+#ifdef PROFILE_PHASES
+struct TimingSeriesStats {
+    int64_t min_cycles;
+    int64_t max_cycles;
+    double mean_cycles;
+    double median_cycles;
+};
+
+TimingSeriesStats compute_timing_stats(const std::vector<int64_t>& samples) {
+    if (samples.empty()) {
+        return TimingSeriesStats{0, 0, 0.0, 0.0};
+    }
+
+    std::vector<int64_t> sorted = samples;
+    std::sort(sorted.begin(), sorted.end());
+
+    long double sum = 0.0;
+    for (const int64_t sample : samples) {
+        sum += static_cast<long double>(sample);
+    }
+
+    const size_t mid = sorted.size() / 2;
+    const double median = (sorted.size() % 2 == 0)
+        ? (static_cast<double>(sorted[mid - 1]) + static_cast<double>(sorted[mid])) / 2.0
+        : static_cast<double>(sorted[mid]);
+
+    return TimingSeriesStats{
+        sorted.front(),
+        sorted.back(),
+        static_cast<double>(sum / static_cast<long double>(samples.size())),
+        median,
+    };
+}
+
+void print_phase_report(const std::vector<PhaseTimingGPU>& timings) {
+    struct PhaseColumn {
+        const char* label;
+        int64_t PhaseTimingGPU::*member;
+    };
+
+    static constexpr PhaseColumn kColumns[] = {
+        {"phase1a", &PhaseTimingGPU::phase1a_cycles},
+        {"phase1b", &PhaseTimingGPU::phase1b_cycles},
+        {"phase1c", &PhaseTimingGPU::phase1c_cycles},
+        {"phase2", &PhaseTimingGPU::phase2_cycles},
+        {"phase3", &PhaseTimingGPU::phase3_cycles},
+        {"phase45", &PhaseTimingGPU::phase45_cycles},
+        {"total", &PhaseTimingGPU::total_cycles},
+    };
+
+    long double total_cycle_sum = 0.0;
+    for (const PhaseTimingGPU& timing : timings) {
+        total_cycle_sum += static_cast<long double>(timing.total_cycles);
+    }
+
+    std::printf("\n--- phase timing (cycles) ---\n");
+    for (const PhaseColumn& column : kColumns) {
+        std::vector<int64_t> samples;
+        samples.reserve(timings.size());
+        long double phase_sum = 0.0;
+        for (const PhaseTimingGPU& timing : timings) {
+            const int64_t value = timing.*(column.member);
+            samples.push_back(value);
+            phase_sum += static_cast<long double>(value);
+        }
+
+        const TimingSeriesStats stats = compute_timing_stats(samples);
+        const bool is_total = std::strcmp(column.label, "total") == 0;
+        const double pct_total = (is_total || total_cycle_sum == 0.0)
+            ? 100.0
+            : static_cast<double>((phase_sum / total_cycle_sum) * 100.0);
+        std::printf("%-7s min=%lld max=%lld mean=%.1f median=%.1f pct_total=%.2f%%\n",
+                    column.label,
+                    static_cast<long long>(stats.min_cycles),
+                    static_cast<long long>(stats.max_cycles),
+                    stats.mean_cycles,
+                    stats.median_cycles,
+                    pct_total);
+    }
+}
+#endif
 
 struct BackwardOffsetsHost {
     int8_t dr[NUM_BACKWARD_OFFSETS];
@@ -242,6 +328,9 @@ void run_test() {
     TileCoord* d_coords = nullptr;
     TileOp* d_output = nullptr;
     uint32_t* d_prime_counts = nullptr;
+#ifdef PROFILE_PHASES
+    PhaseTimingGPU* d_phase_timings = nullptr;
+#endif
 
     check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_coords), sizeof(TileCoord) * coords.size()),
                "cudaMalloc(d_coords)");
@@ -250,6 +339,11 @@ void run_test() {
     check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_prime_counts),
                           sizeof(uint32_t) * coords.size()),
                "cudaMalloc(d_prime_counts)");
+#ifdef PROFILE_PHASES
+    check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_phase_timings),
+                          sizeof(PhaseTimingGPU) * coords.size()),
+               "cudaMalloc(d_phase_timings)");
+#endif
 
     check_cuda(cudaMemcpy(d_coords, coords.data(), sizeof(TileCoord) * coords.size(),
                           cudaMemcpyHostToDevice),
@@ -269,7 +363,12 @@ void run_test() {
     check_cuda(cudaEventCreate(&stop), "cudaEventCreate(stop)");
 
     check_cuda(cudaEventRecord(start), "cudaEventRecord(start)");
-    process_tiles_kernel<<<grid, block, shared_bytes>>>(d_coords, d_output, d_prime_counts, num_tiles);
+    process_tiles_kernel<<<grid, block, shared_bytes>>>(
+        d_coords, d_output, d_prime_counts,
+#ifdef PROFILE_PHASES
+        d_phase_timings,
+#endif
+        num_tiles);
     check_cuda(cudaEventRecord(stop), "cudaEventRecord(stop)");
     check_cuda(cudaGetLastError(), "process_tiles_kernel launch");
     check_cuda(cudaEventSynchronize(stop), "cudaEventSynchronize(stop)");
@@ -286,6 +385,13 @@ void run_test() {
                           sizeof(uint32_t) * prime_counts.size(),
                           cudaMemcpyDeviceToHost),
                "cudaMemcpy(prime_counts)");
+#ifdef PROFILE_PHASES
+    std::vector<PhaseTimingGPU> phase_timings(coords.size());
+    check_cuda(cudaMemcpy(phase_timings.data(), d_phase_timings,
+                          sizeof(PhaseTimingGPU) * phase_timings.size(),
+                          cudaMemcpyDeviceToHost),
+               "cudaMemcpy(phase_timings)");
+#endif
 
     std::printf("=== SMOKE TEST ===\n");
     std::printf("processed %d tile(s) in %.3f ms (%.3f ms/tile)\n",
@@ -304,8 +410,15 @@ void run_test() {
                     output[i].bytes[3]);
     }
 
+#ifdef PROFILE_PHASES
+    print_phase_report(phase_timings);
+#endif
+
     cudaEventDestroy(stop);
     cudaEventDestroy(start);
+#ifdef PROFILE_PHASES
+    cudaFree(d_phase_timings);
+#endif
     cudaFree(d_prime_counts);
     cudaFree(d_output);
     cudaFree(d_coords);
@@ -333,6 +446,9 @@ void run_bench(int tile_count) {
     TileCoord* d_coords = nullptr;
     TileOp* d_output = nullptr;
     uint32_t* d_prime_counts = nullptr;
+#ifdef PROFILE_PHASES
+    PhaseTimingGPU* d_phase_timings = nullptr;
+#endif
 
     check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_coords),
                           sizeof(TileCoord) * tile_count),
@@ -343,6 +459,11 @@ void run_bench(int tile_count) {
     check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_prime_counts),
                           sizeof(uint32_t) * tile_count),
                "cudaMalloc(d_prime_counts)");
+#ifdef PROFILE_PHASES
+    check_cuda(cudaMalloc(reinterpret_cast<void**>(&d_phase_timings),
+                          sizeof(PhaseTimingGPU) * tile_count),
+               "cudaMalloc(d_phase_timings)");
+#endif
 
     check_cuda(cudaMemcpy(d_coords, coords.data(),
                           sizeof(TileCoord) * tile_count,
@@ -361,7 +482,11 @@ void run_bench(int tile_count) {
         const int warmup_tiles = (tile_count < 10) ? tile_count : 10;
         const dim3 warmup_grid(static_cast<unsigned int>(warmup_tiles));
         process_tiles_kernel<<<warmup_grid, block, shared_bytes>>>(
-            d_coords, d_output, d_prime_counts, warmup_tiles);
+            d_coords, d_output, d_prime_counts,
+#ifdef PROFILE_PHASES
+            d_phase_timings,
+#endif
+            warmup_tiles);
         check_cuda(cudaGetLastError(), "warmup launch");
         check_cuda(cudaDeviceSynchronize(), "warmup sync");
         std::printf("warmup: %d tiles done\n", warmup_tiles);
@@ -377,7 +502,11 @@ void run_bench(int tile_count) {
 
     check_cuda(cudaEventRecord(start), "cudaEventRecord(start)");
     process_tiles_kernel<<<grid, block, shared_bytes>>>(
-        d_coords, d_output, d_prime_counts, tile_count);
+        d_coords, d_output, d_prime_counts,
+#ifdef PROFILE_PHASES
+        d_phase_timings,
+#endif
+        tile_count);
     check_cuda(cudaEventRecord(stop), "cudaEventRecord(stop)");
     check_cuda(cudaGetLastError(), "benchmark launch");
     check_cuda(cudaEventSynchronize(stop), "cudaEventSynchronize(stop)");
@@ -421,9 +550,21 @@ void run_bench(int tile_count) {
         std::printf("all %d tiles completed without overflow\n", tile_count);
     }
 
+#ifdef PROFILE_PHASES
+    std::vector<PhaseTimingGPU> phase_timings(tile_count);
+    check_cuda(cudaMemcpy(phase_timings.data(), d_phase_timings,
+                          sizeof(PhaseTimingGPU) * phase_timings.size(),
+                          cudaMemcpyDeviceToHost),
+               "cudaMemcpy(phase_timings)");
+    print_phase_report(phase_timings);
+#endif
+
     // --- Cleanup ---
     cudaEventDestroy(stop);
     cudaEventDestroy(start);
+#ifdef PROFILE_PHASES
+    cudaFree(d_phase_timings);
+#endif
     cudaFree(d_prime_counts);
     cudaFree(d_output);
     cudaFree(d_coords);

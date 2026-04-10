@@ -23,6 +23,14 @@ struct FaceCellGPU {
     uint8_t pad;
 };
 
+struct FacePrimeGPU {
+    uint16_t h;
+    uint16_t root;
+    uint8_t depth;
+    uint8_t pad1;
+    uint16_t pad2;
+};
+
 struct RawPortGPU {
     uint16_t root;
     uint16_t h1;
@@ -67,8 +75,21 @@ struct TileResult {
     uint32_t group_count;
 };
 
+struct PhaseTimingGPU {
+    int64_t phase1a_cycles;
+    int64_t phase1b_cycles;
+    int64_t phase1c_cycles;
+    int64_t phase2_cycles;
+    int64_t phase3_cycles;
+    int64_t phase45_cycles;
+    int64_t total_cycles;
+    int32_t tile_idx;
+    int32_t prime_count;
+};
+
 static_assert(sizeof(TileOp) == TILEOP_SIZE, "TileOp must stay 128 bytes");
 static_assert(sizeof(PortGPU) == 4, "PortGPU ABI changed");
 static_assert(sizeof(FaceCellGPU) == 16, "FaceCellGPU ABI changed");
+static_assert(sizeof(FacePrimeGPU) == 8, "FacePrimeGPU ABI changed");
 static_assert(sizeof(RawPortGPU) == 8, "RawPortGPU ABI changed");
 static_assert(sizeof(GroupEntryGPU) == 8, "GroupEntryGPU ABI changed");

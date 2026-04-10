@@ -141,131 +141,177 @@ static __device__ __forceinline__ GroupEntryGPU* find_group_entry(
 
 }  // namespace gpu_face_encode_detail
 
+// ---------------------------------------------------------------------------
+// Per-face insertion sort (serial, one thread).  ~100-300 entries per face.
+// Sort key: (h, depth) — matches the C++ reference (h primary, depth secondary,
+// then tile_row/tile_col which we derive from face_coords).
+// ---------------------------------------------------------------------------
+namespace gpu_face_encode_detail {
+
+static __device__ void sort_face_primes(FacePrimeGPU* list, int count, int face) {
+    for (int i = 1; i < count; ++i) {
+        const FacePrimeGPU key = list[i];
+        int j = i - 1;
+        while (j >= 0) {
+            const FacePrimeGPU& prev = list[j];
+            // Primary: h ascending
+            if (prev.h < key.h) break;
+            if (prev.h == key.h) {
+                // Secondary: depth ascending
+                if (prev.depth < key.depth) break;
+                if (prev.depth == key.depth) {
+                    // Tertiary: tile_row, tile_col (derive from face_coords)
+                    int kr, kc, pr, pc;
+                    face_coords(face, key.h, key.depth, &kr, &kc);
+                    face_coords(face, prev.h, prev.depth, &pr, &pc);
+                    if (pr < kr) break;
+                    if (pr == kr && pc <= kc) break;
+                }
+            }
+            list[j + 1] = list[j];
+            --j;
+        }
+        list[j + 1] = key;
+    }
+}
+
+}  // namespace gpu_face_encode_detail (sort helper)
+
+// ---------------------------------------------------------------------------
+// O(P) per-prime face extraction — replaces the old O(B x P) brute force.
+//
+// Stage 1: All 288 threads scan primes in stride. For each prime, O(1) check
+//          against all 4 faces. Collect face primes via atomicAdd per face.
+// Stage 2: Serial insertion sort per face (one thread per face, 4 threads).
+// Stage 3: Linear gap scan per face → emit raw ports.
+// ---------------------------------------------------------------------------
 __device__ void extract_faces_gpu_parallel(
     const uint32_t* prime_pos,
     int prime_count,
     const uint16_t* parent,
-    FaceCellGPU* face_cells,
+    FacePrimeGPU* face_prime_lists,
+    uint32_t* face_prime_counts,
     FaceScratchGPU* scratch,
     int tid) {
-    const int warp_id = tid / WARP_SIZE;
-    const int lane = tid & (WARP_SIZE - 1);
 
-    const int face_cell_words =
-        static_cast<int>((FACES_PER_PASS * TILE_POINTS * sizeof(FaceCellGPU)) / sizeof(uint32_t));
-    uint32_t* const face_cell_words_ptr = reinterpret_cast<uint32_t*>(face_cells);
-
+    // --- Zero scratch and face_prime_counts ---
     const int scratch_words =
         static_cast<int>((sizeof(FaceScratchGPU) + sizeof(uint32_t) - 1) / sizeof(uint32_t));
     uint32_t* const scratch_words_ptr = reinterpret_cast<uint32_t*>(scratch);
     for (int i = tid; i < scratch_words; i += BLOCK_THREADS) {
         scratch_words_ptr[i] = 0u;
     }
+    if (tid < NUM_FACES) {
+        face_prime_counts[tid] = 0u;
+    }
     __syncthreads();
 
+    // ===== STAGE 1: Collect face primes (all 288 threads) =====
     const int bounded_prime_count = prime_count < MAX_PRIMES_GPU ? prime_count : MAX_PRIMES_GPU;
-    for (int pass_base = 0; pass_base < NUM_FACES; pass_base += FACES_PER_PASS) {
-        for (int i = tid; i < face_cell_words; i += BLOCK_THREADS) {
-            face_cell_words_ptr[i] = 0u;
+
+    for (int i = tid; i < bounded_prime_count; i += BLOCK_THREADS) {
+        int row = 0;
+        int col = 0;
+        gpu_face_encode_detail::decode_prime_pos(prime_pos[i], &row, &col);
+
+        const int tile_row = row - COLLAR;
+        const int tile_col = col - COLLAR;
+        if (tile_row < 0 || tile_row > TILE_SIDE || tile_col < 0 || tile_col > TILE_SIDE) {
+            continue;
         }
-        __syncthreads();
 
-        if (warp_id < FACES_PER_PASS) {
-            const int local_face = warp_id;
-            const int face = pass_base + local_face;
-            for (int chunk_base = 0; chunk_base < TILE_POINTS; chunk_base += WARP_SIZE) {
-                const int h = chunk_base + lane;
-                FaceCellGPU local_cell{};
+        const uint16_t prime_root = parent[i];
 
-                if (h < TILE_POINTS) {
-                    for (int i = 0; i < bounded_prime_count; ++i) {
-                        int row = 0;
-                        int col = 0;
-                        gpu_face_encode_detail::decode_prime_pos(prime_pos[i], &row, &col);
-
-                        const int tile_row = row - COLLAR;
-                        const int tile_col = col - COLLAR;
-                        if (tile_row < 0 || tile_row > TILE_SIDE || tile_col < 0 || tile_col > TILE_SIDE) {
-                            continue;
-                        }
-
-                        uint16_t prime_h = 0;
-                        uint16_t depth = 0;
-                        if (!gpu_face_encode_detail::face_membership(
-                                face, tile_row, tile_col, &prime_h, &depth) ||
-                            prime_h != h) {
-                            continue;
-                        }
-
-                        local_cell.roots[depth] = parent[i];
-                        local_cell.mask = static_cast<uint8_t>(local_cell.mask | (1u << depth));
-                    }
-
-                    face_cells[local_face * TILE_POINTS + h] = local_cell;
+        // Check all 4 faces — a prime near a corner can belong to 2 faces
+        #pragma unroll
+        for (int face = 0; face < NUM_FACES; ++face) {
+            uint16_t h = 0;
+            uint16_t depth = 0;
+            if (gpu_face_encode_detail::face_membership(face, tile_row, tile_col, &h, &depth)) {
+                const uint32_t slot = atomicAdd(&face_prime_counts[face], 1u);
+                if (slot < MAX_FACE_PRIMES_PER_FACE) {
+                    FacePrimeGPU& fp = face_prime_lists[face * MAX_FACE_PRIMES_PER_FACE + slot];
+                    fp.h = h;
+                    fp.root = prime_root;
+                    fp.depth = static_cast<uint8_t>(depth);
+                    fp.pad1 = 0;
+                    fp.pad2 = 0;
                 }
             }
-            __syncwarp();
-
-            if (lane == 0) {
-                int port_count = 0;
-                bool have_prev = false;
-                int prev_row = 0;
-                int prev_col = 0;
-
-                for (int h = 0; h < TILE_POINTS; ++h) {
-                    const FaceCellGPU& cell = face_cells[local_face * TILE_POINTS + h];
-                    const uint8_t mask = cell.mask;
-                    if (mask == 0u) {
-                        continue;
-                    }
-
-                    for (int depth = 0; depth < COLLAR; ++depth) {
-                        if ((mask & (1u << depth)) == 0u) {
-                            continue;
-                        }
-
-                        int tile_row = 0;
-                        int tile_col = 0;
-                        gpu_face_encode_detail::face_coords(
-                            face, static_cast<uint16_t>(h), static_cast<uint16_t>(depth), &tile_row, &tile_col);
-
-                        bool start_port = false;
-                        if (!have_prev) {
-                            start_port = true;
-                        } else {
-                            const int dx = tile_col - prev_col;
-                            const int dy = tile_row - prev_row;
-                            start_port = (dx * dx + dy * dy) > K_SQ;
-                        }
-
-                        if (start_port) {
-                            const int slot = face * MAX_FACE_PORTS_GPU + port_count;
-                            if (port_count < MAX_FACE_PORTS_GPU && slot < MAX_TOTAL_PORTS_GPU) {
-                                RawPortGPU& out = scratch->raw_ports[slot];
-                                out.root = cell.roots[depth];
-                                out.h1 = static_cast<uint16_t>(h);
-                                out.face = static_cast<uint8_t>(face);
-                                out.live = 1u;
-                                out.pad = 0u;
-                            }
-                            ++port_count;
-                        }
-
-                        prev_row = tile_row;
-                        prev_col = tile_col;
-                        have_prev = true;
-                    }
-                }
-
-                if (port_count > MAX_FACE_PORTS_GPU) {
-                    scratch->overflow = 1u;
-                }
-                scratch->face_port_counts[face] = static_cast<uint16_t>(port_count);
-            }
         }
-        __syncthreads();
     }
+    __syncthreads();
 
+    // Clamp counts to capacity
+    if (tid < NUM_FACES) {
+        if (face_prime_counts[tid] > MAX_FACE_PRIMES_PER_FACE) {
+            face_prime_counts[tid] = MAX_FACE_PRIMES_PER_FACE;
+        }
+    }
+    __syncthreads();
+
+    // ===== STAGE 2: Sort face primes by (h, depth) per face =====
+    // 4 threads each sort one face — serial insertion sort, ~100-300 entries
+    if (tid < NUM_FACES) {
+        const int face = tid;
+        const int count = static_cast<int>(face_prime_counts[face]);
+        FacePrimeGPU* list = &face_prime_lists[face * MAX_FACE_PRIMES_PER_FACE];
+        gpu_face_encode_detail::sort_face_primes(list, count, face);
+    }
+    __syncthreads();
+
+    // ===== STAGE 3: Port detection via gap test (one thread per face) =====
+    if (tid < NUM_FACES) {
+        const int face = tid;
+        const int count = static_cast<int>(face_prime_counts[face]);
+        const FacePrimeGPU* list = &face_prime_lists[face * MAX_FACE_PRIMES_PER_FACE];
+
+        int port_count = 0;
+        bool have_prev = false;
+        int prev_row = 0;
+        int prev_col = 0;
+
+        for (int j = 0; j < count; ++j) {
+            int tile_row = 0;
+            int tile_col = 0;
+            gpu_face_encode_detail::face_coords(
+                face, list[j].h, static_cast<uint16_t>(list[j].depth), &tile_row, &tile_col);
+
+            bool start_port = false;
+            if (!have_prev) {
+                start_port = true;
+            } else {
+                const int dx = tile_col - prev_col;
+                const int dy = tile_row - prev_row;
+                start_port = (dx * dx + dy * dy) > K_SQ;
+            }
+
+            if (start_port) {
+                const int slot = face * MAX_FACE_PORTS_GPU + port_count;
+                if (port_count < MAX_FACE_PORTS_GPU && slot < MAX_TOTAL_PORTS_GPU) {
+                    RawPortGPU& out = scratch->raw_ports[slot];
+                    out.root = list[j].root;
+                    out.h1 = list[j].h;
+                    out.face = static_cast<uint8_t>(face);
+                    out.live = 1u;
+                    out.pad = 0u;
+                }
+                ++port_count;
+            }
+
+            prev_row = tile_row;
+            prev_col = tile_col;
+            have_prev = true;
+        }
+
+        if (port_count > MAX_FACE_PORTS_GPU) {
+            scratch->overflow = 1u;
+        }
+        scratch->face_port_counts[face] = static_cast<uint16_t>(port_count);
+    }
+    __syncthreads();
+
+    // Sum face port counts
     if (tid == 0) {
         scratch->raw_port_count = 0u;
         for (int face = 0; face < NUM_FACES; ++face) {

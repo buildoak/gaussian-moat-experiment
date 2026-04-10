@@ -36,7 +36,7 @@ constexpr int kBitmapWords = ACTIVE_ROWS * BITMAP_WORDS_PER_ROW;
 // pass runs before the Miller-Rabin filter.  Empirically, tiles at radius
 // ~600-860M produce up to ~5700 sieve survivors across 271 rows (~21/row).
 // 8192 covers the worst observed case with comfortable headroom (~30/row).
-constexpr int MAX_CANDIDATES_GPU = 8192;
+constexpr int MAX_CANDIDATES_GPU = 6144;
 
 static_assert(MAX_CANDIDATES_GPU >= MAX_PRIMES_GPU,
               "candidate list must hold at least MAX_PRIMES_GPU entries");
@@ -47,7 +47,8 @@ constexpr size_t kPhase1Bytes = sizeof(uint32_t) * static_cast<size_t>(kPhase1Wo
 constexpr size_t kPhase24Bytes =
     sizeof(uint16_t) * static_cast<size_t>(ACTIVE_ROWS + 1 + MAX_PRIMES_GPU) +
     sizeof(uint32_t) * static_cast<size_t>(MAX_PRIMES_GPU) +
-    sizeof(FaceCellGPU) * static_cast<size_t>(FACES_PER_PASS * TILE_POINTS);
+    sizeof(FacePrimeGPU) * static_cast<size_t>(NUM_FACES * MAX_FACE_PRIMES_PER_FACE) +
+    sizeof(uint32_t) * static_cast<size_t>(NUM_FACES);
 
 __device__ void poison_tileop(TileOp* tileop) {
     for (int i = 0; i < TILEOP_SIZE; ++i) {
@@ -67,6 +68,9 @@ inline void check_cuda(cudaError_t status, const char* what) {
 __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
                                      TileOp* __restrict__ output,
                                      uint32_t* __restrict__ prime_counts,
+#ifdef PROFILE_PHASES
+                                     PhaseTimingGPU* __restrict__ phase_timings,
+#endif
                                      int num_tiles) {
     const int tile_idx = static_cast<int>(blockIdx.x);
     if (tile_idx >= num_tiles) {
@@ -86,10 +90,20 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
     uint16_t* const row_prefix = reinterpret_cast<uint16_t*>(overlay);
     uint32_t* const prime_pos = reinterpret_cast<uint32_t*>(row_prefix + (ACTIVE_ROWS + 1));
     uint16_t* const parent = reinterpret_cast<uint16_t*>(prime_pos + MAX_PRIMES_GPU);
-    FaceCellGPU* const face_cells = reinterpret_cast<FaceCellGPU*>(parent + MAX_PRIMES_GPU);
+    FacePrimeGPU* const face_prime_lists = reinterpret_cast<FacePrimeGPU*>(parent + MAX_PRIMES_GPU);
+    uint32_t* const face_prime_counts = reinterpret_cast<uint32_t*>(face_prime_lists + NUM_FACES * MAX_FACE_PRIMES_PER_FACE);
     FaceScratchGPU* const face_scratch = reinterpret_cast<FaceScratchGPU*>(smem);
 
     __shared__ uint32_t total_cands;
+#ifdef PROFILE_PHASES
+    __shared__ uint64_t phase_t0;
+    __shared__ uint64_t phase_t1;
+    __shared__ uint64_t phase_t2;
+    __shared__ uint64_t phase_t3;
+    __shared__ uint64_t phase_t4;
+    __shared__ uint64_t phase_t5;
+    __shared__ uint64_t phase_t6;
+#endif
 
     const int tid = static_cast<int>(threadIdx.x);
     const TileCoord coord = coords[tile_idx];
@@ -100,6 +114,11 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
         bitmap[i] = 0U;
     }
     __syncthreads();
+#ifdef PROFILE_PHASES
+    if (tid == 0) {
+        phase_t0 = clock64();
+    }
+#endif
 
     if (tid < ACTIVE_ROWS) {
         uint32_t ws[BITMAP_WORDS_PER_ROW];
@@ -115,6 +134,11 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
         }
     }
     __syncthreads();
+#ifdef PROFILE_PHASES
+    if (tid == 0) {
+        phase_t1 = clock64();
+    }
+#endif
 
     block_exclusive_scan(cand_prefix, ACTIVE_ROWS, tid);
     __syncthreads();
@@ -134,13 +158,28 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
                           : static_cast<uint32_t>(MAX_CANDIDATES_GPU);
     }
     __syncthreads();
+#ifdef PROFILE_PHASES
+    if (tid == 0) {
+        phase_t2 = clock64();
+    }
+#endif
 
     mr_test_candidates(cand_list, static_cast<int>(total_cands), a_start, b_start,
                        bitmap, tid, BLOCK_THREADS);
     __syncthreads();
+#ifdef PROFILE_PHASES
+    if (tid == 0) {
+        phase_t3 = clock64();
+    }
+#endif
 
     (void)compact_row(bitmap, row_prefix, prime_pos, tid);
     __syncthreads();
+#ifdef PROFILE_PHASES
+    if (tid == 0) {
+        phase_t4 = clock64();
+    }
+#endif
 
     const int prime_count = static_cast<int>(row_prefix[ACTIVE_ROWS]);
     if (prime_count > MAX_PRIMES_GPU) {
@@ -149,6 +188,20 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
             if (prime_counts != nullptr) {
                 prime_counts[tile_idx] = static_cast<uint32_t>(prime_count);
             }
+#ifdef PROFILE_PHASES
+            const uint64_t now = clock64();
+            PhaseTimingGPU timing{};
+            timing.phase1a_cycles = static_cast<int64_t>(phase_t1 - phase_t0);
+            timing.phase1b_cycles = static_cast<int64_t>(phase_t2 - phase_t1);
+            timing.phase1c_cycles = static_cast<int64_t>(phase_t3 - phase_t2);
+            timing.phase2_cycles = static_cast<int64_t>(phase_t4 - phase_t3);
+            timing.phase3_cycles = 0;
+            timing.phase45_cycles = 0;
+            timing.total_cycles = static_cast<int64_t>(now - phase_t0);
+            timing.tile_idx = tile_idx;
+            timing.prime_count = prime_count;
+            phase_timings[tile_idx] = timing;
+#endif
         }
         return;
     }
@@ -157,10 +210,15 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
         build_components_gpu(bitmap, row_prefix, prime_pos, prime_count, parent, tid);
     }
     __syncthreads();
+#ifdef PROFILE_PHASES
+    if (tid == 0) {
+        phase_t5 = clock64();
+    }
+#endif
 
     __shared__ FaceDataGPU face_data;
 
-    extract_faces_gpu_parallel(prime_pos, prime_count, parent, face_cells, face_scratch, tid);
+    extract_faces_gpu_parallel(prime_pos, prime_count, parent, face_prime_lists, face_prime_counts, face_scratch, tid);
     prune_dead_ends_gpu(face_scratch, &face_data, tid);
 
     if (tid == 0) {
@@ -168,6 +226,21 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
         if (prime_counts != nullptr) {
             prime_counts[tile_idx] = static_cast<uint32_t>(prime_count);
         }
+#ifdef PROFILE_PHASES
+        phase_t6 = clock64();
+
+        PhaseTimingGPU timing{};
+        timing.phase1a_cycles = static_cast<int64_t>(phase_t1 - phase_t0);
+        timing.phase1b_cycles = static_cast<int64_t>(phase_t2 - phase_t1);
+        timing.phase1c_cycles = static_cast<int64_t>(phase_t3 - phase_t2);
+        timing.phase2_cycles = static_cast<int64_t>(phase_t4 - phase_t3);
+        timing.phase3_cycles = static_cast<int64_t>(phase_t5 - phase_t4);
+        timing.phase45_cycles = static_cast<int64_t>(phase_t6 - phase_t5);
+        timing.total_cycles = static_cast<int64_t>(phase_t6 - phase_t0);
+        timing.tile_idx = tile_idx;
+        timing.prime_count = prime_count;
+        phase_timings[tile_idx] = timing;
+#endif
     }
 }
 
