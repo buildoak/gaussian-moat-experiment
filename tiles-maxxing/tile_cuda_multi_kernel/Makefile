@@ -13,7 +13,7 @@ LDFLAGS :=
 
 # Per-kernel register caps
 K_SIEVE_FLAGS := --maxrregcount=40
-K_MR_FLAGS :=
+K_MR_FLAGS := --maxrregcount=44
 K_COMPACT_FLAGS := --maxrregcount=32
 K_UF_FLAGS := --maxrregcount=40
 K_FACE_FLAGS := --maxrregcount=40
