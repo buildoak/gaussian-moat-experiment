@@ -31,7 +31,17 @@ constexpr uint32_t kTrialPrimes[NUM_TRIAL_PRIMES] = {
 };
 
 constexpr int kBitmapWords = ACTIVE_ROWS * BITMAP_WORDS_PER_ROW;
-constexpr int kPhase1Words = BLOCK_THREADS + (BLOCK_THREADS + 1) + MAX_PRIMES_GPU;
+
+// Sieve survivors (candidates) can exceed MAX_PRIMES_GPU because the sieve
+// pass runs before the Miller-Rabin filter.  Empirically, tiles at radius
+// ~600-860M produce up to ~5700 sieve survivors across 271 rows (~21/row).
+// 8192 covers the worst observed case with comfortable headroom (~30/row).
+constexpr int MAX_CANDIDATES_GPU = 8192;
+
+static_assert(MAX_CANDIDATES_GPU >= MAX_PRIMES_GPU,
+              "candidate list must hold at least MAX_PRIMES_GPU entries");
+
+constexpr int kPhase1Words = BLOCK_THREADS + (BLOCK_THREADS + 1) + MAX_CANDIDATES_GPU;
 constexpr size_t kBitmapBytes = sizeof(uint32_t) * static_cast<size_t>(kBitmapWords);
 constexpr size_t kPhase1Bytes = sizeof(uint32_t) * static_cast<size_t>(kPhase1Words);
 constexpr size_t kPhase24Bytes =
@@ -118,7 +128,10 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
     __syncthreads();
 
     if (tid == 0) {
-        total_cands = cand_prefix[ACTIVE_ROWS - 1] + cand_counts[ACTIVE_ROWS - 1];
+        uint32_t raw = cand_prefix[ACTIVE_ROWS - 1] + cand_counts[ACTIVE_ROWS - 1];
+        total_cands = raw < static_cast<uint32_t>(MAX_CANDIDATES_GPU)
+                          ? raw
+                          : static_cast<uint32_t>(MAX_CANDIDATES_GPU);
     }
     __syncthreads();
 
