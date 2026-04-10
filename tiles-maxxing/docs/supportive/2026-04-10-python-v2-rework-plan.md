@@ -38,7 +38,7 @@ Alternatives rejected:
 Assumptions:
 
 - TileOp v2 format is authoritative exactly as specified in `docs/tile_spec.md` v5 and `docs/tile_operations.md` v2.
-- The approved `h1 >> 1` encoding is part of this rework. Python should store `h1_packed = h1 >> 1`, decode `h1 = 2*h1_packed + face_parity`, and treat face-parity recovery as shared layout logic rather than ad hoc matcher behavior.
+- The approved group-bit-steal encoding is part of this rework. Python should store `group_byte = ((h1 >> 8) << 7) | (group_id & 0x7F)`, store `h1_byte = h1 & 0xFF`, decode `group_id = group_byte & 0x7F`, decode `h1 = ((group_byte >> 7) << 8) | h1_byte`, and treat that decode as shared layout logic rather than ad hoc matcher behavior.
 - Tests and sampling must stay at operating radii only: `sqrt(a_lo^2 + b_lo^2) >= 800,000,000`, off-axis, tile-aligned.
 
 ## Current State Map
@@ -98,8 +98,8 @@ Required parse rules:
   `I groups = tileop[off_I:off_L]`
   `L groups = tileop[off_L:off_R]`
   `R groups = tileop[off_R:off_R+r_cnt]`
-  `L h1>>1 = tileop[h_start:h_start+l_cnt]`
-  `R h1>>1 = tileop[h_start+l_cnt:h_start+l_cnt+r_cnt]`
+  `L h1 = tileop[h_start:h_start+l_cnt]`
+  `R h1 = tileop[h_start+l_cnt:h_start+l_cnt+r_cnt]`
 - Optional pad:
   byte 127 may be padding when residual budget is odd and must be ignored by decoders.
 
@@ -108,8 +108,8 @@ Validation invariants Python must enforce for every normal tile:
 1. `len(tileop) == 128`
 2. `3 <= off_I <= off_L <= off_R <= 127`
 3. `o_cnt + i_cnt + 2*l_cnt + 2*r_cnt <= 125`
-4. `len(L groups) == len(L h1>>1)` and `len(R groups) == len(R h1>>1)`
-5. All stored groups lie in `[1, 255]`
+4. `len(L groups) == len(L h1)` and `len(R groups) == len(R h1)`
+5. All decoded groups lie in `[1, 127]`
 6. Empty tile means all decoded face sections are empty
 7. Group decode order is payload order `O-I-L-R`, while group assignment order remains `I-O-L-R`
 
@@ -137,7 +137,7 @@ Functions to add:
 - `decode_face_groups(tileop: bytes, face: str) -> list[int]`
   Before: `compose.py:20-27` uses fixed 16-byte blocks.
   After: header-derived slicing.
-- `decode_face_h1(tileop: bytes, face: str, *, tile_origin: tuple[int, int]) -> list[int]`
+- `decode_face_h1(tileop: bytes, face: str) -> list[int]`
   Before: `compose.py:30-35` uses fixed offsets.
   After: header-derived slicing for `L/R`, empty for `I/O`.
 - `decode_tileop(tileop: bytes) -> dict[str, dict[str, list[int]]]`
@@ -165,7 +165,7 @@ Exact changes:
   Before:
   overflows if any face exceeds 16; writes fixed groups at bytes `0/16/32/48`; zero-fills tail.
   After:
-  computes `o_cnt/i_cnt/l_cnt/r_cnt`, checks packed budget `o+i+2l+2r <= 125`, checks `group_count <= 255`, packs each L/R anchor as `h1 >> 1`, writes header bytes `off_I/off_L/off_R`, packs payload in `O/I/L/R/Lh1/Rh1` order, leaves only optional terminal pad.
+  computes `o_cnt/i_cnt/l_cnt/r_cnt`, checks packed budget `o+i+2l+2r <= 125`, checks `group_count <= 127`, packs each L/R port as `group_byte` plus `h1_byte`, writes header bytes `off_I/off_L/off_R`, packs payload in `O/I/L/R/Lh1/Rh1` order, leaves only optional terminal pad.
 
 Behavioral note:
 
@@ -255,13 +255,13 @@ Exact changes:
   Report two things separately:
   the shared-prime match count when `delta_h == 0`,
   the decoded raw-h1 equality matches for general `delta_h`.
-  Also assert that no matcher path uses wraparound arithmetic on packed bytes; all comparisons must happen after parity decode.
+  Also assert that no matcher path uses wraparound arithmetic on stored bytes; all comparisons must happen after group-bit-steal decode.
 
 Verification gate:
 
 - Validator passes on normal V2 tiles and fails on intentionally malformed headers.
 - A synthetic malformed tile with `off_I > off_L` is rejected.
-- A synthetic malformed tile with mismatched L-group and L-h1>>1 section lengths is rejected.
+- A synthetic malformed tile with mismatched L-group and L-h1 section lengths is rejected.
 
 ### 6. Collapse duplicate diagnostic logic into shared pipeline calls
 
@@ -274,7 +274,7 @@ Exact changes:
 
 - Replace duplicated `sieve_bitmap`, `compact_bitmap`, `build_components`, `collect_face_primes`, `cluster_into_ports`, `assign_groups`, `compute_group_face_incidence`, `identify_dead_ends`, `prune`.
 - Keep only presentation/reporting functions and have `diagnose()` call `process_tile()` plus shared pruning/classification helpers.
-- Expand output to print V2 header fields, packed counts, payload budget usage, decoded face sections, and the face parity used for h1 decode.
+- Expand output to print V2 header fields, packed counts, payload budget usage, decoded face sections, and the recovered stolen-bit state for L/R h1 decode.
 
 Verification gate:
 
@@ -456,8 +456,8 @@ Dependency note:
 
 ## Risks
 
-1. **Face-parity decode drift.**
-   If executors compute face parity differently across `ports.py`, `compose.py`, and `cross_validate.py`, Python will fork the spec even though the packed bytes look plausible.
+1. **Group-bit-steal decode drift.**
+   If executors decode the stolen high bit differently across `ports.py`, `compose.py`, and `cross_validate.py`, Python will fork the spec even though the packed bytes look plausible.
 2. **False confidence from old census numbers.**
    The 2026-04-09 census doc recommends a wider fixed layout. That recommendation predates the current V2 packed layout. Executors must not import its “24 ports/face” recommendation as today’s design target.
 3. **C++ output visibility gap.**

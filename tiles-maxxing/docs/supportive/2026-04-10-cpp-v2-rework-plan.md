@@ -11,7 +11,7 @@ refs: [docs/tile_spec.md, docs/tile_operations.md, docs/grid_spec.md, docs/compo
 
 ## Decision
 
-Implement TileOp V2 in `tile-cpp` as the 128-byte dynamic packed layout from the current specs, not as the older 192-byte `PORTS_PER_FACE=24` expansion from the overflow census note. Stage the work behind a small encode/decode abstraction so the approved `h1 >> 1` half-step encoding is implemented once and reused everywhere.
+Implement TileOp V2 in `tile-cpp` as the 128-byte dynamic packed layout from the current specs, not as the older 192-byte `PORTS_PER_FACE=24` expansion from the overflow census note. Stage the work behind a small encode/decode abstraction so the approved group-bit-steal encoding is implemented once and reused everywhere.
 
 ## Rationale
 
@@ -32,7 +32,7 @@ Killed by the spec. The format is no longer fixed four-face slots, and the curre
 Killed by authority chain and blast radius. It changes record size, memory budget, and every downstream parser.
 
 3. Keep treating `h1 >= 256` as overflow.
-Killed by the approved resolution. The parity-compressed `h1 >> 1` encoding is exact and eliminates this false blocker.
+Killed by the approved resolution. Group-bit steal encodes the shared-boundary row exactly and eliminates this false blocker.
 
 Assumptions:
 
@@ -42,14 +42,15 @@ Assumptions:
 
 ## Resolved h1 Encoding
 
-The `h1 = 256` contradiction is resolved by the approved half-step encoding:
+The `h1 = 256` contradiction is resolved by the approved group-bit-steal encoding:
 
-- store `h1_packed = h1 >> 1`
-- decode `h1 = 2*h1_packed + face_parity`, where `face_parity` is computable from the tile origin and face identity
+- store `group_byte = ((h1 >> 8) << 7) | (group_id & 0x7F)`
+- store `h1_byte = h1 & 0xFF`
+- decode `group_id = group_byte & 0x7F`
+- decode `h1 = ((group_byte >> 7) << 8) | h1_byte`
 
-This works because every Gaussian prime on one face shares the same h1 parity.
-Primality forces exactly one coordinate to be odd, and a face fixes one
-coordinate, so the along-face parity is determined for the whole face.
+This uses the fact that `h1` needs only 9 bits (`0..256`) while observed
+group counts remain far below the new global cap of `127`.
 
 ## Plan
 
@@ -62,14 +63,14 @@ What to do:
    - `TILEOP_PAYLOAD_BYTES = 125`
    - byte offsets/constants for dead and overflow sentinels
 2. In `tile-cpp/include/types.h:11-28`, keep `TileOp { uint8_t bytes[128]; }`, but add explicit helper structs for V2 metadata. Minimum set:
-   - `TileOpFaceView` with pointer/count fields for group bytes and optional packed `h1 >> 1` bytes
+   - `TileOpFaceView` with pointer/count fields for group bytes and optional packed `h1` bytes
    - `TileOpLayout` or equivalent with `off_I`, `off_L`, `off_R`, derived counts, `h_start`, status flags
 3. Add public helpers in `tile-cpp/include/encode.h` and implement them in `tile-cpp/src/encode.cpp`:
    - `make_overflow_tileop()`
    - `make_empty_tileop()`
    - `parse_tileop_v2(const TileOp&)`
    - `max_group_label(const TileOp&)`
-   - face accessors for groups and packed `h1 >> 1` slices, plus decoded `face_h1()`
+   - face accessors for groups and packed `h1` slices, plus decoded `face_h1()`
 4. Validate headers structurally in the parser:
    - offsets monotone: `3 <= off_I <= off_L <= off_R <= 128`
    - derived counts non-negative
@@ -106,7 +107,7 @@ What to do:
 1. Replace the V1 write path in `tile-cpp/src/encode.cpp:11-70`.
 2. Compute face counts from `FaceData` by face, but emit in spec order `O, I, L, R`, not the current extraction order.
 3. Enforce V2 byte budget:
-   - overflow if `group_count >= 0xFF`
+   - overflow if `group_count > 127`
    - overflow if `o_cnt + i_cnt + 2*l_cnt + 2*r_cnt > 125`
 4. Write the header first:
    - `off_I = 3 + o_cnt`
@@ -117,7 +118,7 @@ What to do:
    - `bytes[off_I .. off_L)` I groups
    - `bytes[off_L .. off_R)` L groups
    - `bytes[off_R .. off_R + r_cnt)` R groups
-   - then L `h1 >> 1` bytes, then R `h1 >> 1` bytes
+   - then L `h1` bytes, then R `h1` bytes
    - zero the optional trailing pad if present
 6. Keep overflow as `memset(0xFF)` of the full 128 bytes.
 
@@ -197,30 +198,30 @@ After:
 
 Verification gate:
 
-- Existing extraction tests are expanded to include representative even- and odd-parity anchors and prove extraction preserves the `uint16_t` value before serialization.
+- Existing extraction tests are expanded to include representative interior and shared-boundary anchors and prove extraction preserves the `uint16_t` value before serialization.
 
 Failure mode:
 
 - If someone narrows `h1` early, the test catches the loss before the pack/decode helper runs.
 
-### 5. Implement the resolved `h1 >> 1` serialization rule
+### 5. Implement the resolved group-bit-steal serialization rule
 
 What to do:
 
-1. Add a single pack/decode helper in `tile-cpp/src/encode.cpp` responsible for converting internal `uint16_t h1` to packed bytes and back.
-2. Route all `L/R h1` writes through `pack_h1(h1) = h1 >> 1`.
-3. Route all reads through `decode_h1(stored, face_parity) = 2*stored + face_parity`.
-4. Add boundary tests covering both parity classes, including the old `h1=256` case.
+1. Add a single pack/decode helper in `tile-cpp/src/encode.cpp` responsible for converting internal `uint16_t h1` and `uint8_t group` to packed bytes and back.
+2. Route all L/R group-byte writes through `pack_group_byte(group, h1) = ((h1 >> 8) << 7) | (group & 0x7F)`.
+3. Route all reads through `decode_group_id(group_byte) = group_byte & 0x7F` and `decode_h1(group_byte, h1_byte) = ((group_byte >> 7) << 8) | h1_byte`.
+4. Add boundary tests covering `h1=0`, representative interior anchors, and the old `h1=256` case.
 
 Directive:
 
-- Do not scatter face-parity reconstruction through the codebase.
-- Do not compare packed bytes directly when matching faces.
+- Do not scatter group-byte bit extraction through the codebase.
+- Do not compare stored bytes directly when matching faces.
 
 Verification gate:
 
 - There is exactly one place in the codebase that decides how `h1` is packed and decoded.
-- Boundary tests demonstrate exact round-trip for representative even and odd faces, including `h1=256`.
+- Boundary tests demonstrate exact round-trip for representative anchors, including `h1=256`.
 
 Failure mode:
 
@@ -241,7 +242,7 @@ What to do:
 4. Record overflow reason at the census site if available from encoder diagnostics:
    - `group_label_overflow`
    - `payload_budget_overflow`
-   - no dedicated `h1` overflow reason; `h1 >> 1` is part of the normal encode path
+   - no dedicated `h1` overflow reason; group-bit steal is part of the normal encode path
 5. Update `tile-cpp/tests/run_tile.cpp:64-73` and `tile-cpp/tests/test_e2e.cpp:36-37` to print V2-aware summaries instead of “first 32/64 bytes” only.
 
 Before:
@@ -305,7 +306,7 @@ What to do:
 3. Use the census to answer V2-specific questions:
    - what fraction still overflow under the `125` byte budget
    - what is the distribution of payload slack
-   - how often encoded `h1 >> 1` approaches the top of the practical range
+   - how often encoded `h1` reaches `256` and exercises the stolen bit
 
 Verification gate:
 
@@ -353,7 +354,7 @@ Reason: empty/dead validity affects all callers and early returns.
 Reason: this hardens the producer-side contract without changing extraction semantics prematurely.
 
 5. Step 5 is a gate, not optional cleanup.
-Reason: the pack/decode helper must be the single source of truth for `h1 >> 1`.
+Reason: the pack/decode helper must be the single source of truth for group-bit steal.
 
 6. Step 6 after parser+encoder are stable.
 Reason: tools must validate the new truth, not stale byte offsets.
@@ -376,12 +377,12 @@ The executor is done when all of the following are true:
 4. Overflow still serializes as all `0xFF`.
 5. All default validation coordinates satisfy radius `>= 800,000,000` and are off-axis.
 6. A synthetic V2 round-trip test proves parser and encoder agree on counts and section boundaries.
-7. There is a single isolated helper governing `h1 >> 1` pack/decode.
+7. There is a single isolated helper governing group-bit-steal pack/decode.
 
 ## Risks
 
-1. Misapplied face parity during decode.
-This is the main `h1` risk. If parity is taken from the wrong fixed coordinate, matches will be off by one lattice unit.
+1. Misapplied group-byte decode.
+This is the main `h1` risk. If bit 7 or the low byte is handled incorrectly, matches will be off by 256 or by the wrong group ID.
 
 2. Empty versus dead semantics.
 The current C++ producer has no explicit dead-tile geometry pass. Using the same empty layout for “no ports” and “dead” may be acceptable for now, but the executor should not claim those semantics are fully separated unless the geometry check is added.
@@ -398,8 +399,8 @@ If the executor leaves those tests in place, the suite will under-sample the act
 ## What I Would Pressure-Test During Review
 
 1. Any patch that keeps `PORTS_PER_FACE` in encode/decode logic is incomplete.
-2. Any patch that compares packed `h1 >> 1` bytes directly without parity decode is not acceptable.
+2. Any patch that compares stored L/R bytes directly without group-bit-steal decode is not acceptable.
 3. Any patch that updates the encoder but not `census_tiles.cpp` is not validated.
 4. Any patch that leaves `test_sieve.cpp` centered on `(100,100)` and `(10000,10000)` is out of policy.
 
-I pressure-tested this plan and found no structural issues once the approved `h1 >> 1` pack/decode rule is treated as mandatory shared infrastructure.
+I pressure-tested this plan and found no structural issues once the approved group-bit-steal pack/decode rule is treated as mandatory shared infrastructure.

@@ -12,7 +12,7 @@ how the tile's boundary ports connect through its interior. TileOp v2 retains
 the fixed 128-byte footprint but replaces the old fixed-16-per-face layout with
 a **3-byte offset header + dynamic packed sections**. Face O and Face I group
 labels are packed first for fast within-tower matching; Face L and Face R group
-labels and their packed `h1 >> 1` bytes occupy the higher offsets. A Rust compositor parses
+labels and their packed L/R `h1` bytes occupy the higher offsets. A Rust compositor parses
 the header, derives face counts, and uses union-find to check whether any path
 spans from the inner to outer boundary.
 
@@ -45,10 +45,10 @@ primes and the same 7-deep collar around that boundary, which is what makes
 shared-prime identity matching work. (updated 2026-04-09: 257x257 shared boundary convention)
 
 **Why S=256:** clean alignment with 256 threads per CUDA block and convenient
-tile-origin stride. Under the 257x257 shared-boundary convention, raw face
-anchors are no longer stored directly on L/R faces; TileOp v2 stores `h1 >> 1`
-and reconstructs the low bit from the face parity. That resolves the old
-`h1=256` contradiction without widening the record. Yields
+tile-origin stride. Under the 257x257 shared-boundary convention, L/R face
+anchors range over tile-proper rows `0..256`. TileOp v2 resolves the lone
+`h1 = 256` overflow case without widening the record by stealing bit 7 of the
+L/R group byte to carry `h1`'s 9th bit. Yields
 ~6,300 primes per tile at origin density, far fewer (~1,500) at 850M radius.
 
 **Why collar=7:** two Gaussian primes connect iff their squared Euclidean
@@ -115,15 +115,28 @@ geometry alone (independent of tile interior).
 Each port is anchored by its minimum-offset prime along the face. The anchor
 position, measured as an offset in lattice units from the tile's origin corner
 (see S2.1: corner at (tile_x, tile_y)), is the port's geometric **h1** value.
-TileOp v2 stores `h1_packed = h1 >> 1` for L/R faces and reconstructs
-`h1 = 2*h1_packed + face_parity` at decode time, where `face_parity` is the
-parity of the face's fixed coordinate and is computable from the tile origin.
-h1 therefore remains a unique face-local anchor with zero additional storage.
+For L/R faces, `h1` ranges over tile-proper rows `0..256`, so only the shared
+boundary row needs 9 bits. TileOp v2 stores each L/R port as:
+
+```text
+group_byte = ((h1 >> 8) << 7) | (group_id & 0x7F)
+h1_byte    = h1 & 0xFF
+```
+
+Decode is purely local:
+
+```text
+group_id = group_byte & 0x7F
+h1       = ((group_byte >> 7) << 8) | h1_byte
+```
+
+The group cap is therefore **127 per tile globally**. This is the same group ID
+space used on all four faces because one group may span multiple faces.
 
 **Asymmetric encoding (see S4.1):** I/O ports cost 1 byte each (group label
-only). L/R ports cost 2 bytes each (group label + packed `h1 >> 1`). TileOp v2
-packs these dynamically: O groups first, then I groups, then L groups, then R
-groups, then L `h1 >> 1`, then R `h1 >> 1`. I/O faces do not store h1 because adjacent vertical tiles
+only). L/R ports cost 2 bytes each (group byte + `h1` byte). TileOp v2 packs
+these dynamically: O groups first, then I groups, then L group bytes, then R
+group bytes, then L `h1` bytes, then R `h1` bytes. I/O faces do not store h1 because adjacent vertical tiles
 share the exact same boundary row, so shared-prime identity matching is exact
 from the duplicated boundary prime set and positional order is only an
 extraction convenience, not the semantic matching rule. (updated 2026-04-09:
@@ -144,10 +157,6 @@ Consequences:
 - All gaps between consecutive face primes are **even**: 2, 4, 6, 8, ...
 - Intra-port gaps (primes within same port): 2, 4, or 6 lattice units
 - **Minimum port-splitting gap: 8** (not 7) — next even value after 6
-- Every prime on a given face has the same h1 parity, fixed by that face's
-  constant coordinate. Storing `h1 >> 1` is therefore lossless: decode is
-  `h1 = 2*stored + face_parity`, and even the full 271-point face extent still
-  fits comfortably inside `u8`.
 - Upper bound on ports per face: at most 128 primes in one parity class, with
   minimum inter-port gap of 8 (= 4 parity-adjusted positions). Worst case:
   alternating single-prime ports and minimal gaps, giving floor(128 / 4) = 32.
@@ -191,10 +200,10 @@ Header:
 Payload:
   Bytes 3 .. off_I - 1                 Face O groups   (o_cnt bytes)
   Bytes off_I .. off_L - 1             Face I groups   (i_cnt bytes)
-  Bytes off_L .. off_R - 1             Face L groups   (l_cnt bytes)
-  Bytes off_R .. off_R + r_cnt - 1     Face R groups   (r_cnt bytes)
-  Bytes h_start .. h_start + l_cnt - 1 Face L h1>>1    (l_cnt bytes)
-  Bytes h_start + l_cnt .. 127         Face R h1>>1    (r_cnt bytes, optional 1-byte pad at byte 127)
+  Bytes off_L .. off_R - 1             Face L group bytes (l_cnt bytes)
+  Bytes off_R .. off_R + r_cnt - 1     Face R group bytes (r_cnt bytes)
+  Bytes h_start .. h_start + l_cnt - 1 Face L h1 bytes    (l_cnt bytes)
+  Bytes h_start + l_cnt .. 127         Face R h1 bytes    (r_cnt bytes, optional 1-byte pad at byte 127)
 
 where:
   h_start = off_R + r_cnt
@@ -215,12 +224,12 @@ odd. Byte 127 may therefore be zero padding and is never interpreted as data.
 **Face ordering rationale (O-I-L-R):** Face O and Face I groups are packed
 immediately after the header because within-tower I/O matching is the dominant
 compositor read pattern. Putting O/I groups in the lowest byte offsets keeps
-the most frequently matched data in cache line 0. L/R groups and packed
-`h1 >> 1` bytes are
+the most frequently matched data in cache line 0. L/R group bytes and `h1`
+bytes are
 less frequently accessed and occupy the higher offsets.
 
 **Asymmetric semantics unchanged:** I/O faces store group labels only; L/R
-faces store group labels plus packed `h1 >> 1`. The rationale is unchanged from v4: I/O
+faces store group bytes plus `h1` bytes. The rationale is unchanged from v4: I/O
 matching is shared-prime identity on an aligned duplicated boundary row, while
 L/R matching needs decoded h1 for offset disambiguation.
 
@@ -245,7 +254,7 @@ Cache line 0 (bytes 0-63):
   header (3 B) + Face O groups + Face I groups + early Face L/R groups
 
 Cache line 1 (bytes 64-127):
-  trailing Face L/R groups + Face L h1>>1 + Face R h1>>1 + optional 1-byte pad
+  trailing Face L/R group bytes + Face L h1 bytes + Face R h1 bytes + optional 1-byte pad
 ```
 
 | Operation                  | Data read                                  | Bytes          | Cache lines |
@@ -256,7 +265,7 @@ Cache line 1 (bytes 64-127):
 
 The old "cache line 0 = all groups, cache line 1 = h1 + tail metadata" model no
 longer applies. The important property is that O/I groups sit in the lowest
-offsets, while L/R groups and packed `h1 >> 1` bytes are deeper in the TileOp.
+offsets, while L/R group bytes and `h1` bytes are deeper in the TileOp.
 
 ### 4.3 Tile Status Detection
 
@@ -282,7 +291,7 @@ bytes are live.
 
 ### 4.4 Group Semantics
 
-The **group** label (u8, values 1-255) encodes interior connectivity: ports
+The **group** label (u8, values 1-127) encodes interior connectivity: ports
 with the same group value are connected through the tile's internal prime
 graph. Ports with different group values are disconnected inside this tile.
 Group 0 is not stored in the packed sections.
@@ -412,15 +421,15 @@ Action:
   3. Emit to TileOp_wide (256 bytes, 32 ports/face):
 
      TileOp_wide [256 bytes = 4 cache lines, symmetric layout]
-     +-- face_I: { groups: [u8; 32], h1_half: [u8; 32] }   64 B
-     +-- face_O: { groups: [u8; 32], h1_half: [u8; 32] }   64 B
-     +-- face_L: { groups: [u8; 32], h1_half: [u8; 32] }   64 B
-     +-- face_R: { groups: [u8; 32], h1_half: [u8; 32] }   64 B
+     +-- face_I: { group_bytes: [u8; 32], h1_bytes: [u8; 32] }   64 B
+     +-- face_O: { group_bytes: [u8; 32], h1_bytes: [u8; 32] }   64 B
+     +-- face_L: { group_bytes: [u8; 32], h1_bytes: [u8; 32] }   64 B
+     +-- face_R: { group_bytes: [u8; 32], h1_bytes: [u8; 32] }   64 B
 
-     Note: TileOp_wide uses symmetric layout (`h1 >> 1` on all faces)
+     Note: TileOp_wide uses symmetric layout (group-bit steal + `h1` byte on all faces)
      because overflow tiles may need h1 matching on any face
      for maximum compatibility with mixed-width reads.
-     Decoding remains `h1 = 2*h1_half + face_parity`, so no width issue
+     Decoding remains local mask-and-shift from the stored group byte and `h1` byte, so no width issue
      remains under the shared-boundary convention.
 
   4. 32 ports/face exceeds Brun-Titchmarsh raw prime cap (~20).
@@ -511,8 +520,8 @@ L/R faces connect tiles in adjacent towers, which may be shifted by
  0      delta_h         S      S+delta_h
 ```
 
-Compositor reads the packed L/R group sections and the packed L/R `h1 >> 1`
-sections, decodes raw h1 from face parity, and applies the S5.1 predicate
+Compositor reads the packed L/R group-byte sections and the packed L/R `h1`
+sections, decodes raw h1 by mask-and-shift, and applies the S5.1 predicate
 `A.h1 == B.h1 + delta_h`. When `delta_h = 0`,
 the shared boundary column appears in both tiles and the match is again a
 shared-prime identity match on duplicated lattice points; when `delta_h != 0`,
@@ -563,7 +572,7 @@ for face in [O, I, L, R] {
 ```
 
 O(P) per tile where P = number of active ports. Zero heap allocation
-(leaders array on stack, 256 x 8 = 2 KB; index 0 unused since group 0 is
+(leaders array on stack, 128 x 8 = 1 KB; index 0 unused since group 0 is
 the empty sentinel).
 
 ### 6.2 Phase 2: Match Shared Faces
@@ -590,14 +599,14 @@ than the other) is a hard error during validation — it indicates non-determini
 collar classification. This check runs unconditionally (not debug-only) at
 least during validation/testing mode.
 
-**Offset L/R tiles (h1 matching — packed L/R group sections plus packed `h1 >> 1` sections):**
+**Offset L/R tiles (h1 matching — packed L/R group-byte sections plus packed `h1` sections):**
 
 ```rust
 // Face R of tile a matches Face L of tile b (horizontal neighbors across towers)
 let a_groups = tile_ops[a_idx].face_groups(R);
 let b_groups = tile_ops[b_idx].face_groups(L);
-let a_h1 = tile_ops[a_idx].face_h1(R); // decoded: 2*stored + face_parity
-let b_h1 = tile_ops[b_idx].face_h1(L); // decoded: 2*stored + face_parity
+let a_h1 = tile_ops[a_idx].face_h1(R); // decoded from group byte bit 7 + h1 byte
+let b_h1 = tile_ops[b_idx].face_h1(L); // decoded from group byte bit 7 + h1 byte
 let delta_h = grid.delta_h(a_idx, b_idx);
 for sa in 0..a_groups.len() {
     for sb in 0..b_groups.len() {
@@ -669,7 +678,7 @@ One block per tile, 256 threads, 8-phase pipeline:
 7. **Classify** — identify face ports, assign group labels, prune dead-ends
 8. **Emit** — write 128-byte TileOp to `tile_ops[blockIdx.x * 128]`:
    - Header bytes 0-2 = `off_I`, `off_L`, `off_R`
-   - Packed payload order: O groups, I groups, L groups, R groups, L `h1 >> 1`, R `h1 >> 1`
+   - Packed payload order: O groups, I groups, L group bytes, R group bytes, L `h1` bytes, R `h1` bytes
    - Optional pad: byte 127 may be zero when the residual budget is odd
    If `o + i + 2l + 2r > 125`: fill all 128 bytes with 0xFF.
 
@@ -721,8 +730,8 @@ which fails here.
 | Decision | Chosen | Rejected | Reason |
 |----------|--------|----------|--------|
 | TileOp size | Fixed 128 B (2 cache lines) | Variable-length | Direct indexing; no offset table; trivial CUDA writes |
-| Layout | Dynamic packed O-I-L-R with 3-byte header | Fixed symmetric or fixed-slot layouts | Same 128-byte footprint, but bytes are allocated where the tile needs them. O/I remain group-only; L/R retain geometric h1 via packed `h1 >> 1`. |
-| Group width | u8 (1 byte) | u4 (nibble) | No nibble packing; eliminates group overflow; simpler code |
+| Layout | Dynamic packed O-I-L-R with 3-byte header | Fixed symmetric or fixed-slot layouts | Same 128-byte footprint, but bytes are allocated where the tile needs them. O/I remain group-only; L/R retain geometric h1 via group-bit steal. |
+| Group width | u8 (1 byte) | u4 (nibble) | No nibble packing; group-bit steal still leaves a 127-group global cap with ample operating-point headroom; simpler code |
 | Empty encoding | `off_I = off_L = off_R = 3` | face_counts field | Unique empty-layout header; zero payload |
 | Tile status | Derived from header | Dedicated face_mask byte | Structural impossibility of `bytes[0] == 0xFF`; no extra metadata |
 | Face capacity | Dynamic, budgeted by `o+i+2l+2r <= 125` | v1-style fixed face caps | High-port faces borrow bytes from sparse faces |
@@ -731,10 +740,10 @@ which fails here.
 | Overflow | 0xFF sentinel + escalation | Full-fingerprint TileOp variant | Conservative bridge safe for moat search; no extra encoding |
 | Tile identity | Implicit (index + GridDesc) | Stored coordinates | Regular grid -> trivial derivation; saves 8 B/tile |
 | Collar depth | 7 = ceil(sqrt(40)) | 6 = floor(sqrt(40)) | ceil ensures all connecting primes are captured; free in fixed layout |
-| Tile size | S=256 | S=512 | CUDA block alignment; parity-compressed `h1 >> 1` keeps face anchors in `u8` under shared-boundary ownership |
+| Tile size | S=256 | S=512 | CUDA block alignment; group-bit steal keeps the shared-boundary row `h1=256` inside the existing 2-byte L/R port budget |
 | Port model | Port-transfer | Per-component | Composition O(P) not O(N_A x N_B) |
 | Search | Ring expansion | Binary search | Transition zone non-monotonicity |
-| Tile shape | Square only | Rectangular | Non-square tiles would further complicate face-parity recovery and overlap geometry under 257-point faces |
+| Tile shape | Square only | Rectangular | Non-square tiles would further complicate overlap geometry under 257-point faces |
 | Halo model | 257-point tile proper + 7-deep collar | Exclusive boundary convention | Shared boundary plus collar enables exact shared-prime identity matching (updated 2026-04-09: 257x257 shared boundary convention) |
 | Dead-end pruning | Single-face single-port omitted | Keep all / prune more | 70-80% reduction; further pruning risks false disconnection |
 
@@ -771,7 +780,7 @@ TILEOP_HEADER_BYTES  = 3      // off_I, off_L, off_R
 TILEOP_DATA_BYTES    = 125    // packed payload budget
 NUM_FACES            = 4      // I, O, L, R
 GROUP_LABEL_MIN      = 1
-GROUP_LABEL_MAX      = 255
+GROUP_LABEL_MAX      = 127
 OVERFLOW_SENTINEL    = 0xFF   // all 128 bytes filled; detected via bytes[0] == 0xFF
 EMPTY_OFFSET         = 3      // off_I = off_L = off_R = 3 for the empty tile
 ESCALATION_THRESHOLD = 100    // overflow tile count triggering Tier 2 recalc (tunable)

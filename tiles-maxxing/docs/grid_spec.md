@@ -347,10 +347,10 @@ on tile B's L-face iff (all arithmetic in signed i16):
 (a.h1 as i16) == (b.h1 as i16) + delta_h    // delta_h: i16
 ```
 
-The compositor decodes raw h1 from the stored byte as
-`h1 = 2*h1_packed + face_parity`, where `face_parity` is the parity of the
-face's fixed x-coordinate (`tile_x & 1` for L, `(tile_x + S) & 1` for R).
-This is exact because every Gaussian prime on one face shares that parity.
+The compositor decodes raw h1 locally from the stored L/R bytes:
+`group_id = group_byte & 0x7F` and
+`h1 = ((group_byte >> 7) << 8) | h1_byte`.
+This is exact because `h1` ranges only over tile-proper rows `0..256`.
 
 For the primary neighbor (delta_h = -f): a.h1 + f == b.h1.
 For the secondary neighbor (delta_h = S - f): a.h1 - (S - f) == b.h1,
@@ -656,8 +656,8 @@ O groups = tile[3 .. off_I]
 I groups = tile[off_I .. off_L]
 L groups = tile[off_L .. off_R]
 R groups = tile[off_R .. off_R + r_cnt]
-L h1>>1  = tile[h_start .. h_start + l_cnt]
-R h1>>1  = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
+L h1     = tile[h_start .. h_start + l_cnt]
+R h1     = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
 ```
 
 Dead tile:
@@ -751,9 +751,9 @@ Where:
 ```
 function match_lr(a, b, delta_h):
     a_groups = face_groups(a, R)
-    a_h1     = face_h1(a, R)   // decoded from stored h1>>1
+    a_h1     = face_h1(a, R)   // decoded from group byte bit 7 + h1 byte
     b_groups = face_groups(b, L)
-    b_h1     = face_h1(b, L)   // decoded from stored h1>>1
+    b_h1     = face_h1(b, L)   // decoded from group byte bit 7 + h1 byte
     for sa in 0..len(a_groups):
         target = a_h1[sa] - delta_h
         for sb in 0..len(b_groups):
@@ -1080,8 +1080,8 @@ Bytes 3 .. off_I - 1                 Face O groups
 Bytes off_I .. off_L - 1             Face I groups
 Bytes off_L .. off_R - 1             Face L groups
 Bytes off_R .. off_R + r_cnt - 1     Face R groups
-Bytes h_start .. h_start + l_cnt - 1 Face L h1>>1
-Bytes h_start + l_cnt .. 127         Face R h1>>1
+Bytes h_start .. h_start + l_cnt - 1 Face L h1 bytes
+Bytes h_start + l_cnt .. 127         Face R h1 bytes
 ```
 
 The payload order is **O-I-L-R** so that the most frequent I/O matching data
@@ -1093,7 +1093,7 @@ resides in the lowest byte offsets.
 - I/O matching usually stays within cache line 0 because O/I groups are packed
   immediately after the header.
 - L/R matching reads deeper into the TileOp, typically touching late group
-  bytes and packed `h1 >> 1` bytes.
+  bytes and packed `h1` bytes.
 - The old split "all groups in line 0, h1 in line 1" no longer applies.
 
 ### S14.3 Octant Stitching and I/O h1
@@ -1116,7 +1116,7 @@ The exact face-mapping and delta_h formulas for stitching across y = x are
 outlined in S8.3 but not fully derived. The implementation must resolve:
 
 - Which tiles in our grid are their own reflections (tiles centered on y = x)?
-- How does the axis swap affect raw-h1 recovery (x-offset becomes y-offset, with face parity recomputed after reflection)?
+- How does the axis swap affect raw-h1 recovery (x-offset becomes y-offset, with group-bit-steal decode applied after reflection)?
 - Can the stitching be expressed as additional match_lr calls with a
   transformed delta_h, or does it require a dedicated stitching pass?
 

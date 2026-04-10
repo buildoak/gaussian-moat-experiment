@@ -69,7 +69,7 @@ All constants from tile_spec.md S11 and grid_spec.md S2 apply. Additional:
 | MAX_GROUPS_PER_TILE | 9 | Validated max after dead-end pruning at 850M. |
 | TILES_PER_TOWER | 32 | From grid_spec S2. |
 | GROUP_LABEL_MIN | 1 | Group 0 is never stored. |
-| GROUP_LABEL_MAX | 255 | u8 range minus zero. |
+| GROUP_LABEL_MAX | 127 | Global per-tile cap imposed by group-bit steal on L/R faces. |
 
 ---
 
@@ -132,8 +132,8 @@ O groups = tile[3 .. off_I]
 I groups = tile[off_I .. off_L]
 L groups = tile[off_L .. off_R]
 R groups = tile[off_R .. off_R + r_cnt]
-L h1>>1  = tile[h_start .. h_start + l_cnt]
-R h1>>1  = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
+L h1     = tile[h_start .. h_start + l_cnt]
+R h1     = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
 ```
 
 The optional pad at byte 127 is ignored.
@@ -312,9 +312,9 @@ fn match_lr(
     group_offset: &[u32],
 ) {
     let a_groups = face_groups(tile_ops, a, R);
-    let a_h1     = face_h1(tile_ops, a, R); // decoded from stored h1>>1
+    let a_h1     = face_h1(tile_ops, a, R); // decoded from group byte bit 7 + h1 byte
     let b_groups = face_groups(tile_ops, b, L);
-    let b_h1     = face_h1(tile_ops, b, L); // decoded from stored h1>>1
+    let b_h1     = face_h1(tile_ops, b, L); // decoded from group byte bit 7 + h1 byte
 
     for sa in 0..a_groups.len() {
         let target_h1 = (a_h1[sa] as i16) - delta_h;
@@ -398,7 +398,7 @@ allocated. Dead tiles are skipped in all phases.
 
 Exposure detection is still based on the `delta` geometry from grid_spec S5.
 The only update is that exposed-port tests now iterate the packed L/R face
-sections and their packed `h1 >> 1` arrays rather than fixed-size face arrays.
+sections and their packed `h1` arrays rather than fixed-size face arrays.
 
 ---
 
@@ -410,7 +410,7 @@ One tower is still 32 tiles * 128 bytes = 4 KB of TileOps. TileOp v2 changes
 which bytes are hot:
 
 - O/I groups concentrate near the start of each TileOp.
-- L/R groups and packed `h1 >> 1` bytes concentrate later in each TileOp.
+- L/R group bytes and packed `h1` bytes concentrate later in each TileOp.
 - There is no co-located UF metadata in the TileOp.
 
 ### S8.2 Two-Tower Working Set
@@ -429,7 +429,7 @@ Cache line 0 (bytes 0-63):
   header + O groups + I groups + early L/R groups
 
 Cache line 1 (bytes 64-127):
-  trailing L/R groups + L h1>>1 + R h1>>1 + optional pad
+  trailing L/R group bytes + L h1 bytes + R h1 bytes + optional pad
 ```
 
 | Operation | Data accessed | Cache lines touched |
@@ -523,9 +523,9 @@ and directly addressable.
    per-tower `delta` geometry.
 2. **Octant stitching detail.** Reflection-adjusted face mapping and `delta_h`
    remain delegated to grid_spec.
-3. **L/R h1 decode discipline.** All matching code must decode raw h1 as
-   `2*stored + face_parity`; comparing packed bytes directly is invalid when
-   the matched faces have different fixed-coordinate parity.
+3. **L/R h1 decode discipline.** All matching code must decode raw h1 by
+   combining group-byte bit 7 with the `h1` byte; comparing stored bytes
+   directly is invalid because the group byte also carries the group ID.
 
 ---
 
@@ -535,7 +535,7 @@ and directly addressable.
 2. **Empty tile header:** `tile[0] == tile[1] == tile[2] == 3` and `tile[3] == 0`
    iff the tile has no ports on any face.
 3. **Offset monotonicity:** for every normal tile, `3 <= off_I <= off_L <= off_R <= 127`.
-4. **Group label range:** all stored group labels lie in `[1, 255]`.
+4. **Group label range:** all stored group labels lie in `[1, 127]`.
 5. **Aligned I/O count agreement:** adjacent tower tiles have equal O/I face counts.
 6. **L/R section agreement:** `len(face_groups(L)) == len(face_h1(L))` and
    `len(face_groups(R)) == len(face_h1(R))`.

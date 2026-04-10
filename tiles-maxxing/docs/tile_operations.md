@@ -25,7 +25,7 @@ Phase 1: SIEVE        row-by-row prime enumeration          --> bitmap
 Phase 2: COMPACT       prefix-popcount + bit extraction      --> dense prime list
 Phase 3: UNION-FIND    neighbor scan + component merging     --> component labels
 Phase 4: FACE EXTRACT  boundary scan + port clustering       --> face port groups
-Phase 5: ENCODE        pack groups, h1>>1, dead-end prune    --> TileOp (128 B)
+Phase 5: ENCODE        pack groups, h1, dead-end prune       --> TileOp (128 B)
 ```
 
 **Design principle:** the implementation path is C/C++ first (sequential, debuggable,
@@ -547,11 +547,22 @@ first (minimum-h) prime:
 port.h1 = min(prime.tile_row for prime in port)     // for L/R faces
 ```
 
-h1 is still the geometric along-face anchor, but TileOp v2 stores
-`h1_packed = h1 >> 1` instead of raw h1. All Gaussian primes on a given face
-share the same h1 parity because primality requires exactly one coordinate to
-be odd, and the face coordinate is fixed; decode is therefore exact:
-`h1 = 2*h1_packed + face_parity`.
+h1 is still the geometric along-face anchor. TileOp v2 stores each L/R port as:
+
+```
+group_byte = ((h1 >> 8) << 7) | (group_id & 0x7F)
+h1_byte    = h1 & 0xFF
+```
+
+Decode is:
+
+```
+group_id = group_byte & 0x7F
+h1       = ((group_byte >> 7) << 8) | h1_byte
+```
+
+Because `h1` ranges only over tile-proper rows `0..256`, this is a 1-bit
+overflow case only. The global group cap is therefore 127 per tile.
 
 I/O faces do not store h1 — adjacent radial tiles share the exact boundary row,
 so composition is by shared-prime identity on that duplicated row; deterministic
@@ -575,10 +586,10 @@ Header:
 Payload order:
   tileop[3 .. off_I)                      = Face O groups
   tileop[off_I .. off_L)                  = Face I groups
-  tileop[off_L .. off_R)                  = Face L groups
-  tileop[off_R .. off_R + r_cnt)          = Face R groups
-  tileop[h_start .. h_start + l_cnt)      = Face L h1>>1
-  tileop[h_start + l_cnt .. 128 - pad)    = Face R h1>>1
+  tileop[off_L .. off_R)                  = Face L group bytes
+  tileop[off_R .. off_R + r_cnt)          = Face R group bytes
+  tileop[h_start .. h_start + l_cnt)      = Face L h1 bytes
+  tileop[h_start + l_cnt .. 128 - pad)    = Face R h1 bytes
   tileop[127] = 0                         // optional 1-byte pad only
 ```
 
@@ -605,8 +616,8 @@ If the packed-data constraint
 o_cnt + i_cnt + 2*l_cnt + 2*r_cnt <= 125
 ```
 
-fails after dead-end pruning, or if total groups per tile exceed 255 (u8
-range), the entire 128-byte TileOp is filled with `0xFF` — all bytes, not just
+fails after dead-end pruning, or if total groups per tile exceed 127, the
+entire 128-byte TileOp is filled with `0xFF` — all bytes, not just
 one field. The whole TileOp is poisoned.
 
 The compositor detects overflow via `tileop[0] == 0xFF` (structurally
@@ -625,12 +636,12 @@ i = len(I.ports_after_pruning)
 l = len(L.ports_after_pruning)
 r = len(R.ports_after_pruning)
 
-// Overflow check: if the packed budget fails, or total groups > 255,
+// Overflow check: if the packed budget fails, or total groups > 127,
 // poison the entire TileOp
 if o + i + 2*l + 2*r > 125:
     tileop = [0xFF; 128]
     return tileop
-if next_group - 1 > 255:
+if next_group - 1 > 127:
     tileop = [0xFF; 128]
     return tileop
 
@@ -657,10 +668,17 @@ for port in R.ports_after_pruning:
     cursor++
 
 for port in L.ports_after_pruning:
-    tileop[cursor] = port.h1 >> 1
+    tileop[cursor] = ((port.h1 >> 8) << 7) | (port.group & 0x7F)
     cursor++
 for port in R.ports_after_pruning:
-    tileop[cursor] = port.h1 >> 1
+    tileop[cursor] = ((port.h1 >> 8) << 7) | (port.group & 0x7F)
+    cursor++
+
+for port in L.ports_after_pruning:
+    tileop[cursor] = port.h1 & 0xFF
+    cursor++
+for port in R.ports_after_pruning:
+    tileop[cursor] = port.h1 & 0xFF
     cursor++
 
 if cursor < 128:
