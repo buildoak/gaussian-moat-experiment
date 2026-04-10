@@ -502,6 +502,45 @@ With occupancy/memory effects, expect **10-20K tiles/sec** realistic.
 
 C++ baseline: 1,003 tiles/sec (12 threads). Target speedup: **10-20x**.
 
+### 6.1 Measured Jetson Baselines
+
+**Hardware:** Orin Nano, sm_87, 8 SMs, CUDA 12.6, driver 540.4.0
+
+**Current baseline (2026-04-10, commit on feature/gpu-uf-v2):**
+
+| Metric | Value |
+|--------|-------|
+| Throughput (10K tiles) | **1,131 tiles/sec** |
+| Throughput (1K tiles) | 1,102 tiles/sec |
+| ms/tile (steady state) | 0.884 |
+| Blocks/SM | 4 |
+| Occupancy | 75% (1,152 / 1,536 threads) |
+| Registers/thread | 46 |
+| Dynamic shared mem | 36,640 bytes |
+| Static shared mem | 1,040 bytes |
+| Stack/thread | 56 bytes |
+| MAX_PRIMES_GPU | 2560 |
+| MAX_CANDIDATES_GPU | 6144 |
+| FACES_PER_PASS | 2 |
+
+**Key changes from initial kernel:**
+- 2-face-per-pass extraction (halved face_cells, recovered 4-block occupancy)
+- Separated MAX_CANDIDATES_GPU (sieve survivors) from MAX_PRIMES_GPU (confirmed primes)
+- Candidate census: 490K+ tiles, observed max 5,882 at operating radii (R >= 800M)
+
+**Historical progression:**
+
+| State | Tiles/sec | Blocks/SM | Notes |
+|-------|-----------|-----------|-------|
+| Initial cooperative phase 4 | 467 | 4 | 33,312B stack spill dominated |
+| + Stack spill fix | 341 | 3 | Occupancy regression from fat face_cells |
+| + 2-face-per-pass, N=2560 | 954 | 3 | Benchmark fix (8192 candidates) |
+| + Tightened candidates (6144) | **1,131** | **4** | Current baseline |
+
+**Remaining optimization targets (not yet implemented):**
+- Barrett reduction for sieve modulo (est. 5-8x sieve speedup)
+- Single sieve pass (eliminate duplicate sieve_row calls)
+
 ---
 
 ## 7. Implementation Notes
@@ -510,26 +549,25 @@ C++ baseline: 1,003 tiles/sec (12 threads). Target speedup: **10-20x**.
 
 ```cuda
 cudaFuncSetAttribute(process_tiles_kernel,
-    cudaFuncAttributeMaxDynamicSharedMemorySize, 36864);  // 36 KB
+    cudaFuncAttributeMaxDynamicSharedMemorySize, 36640);  // 35.8 KB
 ```
 
 Use dynamic shared memory (`extern __shared__`) for the union layout.
-35.4 KB peak fits within 36 KB request. Remaining SM shared memory
-available for L1 cache.
+36,640 bytes dynamic + 1,040 bytes static = 37,680 bytes/block.
+4 blocks x 37,680 = 150,720 bytes < 167,936 bytes/SM. Fits with 17 KB headroom.
 
 ### 7.2 Occupancy
 
-At 288 threads/block and 36 KB shared memory:
-- Orin Nano (sm_87): 128 KB shared/SM -> 3 blocks/SM possible (limited by
-  threads: 288 x 3 = 864 < 1024 max). 36 KB x 3 = 108 KB < 128 KB. Feasible.
-- Actual occupancy depends on register usage. At 26 regs/thread:
-  26 x 288 = 7,488 regs/block. 3 blocks = 22,464 regs < 65,536/SM. Fits.
+At 288 threads/block, 46 registers/thread, 37,680 bytes shared/block:
+- Orin Nano (sm_87): 167,936 bytes shared/SM -> 4 blocks/SM.
+  288 x 4 = 1,152 threads < 1,536 max. 75% occupancy.
+- Registers: 46 x 288 x 4 = 53,568 < 65,536/SM. Fits.
 
 ### 7.3 Poison Path
 
 ```cuda
 int prime_count = row_prefix[271];
-if (prime_count > 2304) {
+if (prime_count > MAX_PRIMES_GPU) {  // 2560
     // Poison: write overflow sentinel, skip Phases 3-5
     if (threadIdx.x == 0) {
         memset(&output[blockIdx.x], 0xFF, 128);
@@ -539,4 +577,4 @@ if (prime_count > 2304) {
 ```
 
 Poisoned tiles are retried on CPU (C++ pipeline, 1,003 tiles/sec).
-At operating point: zero tiles hit this path per 100K census.
+At operating point (R >= 800M): zero tiles hit this path per 490K census.
