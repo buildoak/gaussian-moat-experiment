@@ -1,9 +1,10 @@
 #pragma once
 
 #include "gpu_constants.cuh"
+#include "gpu_types.cuh"
 
-extern __constant__ uint32_t c_split_table[SPLIT_PRIMES_COUNT];
-extern __constant__ uint16_t c_inert_primes[INERT_PRIMES_COUNT];
+extern __constant__ SplitPrimeBarrettGPU c_split_barrett[SPLIT_PRIMES_COUNT];
+extern __constant__ InertPrimeBarrettGPU c_inert_barrett[INERT_PRIMES_COUNT];
 extern __constant__ uint64_t c_mr_witnesses[NUM_MR_WITNESSES];
 extern __constant__ uint32_t c_trial_primes[NUM_TRIAL_PRIMES];
 extern __constant__ int8_t c_bk_dr[NUM_BACKWARD_OFFSETS];
@@ -18,6 +19,21 @@ __device__ __forceinline__ int32_t euclidean_mod_gpu(int32_t value, uint32_t mod
     return rem;
 }
 
+__device__ __forceinline__ uint32_t barrett_mod_u32(uint32_t x, uint32_t p, uint32_t mu) {
+    const uint32_t q = __umulhi(x, mu);
+    uint32_t r = x - q * p;
+    if (r >= p) {
+        r -= p;
+    }
+    return r;
+}
+
+__device__ __forceinline__ int32_t barrett_euclidean_mod(int32_t value, uint32_t p, uint32_t mu) {
+    const uint32_t abs_val = static_cast<uint32_t>(value >= 0 ? value : -value);
+    const uint32_t r = barrett_mod_u32(abs_val, p, mu);
+    return (value < 0 && r != 0) ? static_cast<int32_t>(p - r) : static_cast<int32_t>(r);
+}
+
 __device__ __forceinline__ void mark_residue_class_reg(
     uint32_t ws[BITMAP_WORDS_PER_ROW],
     int32_t b_start,
@@ -25,6 +41,20 @@ __device__ __forceinline__ void mark_residue_class_reg(
     int32_t residue) {
     const int32_t b_mod = euclidean_mod_gpu(b_start, p);
     const int32_t first_col = euclidean_mod_gpu(residue - b_mod, p);
+    for (int32_t col = first_col; col < SIDE_EXP; col += static_cast<int32_t>(p)) {
+        ws[col >> 5] |= 1u << (col & 31);
+    }
+}
+
+__device__ __forceinline__ void mark_residue_class_barrett(
+    uint32_t ws[BITMAP_WORDS_PER_ROW],
+    int32_t b_start,
+    uint32_t p,
+    int32_t residue,
+    uint32_t mu) {
+    const int32_t b_mod = barrett_euclidean_mod(b_start, p, mu);
+    const int32_t diff = residue - b_mod;
+    const int32_t first_col = (diff >= 0) ? diff : diff + static_cast<int32_t>(p);
     for (int32_t col = first_col; col < SIDE_EXP; col += static_cast<int32_t>(p)) {
         ws[col >> 5] |= 1u << (col & 31);
     }

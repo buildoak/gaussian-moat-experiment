@@ -12,8 +12,8 @@
 #include <cstdlib>
 #include <cstdint>
 
-__constant__ uint32_t c_split_table[SPLIT_PRIMES_COUNT];
-__constant__ uint16_t c_inert_primes[INERT_PRIMES_COUNT];
+__constant__ SplitPrimeBarrettGPU c_split_barrett[SPLIT_PRIMES_COUNT];
+__constant__ InertPrimeBarrettGPU c_inert_barrett[INERT_PRIMES_COUNT];
 __constant__ uint64_t c_mr_witnesses[NUM_MR_WITNESSES];
 __constant__ uint32_t c_trial_primes[NUM_TRIAL_PRIMES];
 __constant__ int8_t   c_bk_dr[NUM_BACKWARD_OFFSETS];
@@ -41,7 +41,7 @@ constexpr int MAX_CANDIDATES_GPU = 6144;
 static_assert(MAX_CANDIDATES_GPU >= MAX_PRIMES_GPU,
               "candidate list must hold at least MAX_PRIMES_GPU entries");
 
-constexpr int kPhase1Words = BLOCK_THREADS + (BLOCK_THREADS + 1) + MAX_CANDIDATES_GPU;
+constexpr int kPhase1Words = MAX_CANDIDATES_GPU;
 constexpr size_t kBitmapBytes = sizeof(uint32_t) * static_cast<size_t>(kBitmapWords);
 constexpr size_t kPhase1Bytes = sizeof(uint32_t) * static_cast<size_t>(kPhase1Words);
 constexpr size_t kPhase24Bytes =
@@ -83,9 +83,7 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
     uint32_t* const bitmap = reinterpret_cast<uint32_t*>(smem);
     uint8_t* const overlay = smem + kBitmapBytes;
 
-    uint32_t* const cand_counts = reinterpret_cast<uint32_t*>(overlay);
-    uint32_t* const cand_prefix = cand_counts + BLOCK_THREADS;
-    uint32_t* const cand_list = cand_prefix + (BLOCK_THREADS + 1);
+    uint32_t* const cand_list = reinterpret_cast<uint32_t*>(overlay);
 
     uint16_t* const row_prefix = reinterpret_cast<uint16_t*>(overlay);
     uint32_t* const prime_pos = reinterpret_cast<uint32_t*>(row_prefix + (ACTIVE_ROWS + 1));
@@ -120,45 +118,43 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
     }
 #endif
 
+    if (tid == 0) {
+        total_cands = 0U;
+    }
+    __syncthreads();
+
     if (tid < ACTIVE_ROWS) {
         uint32_t ws[BITMAP_WORDS_PER_ROW];
         const int32_t a = a_start + tid;
         sieve_row(ws, a, b_start);
 
-        cand_counts[tid] = count_sieve_survivors(ws);
-        cand_prefix[tid] = cand_counts[tid];
-    } else {
-        cand_counts[tid] = 0U;
-        if (tid == ACTIVE_ROWS) {
-            cand_prefix[ACTIVE_ROWS] = 0U;
+        const uint32_t count = count_sieve_survivors(ws);
+        if (count > 0U) {
+            const uint32_t base = atomicAdd(&total_cands, count);
+            if (base + count <= static_cast<uint32_t>(MAX_CANDIDATES_GPU)) {
+                scatter_survivors(ws, cand_list, static_cast<int>(base), tid);
+            } else if (base < static_cast<uint32_t>(MAX_CANDIDATES_GPU)) {
+                scatter_survivors_clamped(ws, cand_list, static_cast<int>(base),
+                                         static_cast<int>(static_cast<uint32_t>(MAX_CANDIDATES_GPU) - base), tid);
+            }
         }
     }
     __syncthreads();
+
 #ifdef PROFILE_PHASES
     if (tid == 0) {
         phase_t1 = clock64();
     }
 #endif
 
-    block_exclusive_scan(cand_prefix, ACTIVE_ROWS, tid);
-    __syncthreads();
-
-    if (tid < ACTIVE_ROWS) {
-        uint32_t ws[BITMAP_WORDS_PER_ROW];
-        const int32_t a = a_start + tid;
-        sieve_row(ws, a, b_start);
-        scatter_survivors(ws, cand_list, static_cast<int>(cand_prefix[tid]), tid);
-    }
-    __syncthreads();
-
     if (tid == 0) {
-        uint32_t raw = cand_prefix[ACTIVE_ROWS - 1] + cand_counts[ACTIVE_ROWS - 1];
-        total_cands = raw < static_cast<uint32_t>(MAX_CANDIDATES_GPU)
-                          ? raw
-                          : static_cast<uint32_t>(MAX_CANDIDATES_GPU);
+        if (total_cands > static_cast<uint32_t>(MAX_CANDIDATES_GPU)) {
+            total_cands = static_cast<uint32_t>(MAX_CANDIDATES_GPU);
+        }
     }
     __syncthreads();
 #ifdef PROFILE_PHASES
+    // phase1b is eliminated — set to zero for ABI stability
     if (tid == 0) {
         phase_t2 = clock64();
     }
@@ -244,13 +240,13 @@ __global__ void process_tiles_kernel(const TileCoord* __restrict__ coords,
     }
 }
 
-void upload_sieve_tables(const SieveTables& tables) {
-    check_cuda(cudaMemcpyToSymbol(c_split_table, tables.split_table,
-                                  sizeof(uint32_t) * SPLIT_PRIMES_COUNT),
-               "cudaMemcpyToSymbol(c_split_table)");
-    check_cuda(cudaMemcpyToSymbol(c_inert_primes, tables.inert_primes,
-                                  sizeof(uint16_t) * INERT_PRIMES_COUNT),
-               "cudaMemcpyToSymbol(c_inert_primes)");
+void upload_sieve_tables(const SieveTablesBarrett& tables) {
+    check_cuda(cudaMemcpyToSymbol(c_split_barrett, tables.split_table,
+                                  sizeof(SplitPrimeBarrettGPU) * SPLIT_PRIMES_COUNT),
+               "cudaMemcpyToSymbol(c_split_barrett)");
+    check_cuda(cudaMemcpyToSymbol(c_inert_barrett, tables.inert_primes,
+                                  sizeof(InertPrimeBarrettGPU) * INERT_PRIMES_COUNT),
+               "cudaMemcpyToSymbol(c_inert_barrett)");
 }
 
 void upload_backward_offsets(const int8_t* bk_dr, const int8_t* bk_dc, int count) {

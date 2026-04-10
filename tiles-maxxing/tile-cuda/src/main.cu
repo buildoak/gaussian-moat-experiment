@@ -22,7 +22,7 @@ __global__ void process_tiles_kernel(const TileCoord* coords,
 #endif
                                      int num_tiles);
 
-void upload_sieve_tables(const SieveTables& tables);
+void upload_sieve_tables(const SieveTablesBarrett& tables);
 void upload_backward_offsets(const int8_t* bk_dr, const int8_t* bk_dc, int count);
 void upload_constants();
 size_t tile_kernel_shared_bytes();
@@ -51,7 +51,14 @@ uint64_t fast_sqrt_neg1(uint64_t p) {
     return std::numeric_limits<uint64_t>::max();
 }
 
-bool init_sieve_tables_host(SieveTables& tables) {
+uint32_t barrett_host_mod(uint32_t x, uint32_t p, uint32_t mu) {
+    uint32_t q = static_cast<uint32_t>((static_cast<uint64_t>(x) * mu) >> 32);
+    uint32_t r = x - q * p;
+    if (r >= p) r -= p;
+    return r;
+}
+
+bool init_sieve_tables_host(SieveTablesBarrett& tables) {
     std::memset(&tables, 0, sizeof(tables));
 
     uint8_t is_prime_table[SIEVE_LIMIT + 1];
@@ -73,6 +80,8 @@ bool init_sieve_tables_host(SieveTables& tables) {
             continue;
         }
 
+        const uint32_t mu = static_cast<uint32_t>((1ULL << 32) / static_cast<uint64_t>(p));
+
         if ((p & 3U) == 1U) {
             const uint64_t root_raw = fast_sqrt_neg1(static_cast<uint64_t>(p));
             if (root_raw == std::numeric_limits<uint64_t>::max()) {
@@ -92,13 +101,27 @@ bool init_sieve_tables_host(SieveTables& tables) {
                 return false;
             }
 
-            tables.split_table[tables.split_count++] =
-                (static_cast<uint32_t>(root) << 16) | p;
+            // Validate Barrett for this prime
+            const uint32_t root32 = static_cast<uint32_t>(root);
+            if (barrett_host_mod(root32 * root32, p, mu) != p - 1U) {
+                std::fprintf(stderr, "Barrett validation failed for split prime %u\n", p);
+                return false;
+            }
+
+            tables.split_table[tables.split_count++] = SplitPrimeBarrettGPU{
+                static_cast<uint16_t>(p),
+                static_cast<uint16_t>(root),
+                mu
+            };
         } else if ((p & 3U) == 3U) {
             if (tables.inert_count >= INERT_PRIMES_COUNT) {
                 return false;
             }
-            tables.inert_primes[tables.inert_count++] = static_cast<uint16_t>(p);
+            tables.inert_primes[tables.inert_count++] = InertPrimeBarrettGPU{
+                static_cast<uint16_t>(p),
+                0,  // pad
+                mu
+            };
         }
     }
 
@@ -575,7 +598,7 @@ void run_bench(int tile_count) {
 int main(int argc, char** argv) {
     Args args = parse_args(argc, argv);
 
-    SieveTables tables{};
+    SieveTablesBarrett tables{};
     if (!init_sieve_tables_host(tables)) {
         std::fprintf(stderr, "failed to initialize sieve tables\n");
         return 1;

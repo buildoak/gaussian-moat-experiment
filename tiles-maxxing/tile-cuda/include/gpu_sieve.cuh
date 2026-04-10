@@ -20,24 +20,30 @@ __device__ void sieve_row(uint32_t ws[BITMAP_WORDS_PER_ROW], int32_t a, int32_t 
     ws[BITMAP_WORDS_PER_ROW - 1] &= LAST_WORD_MASK;
 
     for (int k = 0; k < SPLIT_PRIMES_COUNT; ++k) {
-        const uint32_t packed = c_split_table[k];
-        const uint32_t p = packed & 0xFFFFu;
-        const uint32_t root = packed >> 16;
-        const int32_t residue = static_cast<int32_t>(
-            (static_cast<int64_t>(euclidean_mod_gpu(a, p)) * static_cast<int64_t>(root)) %
-            static_cast<int64_t>(p));
-        mark_residue_class_reg(ws, b_start, p, residue);
+        const SplitPrimeBarrettGPU entry = c_split_barrett[k];
+        const uint32_t p = static_cast<uint32_t>(entry.p);
+        const uint32_t root = static_cast<uint32_t>(entry.root);
+        const uint32_t mu = entry.mu;
 
-        const int32_t neg_res = euclidean_mod_gpu(-residue, p);
+        const uint32_t a_mod = static_cast<uint32_t>(barrett_euclidean_mod(a, p, mu));
+        const uint32_t product = a_mod * root;
+        const int32_t residue = static_cast<int32_t>(barrett_mod_u32(product, p, mu));
+
+        mark_residue_class_barrett(ws, b_start, p, residue, mu);
+
+        const int32_t neg_res = (residue == 0) ? 0 : static_cast<int32_t>(p - static_cast<uint32_t>(residue));
         if (neg_res != residue) {
-            mark_residue_class_reg(ws, b_start, p, neg_res);
+            mark_residue_class_barrett(ws, b_start, p, neg_res, mu);
         }
     }
 
     for (int k = 0; k < INERT_PRIMES_COUNT; ++k) {
-        const uint32_t p = static_cast<uint32_t>(c_inert_primes[k]);
-        if (euclidean_mod_gpu(a, p) == 0) {
-            mark_residue_class_reg(ws, b_start, p, 0);
+        const InertPrimeBarrettGPU entry = c_inert_barrett[k];
+        const uint32_t p = static_cast<uint32_t>(entry.p);
+        const uint32_t mu = entry.mu;
+
+        if (barrett_euclidean_mod(a, p, mu) == 0) {
+            mark_residue_class_barrett(ws, b_start, p, 0, mu);
         }
     }
 }
@@ -68,6 +74,28 @@ __device__ void scatter_survivors(
             const int col = w * 32 + bit;
             if (col < SIDE_EXP) {
                 cand_list[offset++] = (static_cast<uint32_t>(row) << 16) | static_cast<uint32_t>(col);
+            }
+            survivors &= (survivors - 1u);
+        }
+    }
+}
+
+__device__ void scatter_survivors_clamped(
+    const uint32_t ws[BITMAP_WORDS_PER_ROW], uint32_t* cand_list,
+    int offset, int max_count, int row) {
+    int written = 0;
+    #pragma unroll
+    for (int w = 0; w < BITMAP_WORDS_PER_ROW && written < max_count; ++w) {
+        uint32_t survivors = ~ws[w];
+        if (w == (BITMAP_WORDS_PER_ROW - 1)) {
+            survivors &= LAST_WORD_MASK;
+        }
+        while (survivors != 0u && written < max_count) {
+            const int bit = __ffs(survivors) - 1;
+            const int col = w * 32 + bit;
+            if (col < SIDE_EXP) {
+                cand_list[offset + written] = (static_cast<uint32_t>(row) << 16) | static_cast<uint32_t>(col);
+                ++written;
             }
             survivors &= (survivors - 1u);
         }

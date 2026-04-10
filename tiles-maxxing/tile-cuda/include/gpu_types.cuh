@@ -62,9 +62,23 @@ struct FaceDataGPU {
     int group_count;
 };
 
-struct SieveTables {
-    uint32_t split_table[SPLIT_PRIMES_COUNT];
-    uint16_t inert_primes[INERT_PRIMES_COUNT];
+struct SplitPrimeBarrettGPU {
+    uint16_t p;       // split prime, < 10000
+    uint16_t root;    // sqrt(-1) mod p, < p
+    uint32_t mu;      // floor(2^32 / p)
+};
+static_assert(sizeof(SplitPrimeBarrettGPU) == 8, "Barrett split prime must be 8 bytes");
+
+struct InertPrimeBarrettGPU {
+    uint16_t p;       // inert prime, < 10000
+    uint16_t pad;     // alignment padding
+    uint32_t mu;      // floor(2^32 / p)
+};
+static_assert(sizeof(InertPrimeBarrettGPU) == 8, "Barrett inert prime must be 8 bytes");
+
+struct SieveTablesBarrett {
+    SplitPrimeBarrettGPU split_table[SPLIT_PRIMES_COUNT];
+    InertPrimeBarrettGPU inert_primes[INERT_PRIMES_COUNT];
     int split_count;
     int inert_count;
 };
