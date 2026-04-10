@@ -20,7 +20,7 @@ constexpr int BITMAP_ROWS = SIDE_EXP;
 constexpr int LAST_WORD_VALID_BITS = 15;
 constexpr uint32_t LAST_WORD_MASK = (1u << LAST_WORD_VALID_BITS) - 1u;
 
-constexpr int MAX_PRIMES_GPU = 3072;
+constexpr int MAX_PRIMES_GPU = 2304;
 constexpr int MAX_PORTS_GPU = 256;
 constexpr int MAX_FACE_PRIMES_GPU = 900;
 constexpr int MAX_FACE_PORTS_GPU = 32;
