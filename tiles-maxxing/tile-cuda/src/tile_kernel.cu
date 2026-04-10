@@ -21,8 +21,10 @@ __constant__ int8_t   c_bk_dc[NUM_BACKWARD_OFFSETS];
 
 namespace {
 
+// Sinclair deterministic 7-base set: covers all n < 2^64.
+// See: miller-rabin.appspot.com, Wikipedia "Miller-Rabin primality test".
 constexpr uint64_t kMrWitnesses[NUM_MR_WITNESSES] = {
-    2ULL, 3ULL, 5ULL, 7ULL, 11ULL, 13ULL, 17ULL, 19ULL, 23ULL, 29ULL, 31ULL, 37ULL,
+    2ULL, 325ULL, 9375ULL, 28178ULL, 450775ULL, 9780504ULL, 1795265022ULL,
 };
 
 constexpr uint32_t kTrialPrimes[NUM_TRIAL_PRIMES] = {

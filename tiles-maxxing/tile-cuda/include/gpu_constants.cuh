@@ -47,5 +47,5 @@ constexpr int WARP_SIZE = 32;
 
 constexpr int NUM_BACKWARD_OFFSETS = 64;
 
-constexpr int NUM_MR_WITNESSES = 12;
+constexpr int NUM_MR_WITNESSES = 7;
 constexpr int NUM_TRIAL_PRIMES = 24;

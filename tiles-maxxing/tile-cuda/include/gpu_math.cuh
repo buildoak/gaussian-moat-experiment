@@ -84,7 +84,8 @@ __device__ __forceinline__ uint64_t mont_compute_m_inv(uint64_t m) {
 }
 
 __device__ __forceinline__ uint64_t mont_compute_r2(uint64_t m) {
-    uint64_t r = 1ULL % m;
+    // m > 1 always for MR candidates, so 1ULL % m == 1.
+    uint64_t r = 1ULL;
     for (uint32_t i = 0; i < 128; ++i) {
         r = addmod_gpu(r, r, m);
     }
@@ -101,8 +102,9 @@ struct MontCtxGPU {
 
 __device__ __forceinline__ MontCtxGPU mont_init_gpu(uint64_t m) {
     MontCtxGPU ctx{m, mont_compute_m_inv(m), mont_compute_r2(m), 0ULL, 0ULL};
-    ctx.one = mont_mul_gpu(1ULL % ctx.m, ctx.r2, ctx.m, ctx.m_inv);
-    ctx.nm1 = mont_mul_gpu((ctx.m - 1ULL) % ctx.m, ctx.r2, ctx.m, ctx.m_inv);
+    // m > 1 always: 1ULL % m == 1, (m-1) % m == m-1.
+    ctx.one = mont_mul_gpu(1ULL, ctx.r2, ctx.m, ctx.m_inv);
+    ctx.nm1 = mont_mul_gpu(ctx.m - 1ULL, ctx.r2, ctx.m, ctx.m_inv);
     return ctx;
 }
 
@@ -132,8 +134,14 @@ __device__ __forceinline__ bool miller_rabin_witness_mont_gpu(
     uint64_t d,
     uint32_t s,
     uint64_t a) {
+    // Reduce base mod n. Needed for Sinclair bases (e.g., 1795265022)
+    // which may exceed small n. If a == 0 mod n, witness is trivially
+    // "probably prime" — skip (cannot be a witness).
     if (a >= ctx.m) {
-        return true;
+        a = a % ctx.m;
+        if (a == 0ULL) {
+            return true;
+        }
     }
 
     uint64_t x = mont_powmod_gpu(a, d, ctx);
@@ -175,6 +183,24 @@ __device__ __forceinline__ bool is_prime_gpu(uint64_t n) {
         return true;
     }
 
+    uint64_t d = n - 1ULL;
+    const uint32_t s = ctz64_gpu(d);
+    d >>= s;
+
+    const MontCtxGPU ctx = mont_init_gpu(n);
+    for (int i = 0; i < NUM_MR_WITNESSES; ++i) {
+        if (!miller_rabin_witness_mont_gpu(ctx, d, s, c_mr_witnesses[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Optimized MR-only primality test for sieve survivors.
+// Skips trial division (sieve already covers primes to 10,000) and
+// tiny-number checks (norms at operating radii are always > 10^17).
+// Only valid for odd n > 1 that survived the sieve.
+__device__ __forceinline__ bool is_prime_norm_gpu(uint64_t n) {
     uint64_t d = n - 1ULL;
     const uint32_t s = ctz64_gpu(d);
     d >>= s;

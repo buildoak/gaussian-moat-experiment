@@ -127,7 +127,7 @@ __device__ void mr_test_candidates(
         const uint64_t ua = static_cast<uint64_t>(ca < 0 ? -static_cast<int64_t>(ca) : ca);
         const uint64_t ub = static_cast<uint64_t>(cb < 0 ? -static_cast<int64_t>(cb) : cb);
         const uint64_t norm = ua * ua + ub * ub;
-        if (is_prime_gpu(norm)) {
+        if (is_prime_norm_gpu(norm)) {
             gpu_bitmap_set_atomic_sieve(bitmap, cand_row, cand_col);
         }
     }
