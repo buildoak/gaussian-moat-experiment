@@ -46,6 +46,35 @@ The grid sweeps from the Y axis (tower j=0, x≈0) rightward to y=x (45°). Spli
 - **2026-04-10:** UF popcount unroll → 2,867 tiles/s (+4.1%). Phase3: 3.42M → 2.65M cycles (-22.5%). Full UF parallelization (4 strategies: atomic UF, edge buffer, multi-warp, warp-cooperative) all regressed 5-15% due to nvcc global register allocation coupling — structural changes to UF perturbed codegen for sieve/MR phases. **TODO:** Retest aggressive UF parallelization on 3090/4090 where larger register file may avoid the coupling effect.
 - **2026-04-10:** Multi-kernel architecture → **3,333 tiles/s (+39.2%** vs monolithic 2,395 in same test, +18.3% vs best monolithic 2,818). 5 separate kernels (Sieve/MR/Compact/UF/FaceEncode) with per-kernel `--maxrregcount` via separate compilation (`-dc`/`-dlink`). FJ64_262k 2-round MR (512 KB hash table, L2-cached) replaces 7-witness Sinclair. Parallel 288-thread atomicCAS union-find replaces serial 32-thread. Byte-identical correctness vs monolithic. K2 MR 54%, K4 UF 27%, K1 Sieve 16%. Full log: `docs/supportive/2026-04-10-multi-kernel-architecture.md`.
 - **2026-04-10:** K2 register sweep → **3,431 tiles/s (+2.2%).** Swept 8 caps (uncapped through 36). Winner: `--maxrregcount=44` — forces nvcc from natural 46→44 regs, better instruction schedule. Same 4 blocks/SM, zero spills. Spills at 40 regs cancel 5-block occupancy gain. Commit `dd56e2e`.
+- **2026-04-11:** RTX 3090 baseline (vast.ai, sm_86, 82 SMs) → **66,800 tiles/s** at 2,000 tiles. 19.5x Jetson, consistent with SM count × clock scaling. K2 MR share rises to 62% (from 54% on Jetson). INT32 pipeline is the binding constraint — consumer GPUs dominate $/tiles-s. Session cost: ~$0.09. Full analysis: `docs/supportive/2026-04-11-3090-performance-analysis.md`.
+- **2026-04-11:** RTX 4090 tuning sweep (vast.ai, sm_89, 128 SMs) → **155,452 tiles/s** at 10K tiles, **156,868 tiles/s** at 20K tiles. 2.01x over 3090 at 2K tiles (134,541). Jetson-tuned config (maxreg=44, 288 threads) already optimal — no micro-optimization moved the needle: mont_to_gpu fix negligible (ALU hides the modulo), `__ldg` zero impact (compiler already uses LDG via `__restrict__`), register sweep confirms 44 still best. **Batch size is the real variable** — throughput climbs from ~135K at 640 tiles to ~157K at 20K. Session cost: ~$0.14. Full sweep: `docs/supportive/2026-04-11-4090-tuning-sweep.md`.
+- **2026-04-11:** Hardware profiling (nsys + SASS) on 4090. **K2 is 72.9% INT32 ALU, 0.9% memory** — purely INT throughput-bound. **K1 is 62.8% INT32 ALU** — constant memory cache contention likely explains 1.20x 3090→4090 scaling (expected 1.56x). K4 is mixed INT+memory (67.6% INT, 13.5% memory) with scatter/gather atomics. Inter-kernel gaps: 2-3 us (negligible). ncu blocked by container `CAP_SYS_ADMIN` restriction. Session cost: ~$0.09. Full analysis: `docs/supportive/2026-04-11-4090-hardware-profiling.md`.
+- **2026-04-11:** Multi-stream overlap: **dead end at 10K+ batch sizes.** 2-stream pipeline with double-buffered intermediate arrays achieves +1.3% at 10K (141,625 vs 139,839) and -7.1% at 20K (142,948 vs 153,903). Each kernel already generates 10K+ thread blocks saturating all 128 SMs — no idle compute for stream overlap. Splitting into sub-batches reduces per-kernel amortization. Correctness verified. Patch: `vast-ai/multi_stream.patch`. Full results: `docs/supportive/2026-04-11-multi-stream-overlap.md`.
+
+### Baseline Commit (Fallback Point)
+
+**155K baseline commit:** `03fd7f2` (2026-04-11). Multi-kernel pipeline, maxreg=44, 288 threads, FJ64_262k 2-round MR. Validated across Jetson (3,431), 3090 (66,800), 4090 (155,452 tiles/s). All subsequent optimization attempts (mont_to_gpu, __ldg, register sweep, multi-stream) were neutral or harmful on 4090 — this config is the proven optimum before K1 smem fix and sieve extension.
+
+**To revert:** `git checkout 03fd7f2 -- tiles-maxxing/tile_cuda_multi_kernel/`
+
+### Cross-Platform Summary
+
+| GPU | SMs | Arch | tiles/s (2K) | tiles/s (10K+) | vs Jetson |
+|-----|-----|------|-------------|----------------|-----------|
+| Jetson Orin | 8 | sm_87 | 3,431 | — | 1.0x |
+| RTX 3090 | 82 | sm_86 | 66,800 | 78,984 | 19.5x |
+| RTX 4090 | 128 | sm_89 | ~144,000 | 155,452 | 45.2x |
+
+### Operational Learnings (4090 Sessions)
+
+1. **Micro-optimizations are exhausted.** mont_to_gpu modulo removal, `__ldg` hints, register sweep beyond 44 — all within noise on 4090. The Jetson-tuned config transfers directly to sm_89. Don't waste cloud time retesting these.
+2. **Batch size matters more than kernel tuning.** 640→20K tiles: +27% throughput from launch overhead amortization alone. Use 10K+ tiles for any production or benchmark run.
+3. **Multi-stream overlap is a dead end.** At 10K+ tiles, each kernel fully saturates 128 SMs. Inter-kernel gaps are 2-3 us. No scheduling optimization can help — the pipeline is compute-bound.
+4. **K1 scaling anomaly: constant memory contention.** K1 sieve scaled only 1.20x from 3090→4090 (expected 1.56x). SASS shows 62.8% INT32 ALU + 10 KB constant memory table. The L1 constant cache thrashes at 128 SMs. Fix: move sieve tables to shared memory or global with `__ldg`.
+5. **K2 is purely INT32-bound.** 72.9% INT ALU, 0.9% memory. Sieve extension to reduce candidates entering MR is the highest-ROI optimization path.
+6. **ncu requires CAP_SYS_ADMIN on vast.ai.** Standard containers block GPU performance counters. Use bare-metal or request privileged containers for detailed warp stall / throughput analysis.
+7. **256 threads/block breaks correctness** — kernels assume 288 for 257-column coverage. 320 threads works but performs identically. 288 is the only valid choice.
+8. **Remaining optimization is algorithmic:** sieve extension (reduce K2 candidates), persistent kernel K2 (eliminate launch overhead at small batches), or K1 constant memory fix (restore linear SM scaling).
 
 ## Working Documents
 
@@ -164,4 +193,4 @@ Operational docs and deploy scripts live in `vast-ai/`. Read `vast-ai/README.md`
 3. **Pin SSH endpoint once.** Cache port and host at session start. Never re-resolve mid-run — the API can return changed bindings.
 4. **Patch `-arch` flag.** Makefile defaults to `sm_87` (Jetson). Change to `sm_86` (3090), `sm_89` (4090), or `sm_80` (A100) before building on cloud instances.
 5. **Do not modify local Makefile.** Arch patching happens on the remote instance only. The local copy stays at `sm_87` for Jetson.
-6. **Budget awareness.** Track cost via `vastai show instances`. 3090: ~$0.13/hr. Destroy immediately after work.
+6. **Budget awareness.** Track cost via `vastai show instances`. 3090: ~$0.13/hr, 4090: ~$0.27/hr. Total spend across both sessions: ~$0.23. Destroy immediately after work.

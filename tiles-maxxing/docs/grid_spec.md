@@ -531,88 +531,88 @@ the dead fraction is < 1% of total tiles.
 
 ---
 
-## S8. Octant Stitching
+## S8. Octant Boundary — C++ Infill Strategy
 
 ### S8.1 The Problem
 
-We tile only the octant {y >= x >= 0}. A connected path of Gaussian primes
-may cross the y = x line, entering the adjacent octant {x >= y >= 0}. If we
-compose only within our octant, we miss such cross-octant paths and may
-report a false moat.
+We tile only the octant {y >= x >= 0} with CUDA at high throughput. A
+connected path of Gaussian primes may cross the y = x line, entering the
+adjacent octant {x >= y >= 0}. If we compose only within our octant, we
+miss such cross-octant paths and may report a false moat.
 
-### S8.2 Symmetry Argument (Single Octant Only)
+### S8.2 Why Special Stitching Is Avoided
 
-**Claim:** if a spanning path exists in the full annulus, then a spanning
-path exists entirely within a single octant.
+The y = x diagonal is at 45° to the tile grid. Tile faces are horizontal
+(I/O) or vertical (L/R). No parallel face-to-face alignment exists at the
+reflection boundary. This means:
 
-**Status: UNPROVEN.** This claim is plausible by symmetry — the 8-fold
-Gaussian symmetry maps any prime path to 7 other paths — but the deformation
-argument is non-trivial. A path that crosses y = x multiple times cannot
-obviously be "reflected" into a single octant without breaking connectivity.
+- Standard I/O matching cannot handle the diagonal seam.
+- Standard L/R matching cannot handle it either (perpendicular faces).
+- The current TileOp v2 format omits I/O h1 storage, so reflected face
+  data is unrecoverable from packed records alone.
 
-**Risk direction:** if this claim is false, the single-octant shortcut misses real spanning
-paths, reporting false moats. This is the UNSAFE direction for moat search.
+Any one-octant stitching approach requires either K5 kernel modifications
+(diagonal prime buffers, auxiliary seam records) or an unproven deformation
+theorem (S8.2 of grid_spec v2, now superseded). Both add complexity to the
+CUDA pipeline and compositor for marginal benefit.
 
-**Recommendation: do not use the single-octant shortcut without a proof.**
+### S8.3 Architectural Decision: C++ Diagonal Infill
 
-### S8.3 Boundary Stitching (Recommended)
+**Approach:** The C++ reference tiler fills a narrow band of tiles around
+the y = x diagonal in the second octant. These tiles are fed to the
+compositor alongside the CUDA-computed first-octant tiles. The compositor
+sees tiles from both sources and composes them using standard I/O/L/R face
+matching — no special stitching pass, no diagonal buffers, no K5 changes.
 
-Each octant is composed independently. At the y = x boundary, tiles that
-straddle the diagonal share primes with the reflected octant. The stitching
-protocol connects these shared primes.
+**How it works:**
 
-**The reflection map.** For a Gaussian integer z = x + yi, the map
-sigma: z -> iz* = y + xi swaps real and imaginary parts. This is a symmetry
-of the Gaussian primes (if z is a Gaussian prime, so is sigma(z)). Under
-sigma:
+1. CUDA tiles the first octant {y >= x} at full throughput (~155K tiles/s
+   on 4090). This is the bulk computation.
 
-```
-(x, y) -> (y, x)
-```
+2. C++ tiles the diagonal-adjacent region in the second octant {x > y},
+   covering all tiles within COLLAR distance of y = x. This is a narrow
+   band — at R = 830M, roughly 1-3% of the total tile count (low millions
+   of tiles).
 
-A tile at (tile_x, tile_y) maps to a tile at (tile_y, tile_x).
+3. The compositor receives TileOps from both sources. The C++ tiles
+   provide the cross-diagonal connectivity: they contain primes in the
+   second octant that connect to first-octant primes via standard face
+   adjacency. No reflection map, no face remapping, no diagonal-specific
+   matching.
 
-**Face mapping under reflection.** Reflection swaps x and y axes:
+**Why this is correct:** The combined tile set covers all primes in the
+first octant plus all primes within COLLAR of the diagonal in the second
+octant. Any cross-diagonal step (distance <= sqrt(k) < COLLAR) has both
+endpoints covered by at least one tile on each side. Standard face
+composition captures all inter-tile connections. UF transitivity handles
+multi-hop paths that zigzag across the diagonal.
 
-- Face I (bottom, fixed y) <-> Face L (left, fixed x)
-- Face O (top, fixed y) <-> Face R (right, fixed x)
+**Why this is practical:** The C++ tiler runs at ~1,000 tiles/s on a
+12-core Mac Mini. A few million diagonal-band tiles take minutes — a small
+fraction of the total pipeline time, and negligible compared to the CUDA
+tiling of the full octant. The C++ code already produces TileOp-compatible
+output (validated byte-identical against CUDA).
 
-So a port on tile A's R-face, after reflection, appears on the reflected
-tile's O-face.
+**Key property:** No special tile format, no auxiliary buffers, no K5
+modifications. The compositor is unaware that some tiles came from C++ and
+others from CUDA. It just composes tiles.
 
-**Stitching protocol for tile (j, r) straddling y = x:**
+### S8.4 Spanning Check After Infill
 
-1. Identify the reflected tile: (j', r') such that tile_x(j', r') = tile_y(j, r)
-   and tile_y(j', r') = tile_x(j, r). This tile exists in the reflected
-   octant (or equivalently, in our octant under the reflection map).
+The spanning check (S9, Phase 4) operates on the combined UF from both
+CUDA and C++ tiles. Cross-diagonal paths are captured by the infill tiles
+and connected to the first-octant components via standard face matching.
+No post-composition stitching phase is needed.
 
-2. Compute delta_h for the shared face. The shared geometric edge is along
-   y = x. The exact offset depends on the tile geometry.
+### S8.5 Historical Note
 
-3. Match ports using h1 equality with the computed delta_h (tile_spec S5.1).
-   The reflected tile's port h1 values are measured from ITS origin corner,
-   which is the reflected position. The matching must account for the
-   axis swap.
-
-**Implementation.** Since our grid extends past y = x (S4.3), the "reflected
-tile" is often another tile in our own grid (one of the dead or straddling
-tiles). We can match R-faces of alive tiles near y = x with O-faces (after
-reflection relabeling) of their mirror counterparts within the same grid.
-
-Detailed stitching geometry — which faces share which primes, the exact
-delta_h formula under reflection — is deferred to the implementation
-specification. The key correctness property is:
-
-**Stitching Invariant:** every prime on or within COLLAR distance of the
-y = x line is visible to at least one tile in each octant. Both tiles'
-TileOps encode this prime's connectivity. Stitching connects the two
-representations.
-
-### S8.4 Stitching and the Spanning Check
-
-After stitching, the union-find structure connects components across the
-octant boundary. The spanning check (S9, Phase 4) operates on the full
-stitched UF and detects paths that cross y = x.
+Previous versions of this spec (v2, S8.2-S8.3) explored one-octant
+approaches: an unproven single-octant symmetry shortcut and a face-based
+boundary stitching protocol. Both were superseded by the C++ infill
+strategy, which is simpler, provably correct, and requires zero changes
+to the CUDA pipeline or compositor algorithm. Analysis of the abandoned
+approaches is preserved in:
+- `docs/supportive/2026-04-11-octant-stitching-codex-hypothesis.md`
 
 ---
 
@@ -628,6 +628,12 @@ The compositor receives:
 
 It produces a boolean: **spanning** (path exists from inner to outer boundary)
 or **moat** (no such path exists).
+
+**Note:** the old port-level compositor in
+`tile-probe/crates/moat-kernel/src/compose.rs` (operating on `FacePort`
+structs with O(n^2) distance matching) is superseded by this spec and by
+compositor_spec.md v3. Do not reference compose.rs for the production
+compositor.
 
 ### S9.2 TileOp v2 Access Model
 
@@ -1096,29 +1102,25 @@ resides in the lowest byte offsets.
   bytes and packed `h1` bytes.
 - The old split "all groups in line 0, h1 in line 1" no longer applies.
 
-### S14.3 Octant Stitching and I/O h1
+### S14.3 Octant Boundary (Resolved)
 
-TileOp v2 still omits I/O h1 storage. Any stitching path that genuinely needs
-h1 on a geometrically I/O face must either:
-
-1. Express the stitch as an L/R match on the relevant reflected geometry, or
-2. Recompute the needed h1 values for those boundary tiles.
-
-No spare-byte escape hatch exists in TileOp v2.
+TileOp v2 omits I/O h1 storage. This was previously a blocker for
+face-based diagonal stitching. With the C++ infill strategy (S8.3),
+no diagonal stitching is performed — the C++ tiler produces standard
+TileOps for the second-octant band, and standard I/O/L/R composition
+handles all cross-diagonal connectivity. No spare-byte escape hatch
+is needed.
 
 ---
 
 ## S15. Open Questions
 
-### Q1. Octant Stitching Detail
+### Q1. Octant Stitching Detail — RESOLVED
 
-The exact face-mapping and delta_h formulas for stitching across y = x are
-outlined in S8.3 but not fully derived. The implementation must resolve:
-
-- Which tiles in our grid are their own reflections (tiles centered on y = x)?
-- How does the axis swap affect raw-h1 recovery (x-offset becomes y-offset, with group-bit-steal decode applied after reflection)?
-- Can the stitching be expressed as additional match_lr calls with a
-  transformed delta_h, or does it require a dedicated stitching pass?
+Resolved by C++ infill strategy (S8.3). No face-based diagonal stitching
+is performed. The C++ tiler fills the second-octant band with standard
+TileOps, and standard composition handles cross-diagonal connectivity.
+The face-mapping and delta_h questions are moot.
 
 ### Q2. Parallelism Strategy
 

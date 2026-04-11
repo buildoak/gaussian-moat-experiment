@@ -58,6 +58,13 @@ This spec supersedes compositor_spec.md v2. The old embedded-UF design is
 removed because TileOp v2 has no parent-storage area inside the 128-byte
 record.
 
+**Superseded implementation: `tile-probe/crates/moat-kernel/src/compose.rs`.**
+The old Rust compositor in compose.rs operates on `FacePort { a, b, component }`
+structs — port-level, O(n^2) matching via Euclidean distance. It predates
+TileOp v2's packed 128-byte records and group-level union-find. Do not
+reference compose.rs for the production compositor; it is retained only as a
+historical reference for the port-level algorithm.
+
 ---
 
 ## S2. Constants
@@ -70,6 +77,26 @@ All constants from tile_spec.md S11 and grid_spec.md S2 apply. Additional:
 | TILES_PER_TOWER | 32 | From grid_spec S2. |
 | GROUP_LABEL_MIN | 1 | Group 0 is never stored. |
 | GROUP_LABEL_MAX | 127 | Global per-tile cap imposed by group-bit steal on L/R faces. |
+
+### S2.1 Encoding and Kernel Limits
+
+Multiple capacity limits interact. They apply at different stages and have
+different consequences:
+
+| Limit | Value | Stage | Consequence when exceeded |
+|-------|-------|-------|--------------------------|
+| **Encoding limit** (group count) | 127 groups | K5 encode / C++ encode | 7-bit group-id field in L/R group byte saturates. TileOp poisoned (`0xFF`). |
+| **GPU per-face port limit** | MAX_FACE_PORTS_GPU = 32 | K5 face extraction | Per-face raw port array overflows. `scratch->overflow` set, TileOp poisoned. |
+| **GPU total port limit** | MAX_TOTAL_PORTS_GPU = 128 | K5 face extraction | Sum of all four face port counts overflows. `scratch->overflow` set, TileOp poisoned. |
+| **GPU group table limit** | MAX_GROUPS_GPU = 127 | K5 pruning / group assignment | Hash table for group entries is full. TileOp poisoned. |
+| **Payload capacity** | TILEOP_PAYLOAD_BYTES = 125 | K5 encode / C++ encode | `o_cnt + i_cnt + 2*l_cnt + 2*r_cnt > 125`. TileOp poisoned. |
+| **Observed maximum** | ~9 groups/tile | Empirical at R = 860M | Well below all limits. Overflow at operating radii indicates a bug. |
+
+The encoding limit (127) and the GPU group table limit (127) are numerically
+equal but arise from different constraints: the encoding limit comes from the
+7-bit field width in `encode_group_byte()`, while the GPU limit comes from the
+`MAX_GROUPS_GPU` constant sizing the hash table in `FaceScratchGPU`. Both
+trigger the same poison path.
 
 ---
 
@@ -137,6 +164,19 @@ R h1     = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
 ```
 
 The optional pad at byte 127 is ignored.
+
+**R-face zero-padding.** The parser derives `r_cnt` from the residual budget
+formula `(125 - o_cnt - i_cnt - 2 * l_cnt) >> 1`, not from the actual number
+of R-face ports. When the actual R-face port count is less than `r_cnt`, the
+encoder (K5 / C++ reference) writes actual R group bytes starting at `off_R`
+and jumps to `h_start` for h1 bytes, leaving the intervening R group slots
+as zero bytes. Zero-padded R slots are safe to process: `group_id = 0` (the
+low 7 bits of a zero byte) will never match any live group in the UF, because
+group labels start at 1 (`GROUP_LABEL_MIN = 1`). The compositor MAY iterate
+through all `r_cnt` slots without filtering — the zero-group entries produce
+no-op UF lookups. Alternatively, it MAY stop at the first zero group byte in
+the R section as an optimization, since the encoder writes actual groups
+contiguously before the zero-padded gap.
 
 ---
 
@@ -297,6 +337,19 @@ fn match_io(
 }
 ```
 
+**Proof: `a_groups.len() == b_groups.len()` for aligned I/O faces.**
+
+Tiles (j, r) and (j, r+1) share the 257-column boundary row at
+y = base_y[j] + (r+1) * S. Both tiles include this row in their respective
+collar zones (O-face collar of tile r, I-face collar of tile r+1). The
+primes on the shared boundary are discovered by deterministic integer sieving
+— no floating-point arithmetic, no rounding variance — so both tiles see
+identical primes on this row. Port clustering applies the same K_SQ = 40
+distance threshold and the same sort order (h, depth) to both tiles' collar
+primes on the shared face. Therefore identical primes produce identical ports
+produce identical group counts. The `debug_assert!` above guards against
+encoder bugs, not against a legitimate geometric mismatch.
+
 Aligned I/O matching still uses shared-prime identity on the duplicated
 boundary row. TileOp v2 only changes where those group bytes live.
 
@@ -389,10 +442,61 @@ fn handle_overflow(
 }
 ```
 
-### S7.2 Dead Tiles
+**Poison tile impact on tower connectivity.**
 
-Detected by `off_I == off_L == off_R == 3` and `tile[3] == 0`. No UF slots are
-allocated. Dead tiles are skipped in all phases.
+K5 sets `bytes[0] = 0xFF` (and fills the entire 128-byte record with 0xFF)
+when a tile overflows: either `group_count > 127` (encoding limit) or
+`total_ports > TILEOP_PAYLOAD_BYTES` (capacity limit). The current
+`handle_overflow` above treats the poisoned tile as a single bridge group and
+unions all neighbor groups into it. This is **conservative** — it only adds
+false connectivity, never removes real connectivity — and is therefore safe
+in the moat-search direction (it may report false spanning but never a false
+moat).
+
+However, if ANY tile in a tower is poisoned, the tower's exact internal
+connectivity is unknown. Three strategies exist:
+
+1. **Conservative bridging (current).** Treat as "all faces connected" via the
+   bridge group. Safe for moat search. A positive spanning verdict may be an
+   artifact of the bridge. If the search reports spanning for a band that
+   contains overflow tiles, the result is inconclusive for publication.
+
+2. **Re-tile at finer granularity.** Split the overflowing tile into 4
+   sub-tiles (128x128) and re-run the CUDA kernel. Sub-tiles have ~4x fewer
+   primes per face, so overflow is unlikely to recur. The compositor stitches
+   sub-tiles internally before wiring them into the tower. This preserves
+   exact connectivity at higher compute cost.
+
+3. **Abort.** Treat any overflow as a hard error and reject the band. Simple
+   but wasteful — at R = 860M, observed max is ~9 groups/tile, far below the
+   127-group encoding limit. Overflow at operating radii would indicate a bug.
+
+**Recommended strategy for publication-grade results:** option (2) for any
+band where overflow tiles exist and the band reports spanning. Option (1) is
+acceptable when the band reports moat (the moat verdict is already safe under
+conservative bridging). Option (3) is a development-time sanity check.
+
+### S7.2 Dead / Empty Tiles
+
+Detected by `off_I == off_L == off_R == 3` and `tile[3] == 0`. This header
+state signals a tile with no primes in any collar zone — either a dead tile
+(below the y = x diagonal) or a geometrically alive tile that happens to
+contain zero collar-zone primes (possible but rare at operating radii).
+
+**Compositor behavior for empty tiles:**
+
+- **UF allocation:** zero UF slots. `max_group_label` returns 0, so the
+  prefix-sum contribution is 0: `group_offset[t+1] = group_offset[t]`.
+- **I/O matching:** skipped. Both O-face and I-face have zero groups
+  (`o_cnt = i_cnt = 0`), so the matching loop body executes zero iterations.
+  The adjacent tile's corresponding face also has zero groups on the shared
+  boundary (by the I/O count equality proof in S6.2).
+- **L/R matching:** skipped. `l_cnt = r_cnt = 0`.
+- **Spanning check:** the tile contributes no groups to the inner or outer
+  boundary root sets. It is invisible to the spanning verdict.
+- **Connectivity impact:** an empty tile is a connectivity gap — no group
+  transits through it. This is correct: if no primes exist in the collar
+  zones, no Gaussian-prime path passes through this tile's boundary faces.
 
 ### S7.3 Exposed L/R Boundary Ports
 

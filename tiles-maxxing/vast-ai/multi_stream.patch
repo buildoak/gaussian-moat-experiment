@@ -1,0 +1,390 @@
+--- /root/main_original.cu	2026-04-11 12:38:13.523387037 +0000
++++ /root/tile_cuda_multi_kernel/src/main.cu	2026-04-11 12:43:23.523861685 +0000
+@@ -1,5 +1,10 @@
+ // Multi-kernel tile processing pipeline: K1 Sieve -> K2 MR -> K3 Compact -> K4 UF -> K5 FaceEncode
+-// Host orchestration: allocate inter-kernel buffers, upload FJ64 table, launch 5 kernels in sequence.
++// Host orchestration with multi-stream pipeline overlap.
++// Two streams alternate sub-batches: Stream A processes sub-batch N while Stream B processes sub-batch N+1.
++// Usage: ./tile_kernel_multi [test | <count> | ms <count>]
++//   test         - 2-tile smoke test
++//   <count>      - single-stream benchmark
++//   ms <count>   - multi-stream benchmark (2 streams, 8 sub-batches)
+ 
+ #include "gpu_constants.cuh"
+ #include "gpu_types.cuh"
+@@ -68,6 +73,7 @@
+ namespace {
+ 
+ constexpr uint32_t HOST_SIEVE_LIMIT = 10000U;
++constexpr int NUM_STREAMS = 2;
+ 
+ inline void check_cuda(cudaError_t status, const char* what) {
+     if (status != cudaSuccess) {
+@@ -234,6 +240,42 @@
+     }
+ }
+ 
++// Per-stream buffer set for one sub-batch
++struct StreamBuffers {
++    TileBatchBuffers buf;
++    int capacity;
++
++    void allocate(int max_tiles) {
++        capacity = max_tiles;
++        const size_t N = static_cast<size_t>(max_tiles);
++
++        check_cuda(cudaMalloc(&buf.d_coords, sizeof(TileCoord) * N), "alloc d_coords");
++        check_cuda(cudaMalloc(&buf.d_cand_list, sizeof(uint32_t) * N * MAX_CANDIDATES_GPU), "alloc d_cand_list");
++        check_cuda(cudaMalloc(&buf.d_total_cands, sizeof(uint32_t) * N), "alloc d_total_cands");
++        check_cuda(cudaMalloc(&buf.d_bitmap, sizeof(uint32_t) * N * BITMAP_WORDS), "alloc d_bitmap");
++        check_cuda(cudaMalloc(&buf.d_row_prefix, sizeof(uint16_t) * N * (ACTIVE_ROWS + 1)), "alloc d_row_prefix");
++        check_cuda(cudaMalloc(&buf.d_prime_pos, sizeof(uint32_t) * N * MAX_PRIMES_GPU), "alloc d_prime_pos");
++        check_cuda(cudaMalloc(&buf.d_prime_count, sizeof(uint32_t) * N), "alloc d_prime_count");
++        check_cuda(cudaMalloc(&buf.d_parent, sizeof(uint16_t) * N * MAX_PRIMES_GPU), "alloc d_parent");
++        check_cuda(cudaMalloc(&buf.d_output, sizeof(TileOp) * N), "alloc d_output");
++        check_cuda(cudaMalloc(&buf.d_prime_counts_out, sizeof(uint32_t) * N), "alloc d_prime_counts_out");
++    }
++
++    void free_buffers() {
++        cudaFree(buf.d_coords);
++        cudaFree(buf.d_cand_list);
++        cudaFree(buf.d_total_cands);
++        cudaFree(buf.d_bitmap);
++        cudaFree(buf.d_row_prefix);
++        cudaFree(buf.d_prime_pos);
++        cudaFree(buf.d_prime_count);
++        cudaFree(buf.d_parent);
++        cudaFree(buf.d_output);
++        cudaFree(buf.d_prime_counts_out);
++    }
++};
++
++// Legacy single-stream memory
+ struct TileBatchDeviceMemory {
+     TileBatchBuffers buf;
+     uint16_t* d_fj64_table;
+@@ -254,13 +296,12 @@
+         check_cuda(cudaMalloc(&buf.d_output, sizeof(TileOp) * N), "alloc d_output");
+         check_cuda(cudaMalloc(&buf.d_prime_counts_out, sizeof(uint32_t) * N), "alloc d_prime_counts_out");
+ 
+-        // Upload FJ64_262K table to device
+         check_cuda(cudaMalloc(&d_fj64_table, sizeof(uint16_t) * 262144), "alloc d_fj64_table");
+         check_cuda(cudaMemcpy(d_fj64_table, FJ64_262K_TABLE, sizeof(uint16_t) * 262144,
+                               cudaMemcpyHostToDevice), "upload fj64_table");
+     }
+ 
+-    void free() {
++    void free_mem() {
+         cudaFree(buf.d_coords);
+         cudaFree(buf.d_cand_list);
+         cudaFree(buf.d_total_cands);
+@@ -291,7 +332,6 @@
+     const size_t compact_smem = kernel_compact_shared_bytes();
+     const size_t face_smem = kernel_face_encode_shared_bytes();
+ 
+-    // Set max dynamic shared memory for face encode kernel
+     check_cuda(cudaFuncSetAttribute(kernel_face_encode,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+                                     static_cast<int>(face_smem)),
+@@ -359,7 +399,31 @@
+     }
+ }
+ 
+-enum class Mode { TEST, BENCH };
++// Launch full 5-kernel pipeline on a specific stream
++void launch_pipeline_stream(StreamBuffers& sbuf, uint16_t* d_fj64_table,
++                            int num_tiles, cudaStream_t stream) {
++    const dim3 grid(static_cast<unsigned int>(num_tiles));
++    const dim3 block(BLOCK_THREADS);
++    const size_t compact_smem = kernel_compact_shared_bytes();
++    const size_t face_smem = kernel_face_encode_shared_bytes();
++
++    kernel_sieve<<<grid, block, 0, stream>>>(
++        sbuf.buf.d_coords, sbuf.buf.d_cand_list, sbuf.buf.d_total_cands, num_tiles);
++    kernel_mr<<<grid, block, 0, stream>>>(
++        sbuf.buf.d_coords, sbuf.buf.d_cand_list, sbuf.buf.d_total_cands,
++        sbuf.buf.d_bitmap, d_fj64_table, num_tiles);
++    kernel_compact<<<grid, block, compact_smem, stream>>>(
++        sbuf.buf.d_bitmap, sbuf.buf.d_row_prefix, sbuf.buf.d_prime_pos,
++        sbuf.buf.d_prime_count, num_tiles);
++    kernel_uf<<<grid, block, 0, stream>>>(
++        sbuf.buf.d_bitmap, sbuf.buf.d_row_prefix, sbuf.buf.d_prime_pos,
++        sbuf.buf.d_prime_count, sbuf.buf.d_parent, num_tiles);
++    kernel_face_encode<<<grid, block, face_smem, stream>>>(
++        sbuf.buf.d_prime_pos, sbuf.buf.d_prime_count, sbuf.buf.d_parent,
++        sbuf.buf.d_output, sbuf.buf.d_prime_counts_out, num_tiles);
++}
++
++enum class Mode { TEST, BENCH, BENCH_MS };
+ 
+ struct Args {
+     Mode mode;
+@@ -369,11 +433,24 @@
+ Args parse_args(int argc, char** argv) {
+     if (argc < 2) return Args{Mode::TEST, 2};
+     if (std::strcmp(argv[1], "test") == 0) return Args{Mode::TEST, 2};
++    if (std::strcmp(argv[1], "ms") == 0) {
++        if (argc < 3) {
++            std::fprintf(stderr, "usage: %s ms <tile_count>\n", argv[0]);
++            std::exit(1);
++        }
++        const int n = std::atoi(argv[2]);
++        if (n <= 0) {
++            std::fprintf(stderr, "usage: %s ms <tile_count>\n", argv[0]);
++            std::exit(1);
++        }
++        return Args{Mode::BENCH_MS, n};
++    }
+     const int n = std::atoi(argv[1]);
+     if (n <= 0) {
+-        std::fprintf(stderr, "usage: %s [test | <tile_count>]\n", argv[0]);
++        std::fprintf(stderr, "usage: %s [test | <tile_count> | ms <tile_count>]\n", argv[0]);
+         std::fprintf(stderr, "  test          - 2-tile smoke test (default)\n");
+-        std::fprintf(stderr, "  <tile_count>  - benchmark N tiles\n");
++        std::fprintf(stderr, "  <tile_count>  - benchmark N tiles (single stream)\n");
++        std::fprintf(stderr, "  ms <count>    - benchmark N tiles (multi-stream, %d streams)\n", NUM_STREAMS);
+         std::exit(1);
+     }
+     return Args{Mode::BENCH, n};
+@@ -429,11 +506,11 @@
+                     output[i].bytes[3]);
+     }
+ 
+-    mem.free();
++    mem.free_mem();
+ }
+ 
+ void run_bench(int tile_count) {
+-    std::printf("=== BENCHMARK (multi-kernel): %d tiles ===\n", tile_count);
++    std::printf("=== BENCHMARK (single-stream): %d tiles ===\n", tile_count);
+     print_device_info();
+ 
+     std::printf("\nkernel occupancy:\n");
+@@ -458,7 +535,6 @@
+                           sizeof(TileCoord) * tile_count,
+                           cudaMemcpyHostToDevice), "upload coords");
+ 
+-    // Need to set shared memory attribute before warmup too
+     const size_t face_smem = kernel_face_encode_shared_bytes();
+     check_cuda(cudaFuncSetAttribute(kernel_face_encode,
+                                     cudaFuncAttributeMaxDynamicSharedMemorySize,
+@@ -468,7 +544,6 @@
+     // Warmup
+     {
+         const int warmup_tiles = (tile_count < 10) ? tile_count : 10;
+-        // Use a subset for warmup
+         launch_pipeline(mem, warmup_tiles, nullptr);
+         std::printf("warmup: %d tiles done\n", warmup_tiles);
+     }
+@@ -500,7 +575,6 @@
+     std::printf("ms/tile:    %.4f\n", ms_per_tile);
+     std::printf("tiles/sec:  %.1f\n", tiles_per_sec);
+ 
+-    // Spot-check
+     std::vector<uint32_t> prime_counts_host(tile_count, 0U);
+     check_cuda(cudaMemcpy(prime_counts_host.data(), mem.buf.d_prime_counts_out,
+                           sizeof(uint32_t) * tile_count, cudaMemcpyDeviceToHost), "dl prime_counts");
+@@ -519,7 +593,6 @@
+         std::printf("all %d tiles completed without overflow\n", tile_count);
+     }
+ 
+-    // Print first few tile results for verification
+     const int show_tiles = tile_count < 8 ? tile_count : 8;
+     std::printf("\nfirst %d tiles:\n", show_tiles);
+     for (int i = 0; i < show_tiles; ++i) {
+@@ -534,7 +607,182 @@
+                     output_host[i].bytes[3]);
+     }
+ 
+-    mem.free();
++    mem.free_mem();
++}
++
++void run_bench_multistream(int tile_count) {
++    std::printf("=== BENCHMARK (multi-stream, %d streams): %d tiles ===\n", NUM_STREAMS, tile_count);
++    print_device_info();
++
++    std::printf("\nkernel occupancy:\n");
++    print_kernel_occupancy_generic("K1_sieve", reinterpret_cast<const void*>(kernel_sieve), 0);
++    print_kernel_occupancy_generic("K2_mr", reinterpret_cast<const void*>(kernel_mr), 0);
++    print_kernel_occupancy_generic("K3_compact", reinterpret_cast<const void*>(kernel_compact),
++                                   kernel_compact_shared_bytes());
++    print_kernel_occupancy_generic("K4_uf", reinterpret_cast<const void*>(kernel_uf), 0);
++    print_kernel_occupancy_generic("K5_face_encode", reinterpret_cast<const void*>(kernel_face_encode),
++                                   kernel_face_encode_shared_bytes());
++
++    std::vector<TileCoord> all_coords = generate_bench_tiles(tile_count);
++    std::printf("\ntile grid: %d tiles, origin=(%lld,%lld)\n",
++                tile_count,
++                static_cast<long long>(all_coords[0].a_lo),
++                static_cast<long long>(all_coords[0].b_lo));
++
++    const size_t face_smem = kernel_face_encode_shared_bytes();
++    check_cuda(cudaFuncSetAttribute(kernel_face_encode,
++                                    cudaFuncAttributeMaxDynamicSharedMemorySize,
++                                    static_cast<int>(face_smem)),
++               "setattr face_encode smem");
++
++    // Divide tiles into sub-batches: NUM_STREAMS * 4 waves
++    const int num_sub_batches = NUM_STREAMS * 4;
++    const int base_chunk = tile_count / num_sub_batches;
++    const int remainder_tiles = tile_count % num_sub_batches;
++
++    std::vector<int> chunk_sizes(num_sub_batches);
++    std::vector<int> chunk_offsets(num_sub_batches);
++    int offset = 0;
++    int max_chunk = 0;
++    for (int i = 0; i < num_sub_batches; ++i) {
++        chunk_sizes[i] = base_chunk + (i < remainder_tiles ? 1 : 0);
++        chunk_offsets[i] = offset;
++        offset += chunk_sizes[i];
++        if (chunk_sizes[i] > max_chunk) max_chunk = chunk_sizes[i];
++    }
++
++    // Shared FJ64 table (read-only, safe to share across streams)
++    uint16_t* d_fj64_table = nullptr;
++    check_cuda(cudaMalloc(&d_fj64_table, sizeof(uint16_t) * 262144), "alloc d_fj64_table");
++    check_cuda(cudaMemcpy(d_fj64_table, FJ64_262K_TABLE, sizeof(uint16_t) * 262144,
++                          cudaMemcpyHostToDevice), "upload fj64_table");
++
++    // Per-stream double buffers
++    StreamBuffers stream_bufs[NUM_STREAMS];
++    cudaStream_t streams[NUM_STREAMS];
++    for (int s = 0; s < NUM_STREAMS; ++s) {
++        stream_bufs[s].allocate(max_chunk);
++        check_cuda(cudaStreamCreate(&streams[s]), "create stream");
++    }
++
++    size_t free_gpu_mem = 0, total_gpu_mem = 0;
++    cudaMemGetInfo(&free_gpu_mem, &total_gpu_mem);
++    std::printf("\nGPU memory: %.1f MB used / %.1f MB total (%.1f MB free)\n",
++                (total_gpu_mem - free_gpu_mem) / 1e6, total_gpu_mem / 1e6, free_gpu_mem / 1e6);
++    std::printf("sub-batches: %d, max chunk: %d tiles\n", num_sub_batches, max_chunk);
++
++    // Warmup on stream 0
++    {
++        const int warmup_tiles = std::min(10, chunk_sizes[0]);
++        check_cuda(cudaMemcpyAsync(stream_bufs[0].buf.d_coords, all_coords.data(),
++                                   sizeof(TileCoord) * warmup_tiles,
++                                   cudaMemcpyHostToDevice, streams[0]), "warmup upload");
++        launch_pipeline_stream(stream_bufs[0], d_fj64_table, warmup_tiles, streams[0]);
++        check_cuda(cudaStreamSynchronize(streams[0]), "warmup sync");
++        std::printf("warmup: %d tiles done\n", warmup_tiles);
++    }
++
++    // Timed multi-stream run
++    cudaEvent_t e_start, e_end;
++    check_cuda(cudaEventCreate(&e_start), "create e_start");
++    check_cuda(cudaEventCreate(&e_end), "create e_end");
++
++    check_cuda(cudaEventRecord(e_start, streams[0]), "record start");
++
++    for (int sb = 0; sb < num_sub_batches; ++sb) {
++        const int s = sb % NUM_STREAMS;
++        const int n = chunk_sizes[sb];
++        if (n == 0) continue;
++
++        // Upload coords for this sub-batch to the stream's buffer
++        check_cuda(cudaMemcpyAsync(stream_bufs[s].buf.d_coords,
++                                   all_coords.data() + chunk_offsets[sb],
++                                   sizeof(TileCoord) * n,
++                                   cudaMemcpyHostToDevice, streams[s]),
++                   "upload sub-batch coords");
++
++        launch_pipeline_stream(stream_bufs[s], d_fj64_table, n, streams[s]);
++    }
++
++    // Record end on all streams, take the latest
++    cudaEvent_t e_stream_end[NUM_STREAMS];
++    for (int s = 0; s < NUM_STREAMS; ++s) {
++        check_cuda(cudaEventCreate(&e_stream_end[s]), "create e_stream_end");
++        check_cuda(cudaEventRecord(e_stream_end[s], streams[s]), "record stream end");
++    }
++
++    for (int s = 0; s < NUM_STREAMS; ++s) {
++        check_cuda(cudaStreamSynchronize(streams[s]), "sync stream");
++    }
++
++    // Find the latest end event
++    float max_elapsed = 0.0f;
++    for (int s = 0; s < NUM_STREAMS; ++s) {
++        float elapsed = 0.0f;
++        check_cuda(cudaEventElapsedTime(&elapsed, e_start, e_stream_end[s]), "elapsed time");
++        if (elapsed > max_elapsed) max_elapsed = elapsed;
++    }
++
++    const double tiles_per_sec = static_cast<double>(tile_count) /
++                                 (static_cast<double>(max_elapsed) / 1000.0);
++
++    std::printf("\n--- results (multi-stream) ---\n");
++    std::printf("total:      %.3f ms\n", max_elapsed);
++    std::printf("tiles:      %d\n", tile_count);
++    std::printf("ms/tile:    %.4f\n", static_cast<double>(max_elapsed) / tile_count);
++    std::printf("tiles/sec:  %.1f\n", tiles_per_sec);
++
++    // Verify last sub-batch from each stream
++    int verified_tiles = 0;
++    int overflow_count = 0;
++    for (int sb = num_sub_batches - NUM_STREAMS; sb < num_sub_batches; ++sb) {
++        if (sb < 0) continue;
++        const int s = sb % NUM_STREAMS;
++        const int n = chunk_sizes[sb];
++        if (n == 0) continue;
++
++        std::vector<TileOp> sub_out(n);
++        std::vector<uint32_t> sub_pc(n);
++        check_cuda(cudaMemcpy(sub_out.data(), stream_bufs[s].buf.d_output,
++                              sizeof(TileOp) * n, cudaMemcpyDeviceToHost), "dl output");
++        check_cuda(cudaMemcpy(sub_pc.data(), stream_bufs[s].buf.d_prime_counts_out,
++                              sizeof(uint32_t) * n, cudaMemcpyDeviceToHost), "dl prime_counts");
++
++        for (int i = 0; i < n; ++i) {
++            if (sub_out[i].bytes[0] == OVERFLOW_SENTINEL) ++overflow_count;
++        }
++        verified_tiles += n;
++
++        const int show = std::min(4, n);
++        const int sb_offset = chunk_offsets[sb];
++        std::printf("\nstream %d (sub-batch %d, %d tiles, offset %d):\n", s, sb, n, sb_offset);
++        for (int i = 0; i < show; ++i) {
++            std::printf("  tile[%d] coord=(%lld,%lld) primes=%u tileop[0..3]=%02x %02x %02x %02x\n",
++                        sb_offset + i,
++                        static_cast<long long>(all_coords[sb_offset + i].a_lo),
++                        static_cast<long long>(all_coords[sb_offset + i].b_lo),
++                        sub_pc[i],
++                        sub_out[i].bytes[0],
++                        sub_out[i].bytes[1],
++                        sub_out[i].bytes[2],
++                        sub_out[i].bytes[3]);
++        }
++    }
++
++    if (overflow_count > 0) {
++        std::printf("\nWARNING: %d/%d verified tiles hit overflow\n", overflow_count, verified_tiles);
++    } else {
++        std::printf("\nall %d verified tiles completed without overflow\n", verified_tiles);
++    }
++
++    cudaEventDestroy(e_start);
++    cudaEventDestroy(e_end);
++    for (int s = 0; s < NUM_STREAMS; ++s) {
++        cudaEventDestroy(e_stream_end[s]);
++        stream_bufs[s].free_buffers();
++        cudaStreamDestroy(streams[s]);
++    }
++    cudaFree(d_fj64_table);
+ }
+ 
+ }  // namespace
+@@ -557,8 +805,10 @@
+ 
+     if (args.mode == Mode::TEST) {
+         run_test();
+-    } else {
++    } else if (args.mode == Mode::BENCH) {
+         run_bench(args.tile_count);
++    } else if (args.mode == Mode::BENCH_MS) {
++        run_bench_multistream(args.tile_count);
+     }
+ 
+     return 0;
