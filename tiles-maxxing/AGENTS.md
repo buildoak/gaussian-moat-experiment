@@ -152,3 +152,16 @@ For shared memory configuration, set at launch site with `cudaFuncSetAttribute` 
 2. **Workflow boundary:** Workers produce code + local tests (syntax, logic checks). The coordinator (or user) handles the rsync-compile-run cycle and feeds results back.
 3. **Never assume CUDA compilation succeeded.** Always capture and inspect nvcc output. Jetson nvcc version may differ from what workers expect — surface errors verbatim.
 4. **Results stay in-tree.** Pull benchmark/test output into `tile-cuda/results/` so it is version-controlled alongside the kernel code.
+
+## vast.ai Cloud GPU
+
+Operational docs and deploy scripts live in `vast-ai/`. Read `vast-ai/README.md` for the full workflow.
+
+### Hard Rules
+
+1. **tmux for everything.** SSH drops are common. Every command > 5 seconds runs in tmux.
+2. **DESTROY instances when done.** `vastai destroy instance $ID`. Verify with `vastai show instances`. Never leave instances running.
+3. **Pin SSH endpoint once.** Cache port and host at session start. Never re-resolve mid-run — the API can return changed bindings.
+4. **Patch `-arch` flag.** Makefile defaults to `sm_87` (Jetson). Change to `sm_86` (3090), `sm_89` (4090), or `sm_80` (A100) before building on cloud instances.
+5. **Do not modify local Makefile.** Arch patching happens on the remote instance only. The local copy stays at `sm_87` for Jetson.
+6. **Budget awareness.** Track cost via `vastai show instances`. 3090: ~$0.13/hr. Destroy immediately after work.
