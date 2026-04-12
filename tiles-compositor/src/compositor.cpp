@@ -223,8 +223,10 @@ void Compositor::match_lr_with_previous(int32_t j, const uint8_t* tower_tileops,
     //
     // Row correspondence: d = delta[j-1] gives the b-offset.
     // q = d / TILE_SIDE whole-tile rows, f = d % TILE_SIDE fractional pixels.
-    // Current row 'row' overlaps previous row 'row + q' (primary) and
-    // 'row + q + 1' (secondary, when f > 0) in b-range.
+    // Tiles stack upward (row 0 = bottom, row 31 = top). Previous tower
+    // starts HIGHER (base_y[j-1] >= base_y[j]), so current row r at
+    // absolute b ≈ base_y[j] + r*S maps to previous row r - q.
+    // Current rows 0..q-1 have no matching tile in the previous tower.
     if (j <= 0) {
         return;
     }
@@ -249,8 +251,8 @@ void Compositor::match_lr_with_previous(int32_t j, const uint8_t* tower_tileops,
         // Current tower tile's L-face (left side, low a, faces previous tower)
         const FaceSlice l_slice = face_slice(cur_data, FACE_L, cur_budget);
 
-        // Primary match: previous tower row (row + q)
-        const int primary_prev_row = row + q;
+        // Primary match: previous tower row (row - q)
+        const int primary_prev_row = row - q;
         if (primary_prev_row >= 0 && primary_prev_row < TILES_PER_TOWER) {
             const uint32_t prev_flat = static_cast<uint32_t>(tile_index(*grid_, j - 1, primary_prev_row));
             if (!is_tile_dead(*grid_, j - 1, primary_prev_row)) {
@@ -286,9 +288,9 @@ void Compositor::match_lr_with_previous(int32_t j, const uint8_t* tower_tileops,
             }
         }
 
-        // Secondary match: previous tower row (row + q + 1) when f > 0
+        // Secondary match: previous tower row (row - q - 1) when f > 0
         if (f > 0) {
-            const int secondary_prev_row = primary_prev_row + 1;
+            const int secondary_prev_row = primary_prev_row - 1;
             if (secondary_prev_row >= 0 && secondary_prev_row < TILES_PER_TOWER) {
                 const uint32_t prev_flat =
                     static_cast<uint32_t>(tile_index(*grid_, j - 1, secondary_prev_row));
@@ -301,7 +303,7 @@ void Compositor::match_lr_with_previous(int32_t j, const uint8_t* tower_tileops,
                         const FaceSlice r_slice = face_slice(prev_data, FACE_R, prev_budget);
 
                         // Secondary match predicate: h1_l + (TILE_SIDE - f) == h1_r
-                        // (tower j-1 at row+q+1 is shifted DOWN by TILE_SIDE-f)
+                        // (tower j-1 at row-q-1 is one row below the primary in prev tower)
                         for (uint8_t li = 0; li < l_slice.count; ++li) {
                             const uint8_t gl = decode_group_id(l_slice.groups[li]);
                             if (gl == 0U) continue;
