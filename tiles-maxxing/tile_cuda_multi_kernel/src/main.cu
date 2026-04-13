@@ -8,6 +8,7 @@
 #include <cuda_runtime.h>
 
 #include <array>
+#include <cerrno>
 #include <chrono>
 #include <cinttypes>
 #include <cmath>
@@ -17,6 +18,7 @@
 #include <cstring>
 #include <algorithm>
 #include <limits>
+#include <unistd.h>
 #include <vector>
 
 // ---- Kernel declarations ----
@@ -649,6 +651,198 @@ int run_campaign(const char* burst_index_path, const char* coords_path, const ch
     return 0;
 }
 
+// Stream mode: persistent subprocess, reads bursts from stdin, writes results to stdout.
+// Binary protocol (little-endian):
+//   Per-burst input (from campaign):
+//     uint32_t num_tiles
+//     uint32_t burst_idx_bytes
+//     uint32_t coords_bytes
+//     [burst_idx data: uint32_t num_towers, uint32_t total_tiles, uint32_t tpt[N]]
+//     [coords data: uint32_t num_tiles, TileCoord[N]]
+//   Per-burst output (to campaign):
+//     uint32_t num_tiles
+//     uint32_t output_bytes
+//     [raw TileOp data: num_tiles * 128 bytes]
+//   Termination: stdin EOF → clean exit.
+
+bool stream_read_all(void* buf, size_t len) {
+    uint8_t* p = static_cast<uint8_t*>(buf);
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t n = ::read(STDIN_FILENO, p, remaining);
+        if (n == 0) return false;  // EOF
+        if (n < 0) {
+            std::fprintf(stderr, "stream: read error: %s\n", std::strerror(errno));
+            return false;
+        }
+        p += n;
+        remaining -= static_cast<size_t>(n);
+    }
+    return true;
+}
+
+bool stream_write_all(const void* buf, size_t len) {
+    const uint8_t* p = static_cast<const uint8_t*>(buf);
+    size_t remaining = len;
+    while (remaining > 0) {
+        ssize_t n = ::write(STDOUT_FILENO, p, remaining);
+        if (n <= 0) {
+            std::fprintf(stderr, "stream: write error: %s\n",
+                         n == 0 ? "EOF" : std::strerror(errno));
+            return false;
+        }
+        p += n;
+        remaining -= static_cast<size_t>(n);
+    }
+    return true;
+}
+
+int run_stream() {
+    constexpr int MAX_STREAM_TILES = 20000;  // matches CHUNK_SIZE in campaign mode
+
+    // Allocate GPU buffers once at max capacity — reuse across all bursts
+    TileBatchDeviceMemory mem{};
+    mem.allocate(MAX_STREAM_TILES);
+
+    // Host-side result buffer — allocated once at max capacity
+    std::vector<TileOp> tileops(MAX_STREAM_TILES);
+
+    // Host-side coord read buffer
+    std::vector<TileCoord> all_coords(MAX_STREAM_TILES);
+
+    uint64_t total_tiles_processed = 0;
+    int burst_count = 0;
+    const auto session_start = std::chrono::steady_clock::now();
+
+    std::fprintf(stderr, "stream: ready, max_tiles_per_burst=%d\n", MAX_STREAM_TILES);
+
+    for (;;) {
+        // Read burst header: [num_tiles, burst_idx_bytes, coords_bytes]
+        uint32_t header[3];
+        if (!stream_read_all(header, sizeof(header))) {
+            // EOF or error — clean exit
+            break;
+        }
+
+        const uint32_t num_tiles = header[0];
+        const uint32_t burst_idx_bytes = header[1];
+        const uint32_t coords_bytes = header[2];
+
+        if (num_tiles == 0 || num_tiles > static_cast<uint32_t>(MAX_STREAM_TILES)) {
+            std::fprintf(stderr, "stream: invalid num_tiles=%u (max=%d)\n",
+                         num_tiles, MAX_STREAM_TILES);
+            mem.free();
+            return 1;
+        }
+
+        // Read and discard burst_index data (we only need coords for GPU processing;
+        // the burst_index structure is used by the campaign side for compositor ingestion)
+        {
+            std::vector<uint8_t> burst_idx_buf(burst_idx_bytes);
+            if (!stream_read_all(burst_idx_buf.data(), burst_idx_bytes)) {
+                std::fprintf(stderr, "stream: failed to read burst_idx data\n");
+                mem.free();
+                return 1;
+            }
+            // Validate: first 8 bytes are num_towers + total_tiles
+            if (burst_idx_bytes >= 2 * sizeof(uint32_t)) {
+                uint32_t total_tiles_check;
+                std::memcpy(&total_tiles_check, burst_idx_buf.data() + sizeof(uint32_t),
+                            sizeof(uint32_t));
+                if (total_tiles_check != num_tiles) {
+                    std::fprintf(stderr, "stream: burst_index total_tiles=%u != header num_tiles=%u\n",
+                                 total_tiles_check, num_tiles);
+                    mem.free();
+                    return 1;
+                }
+            }
+        }
+
+        // Read coords data
+        {
+            const uint32_t expected_coords_bytes = static_cast<uint32_t>(
+                sizeof(uint32_t) + static_cast<size_t>(num_tiles) * sizeof(TileCoord));
+            if (coords_bytes != expected_coords_bytes) {
+                std::fprintf(stderr, "stream: coords_bytes=%u != expected=%u\n",
+                             coords_bytes, expected_coords_bytes);
+                mem.free();
+                return 1;
+            }
+
+            // Read the num_tiles prefix from coords
+            uint32_t coords_num_tiles;
+            if (!stream_read_all(&coords_num_tiles, sizeof(uint32_t))) {
+                std::fprintf(stderr, "stream: failed to read coords header\n");
+                mem.free();
+                return 1;
+            }
+            if (coords_num_tiles != num_tiles) {
+                std::fprintf(stderr, "stream: coords num_tiles=%u != header num_tiles=%u\n",
+                             coords_num_tiles, num_tiles);
+                mem.free();
+                return 1;
+            }
+
+            // Read TileCoord array
+            if (!stream_read_all(all_coords.data(),
+                                 static_cast<size_t>(num_tiles) * sizeof(TileCoord))) {
+                std::fprintf(stderr, "stream: failed to read coords data\n");
+                mem.free();
+                return 1;
+            }
+        }
+
+        // Process on GPU — same chunking as campaign mode for large bursts
+        const int total = static_cast<int>(num_tiles);
+        constexpr int CHUNK_SIZE = 20000;
+        const int num_chunks = (total + CHUNK_SIZE - 1) / CHUNK_SIZE;
+
+        for (int chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+            const int chunk_start = chunk_idx * CHUNK_SIZE;
+            const int chunk_tiles = std::min(CHUNK_SIZE, total - chunk_start);
+
+            check_cuda(cudaMemcpy(mem.buf.d_coords,
+                                  all_coords.data() + chunk_start,
+                                  sizeof(TileCoord) * static_cast<size_t>(chunk_tiles),
+                                  cudaMemcpyHostToDevice), "stream: upload coords");
+
+            launch_pipeline(mem, chunk_tiles, nullptr);
+
+            check_cuda(cudaMemcpy(tileops.data() + chunk_start,
+                                  mem.buf.d_output,
+                                  sizeof(TileOp) * static_cast<size_t>(chunk_tiles),
+                                  cudaMemcpyDeviceToHost), "stream: dl tileops");
+        }
+
+        // Write response: [num_tiles, output_bytes, raw TileOp data]
+        const uint32_t output_bytes = num_tiles * TILEOP_SIZE;
+        uint32_t resp_header[2] = {num_tiles, output_bytes};
+        if (!stream_write_all(resp_header, sizeof(resp_header))) {
+            std::fprintf(stderr, "stream: failed to write response header\n");
+            mem.free();
+            return 1;
+        }
+        if (!stream_write_all(tileops.data(),
+                              static_cast<size_t>(num_tiles) * sizeof(TileOp))) {
+            std::fprintf(stderr, "stream: failed to write response data\n");
+            mem.free();
+            return 1;
+        }
+
+        total_tiles_processed += num_tiles;
+        burst_count++;
+    }
+
+    mem.free();
+
+    const auto session_end = std::chrono::steady_clock::now();
+    const double session_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(session_end - session_start).count()) / 1000.0;
+    std::fprintf(stderr, "stream: %d bursts, %" PRIu64 " tiles, %.1f ms total\n",
+                 burst_count, total_tiles_processed, session_ms);
+    return 0;
+}
+
 void run_test() {
     std::vector<TileCoord> coords = default_tiles();
     const int num_tiles = static_cast<int>(coords.size());
@@ -828,6 +1022,22 @@ int main(int argc, char** argv) {
         upload_backward_offsets(offsets.dr, offsets.dc, offsets.count);
         upload_constants();
         return run_campaign(argv[2], argv[3], argv[4]);
+    }
+
+    // Early dispatch for stream mode — persistent subprocess with pipe protocol
+    if (argc >= 2 && std::strcmp(argv[1], "stream") == 0) {
+        // GPU init (sieve tables, offsets, constants) — done once for entire session
+        SieveTablesBarrett tables{};
+        if (!init_sieve_tables_host(tables)) {
+            std::fprintf(stderr, "failed to initialize sieve tables\n");
+            return 1;
+        }
+        BackwardOffsetsHost offsets{};
+        init_backward_offsets_host(offsets);
+        upload_sieve_tables(tables);
+        upload_backward_offsets(offsets.dr, offsets.dc, offsets.count);
+        upload_constants();
+        return run_stream();
     }
 
     // Early dispatch for dump mode (before parse_args, which doesn't understand it)

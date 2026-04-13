@@ -28,8 +28,10 @@
 #include <cstring>
 #include <memory>
 #include <string>
+#include <signal.h>
 #include <sys/resource.h>
 #include <sys/stat.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <vector>
 
@@ -110,7 +112,7 @@ const char* verdict_string(CompositorResult::Verdict v) {
 void print_usage(const char* argv0) {
     std::fprintf(stderr,
         "Usage: %s R [--k-sq N] [--mode verdict_only|dump|dump_with_stats] "
-        "[--progress-interval N] [--cuda] [--cuda-binary PATH] [--burst-size N] "
+        "[--progress-interval N] [--cuda|--cuda-stream] [--cuda-binary PATH] [--burst-size N] "
         "[--no-early-exit]\n", argv0);
 }
 
@@ -249,6 +251,180 @@ double peak_rss_mb() {
 #endif
 }
 
+// ---------------------------------------------------------------------------
+// Persistent CUDA subprocess with bidirectional pipes.
+//
+// Protocol (binary, little-endian, over stdin/stdout):
+//   Campaign → CUDA (per burst):
+//     uint32_t num_tiles
+//     uint32_t burst_idx_bytes   (size of burst_index payload)
+//     uint32_t coords_bytes      (size of coords payload)
+//     [burst_idx data: uint32_t num_towers, uint32_t total_tiles, uint32_t tpt[N]]
+//     [coords data: uint32_t num_tiles, TileCoord[N]]
+//
+//   CUDA → Campaign (per burst):
+//     uint32_t num_tiles
+//     uint32_t output_bytes
+//     [raw TileOp data: num_tiles * 128 bytes]
+//
+//   Termination: close write pipe → CUDA sees EOF → exits.
+// ---------------------------------------------------------------------------
+
+struct CudaStreamProcess {
+    pid_t pid = -1;
+    int write_fd = -1;   // campaign writes burst data here (CUDA's stdin)
+    int read_fd = -1;    // campaign reads results here (CUDA's stdout)
+
+    bool alive() const { return pid > 0; }
+
+    // Launch the CUDA binary in stream mode.
+    // Returns true on success.
+    bool launch(const std::string& cuda_binary) {
+        int pipe_to_cuda[2] = {-1, -1};    // [0]=read(child), [1]=write(parent)
+        int pipe_from_cuda[2] = {-1, -1};  // [0]=read(parent), [1]=write(child)
+
+        if (::pipe(pipe_to_cuda) != 0 || ::pipe(pipe_from_cuda) != 0) {
+            std::fprintf(stderr, "error: pipe() failed: %s\n", std::strerror(errno));
+            return false;
+        }
+
+        pid = ::fork();
+        if (pid < 0) {
+            std::fprintf(stderr, "error: fork() failed: %s\n", std::strerror(errno));
+            ::close(pipe_to_cuda[0]); ::close(pipe_to_cuda[1]);
+            ::close(pipe_from_cuda[0]); ::close(pipe_from_cuda[1]);
+            return false;
+        }
+
+        if (pid == 0) {
+            // --- Child process: becomes the CUDA binary ---
+            // stdin = read end of pipe_to_cuda
+            ::dup2(pipe_to_cuda[0], STDIN_FILENO);
+            // stdout = write end of pipe_from_cuda
+            ::dup2(pipe_from_cuda[1], STDOUT_FILENO);
+            // Close all unused FDs
+            ::close(pipe_to_cuda[0]);
+            ::close(pipe_to_cuda[1]);
+            ::close(pipe_from_cuda[0]);
+            ::close(pipe_from_cuda[1]);
+
+            ::execl(cuda_binary.c_str(), cuda_binary.c_str(), "stream", nullptr);
+            // If execl returns, it failed
+            std::fprintf(stderr, "error: execl(%s) failed: %s\n",
+                         cuda_binary.c_str(), std::strerror(errno));
+            ::_exit(127);
+        }
+
+        // --- Parent process ---
+        // Close unused ends
+        ::close(pipe_to_cuda[0]);
+        ::close(pipe_from_cuda[1]);
+
+        write_fd = pipe_to_cuda[1];
+        read_fd = pipe_from_cuda[0];
+
+        return true;
+    }
+
+    // Send a complete burst to the CUDA subprocess.
+    // burst_idx: [uint32_t num_towers, uint32_t total_tiles, uint32_t tpt[N]]
+    // coords:    [uint32_t num_tiles, TileCoord[N]]
+    bool send_burst(const uint8_t* burst_idx_data, uint32_t burst_idx_bytes,
+                    const uint8_t* coords_data, uint32_t coords_bytes,
+                    uint32_t num_tiles) {
+        // Write header: num_tiles, burst_idx_bytes, coords_bytes
+        uint32_t header[3] = {num_tiles, burst_idx_bytes, coords_bytes};
+        if (!write_all(header, sizeof(header))) return false;
+        if (!write_all(burst_idx_data, burst_idx_bytes)) return false;
+        if (!write_all(coords_data, coords_bytes)) return false;
+        return true;
+    }
+
+    // Read burst result from the CUDA subprocess.
+    // Returns the number of tiles in the response, or 0 on error.
+    // output_buf must be large enough for num_tiles * TILEOP_SIZE bytes.
+    uint32_t recv_burst(uint8_t* output_buf) {
+        uint32_t resp_header[2] = {0, 0};  // num_tiles, output_bytes
+        if (!read_all(resp_header, sizeof(resp_header))) return 0;
+
+        const uint32_t resp_tiles = resp_header[0];
+        const uint32_t resp_bytes = resp_header[1];
+        const uint32_t expected_bytes = resp_tiles * TILEOP_SIZE;
+
+        if (resp_bytes != expected_bytes) {
+            std::fprintf(stderr, "error: CUDA stream response size mismatch: "
+                         "got %u bytes, expected %u for %u tiles\n",
+                         resp_bytes, expected_bytes, resp_tiles);
+            return 0;
+        }
+
+        if (!read_all(output_buf, resp_bytes)) return 0;
+        return resp_tiles;
+    }
+
+    // Close write pipe (signals EOF to child) and wait for exit.
+    int shutdown() {
+        if (write_fd >= 0) {
+            ::close(write_fd);
+            write_fd = -1;
+        }
+        int status = 0;
+        if (pid > 0) {
+            ::waitpid(pid, &status, 0);
+            pid = -1;
+        }
+        if (read_fd >= 0) {
+            ::close(read_fd);
+            read_fd = -1;
+        }
+        return status;
+    }
+
+    // Kill and reap if still alive (for error paths).
+    void kill_and_reap() {
+        if (write_fd >= 0) { ::close(write_fd); write_fd = -1; }
+        if (pid > 0) {
+            ::kill(pid, SIGTERM);
+            ::waitpid(pid, nullptr, 0);
+            pid = -1;
+        }
+        if (read_fd >= 0) { ::close(read_fd); read_fd = -1; }
+    }
+
+private:
+    bool write_all(const void* data, size_t len) {
+        const uint8_t* p = static_cast<const uint8_t*>(data);
+        size_t remaining = len;
+        while (remaining > 0) {
+            ssize_t n = ::write(write_fd, p, remaining);
+            if (n <= 0) {
+                std::fprintf(stderr, "error: write to CUDA subprocess failed: %s\n",
+                             n == 0 ? "EOF" : std::strerror(errno));
+                return false;
+            }
+            p += n;
+            remaining -= static_cast<size_t>(n);
+        }
+        return true;
+    }
+
+    bool read_all(void* data, size_t len) {
+        uint8_t* p = static_cast<uint8_t*>(data);
+        size_t remaining = len;
+        while (remaining > 0) {
+            ssize_t n = ::read(read_fd, p, remaining);
+            if (n <= 0) {
+                std::fprintf(stderr, "error: read from CUDA subprocess failed: %s\n",
+                             n == 0 ? "EOF" : std::strerror(errno));
+                return false;
+            }
+            p += n;
+            remaining -= static_cast<size_t>(n);
+        }
+        return true;
+    }
+};
+
 }  // namespace
 
 // ---------------------------------------------------------------------------
@@ -273,6 +449,7 @@ int main(int argc, char** argv) {
     OutputMode mode = OutputMode::VERDICT_ONLY;
     uint32_t progress_interval = 1000;
     bool use_cuda = false;
+    bool use_cuda_stream = false;
     bool no_early_exit = false;
     std::string cuda_binary_path;
     uint32_t burst_size = 4096;
@@ -314,6 +491,11 @@ int main(int argc, char** argv) {
         }
         if (std::strcmp(argv[argi], "--cuda") == 0) {
             use_cuda = true;
+            continue;
+        }
+        if (std::strcmp(argv[argi], "--cuda-stream") == 0) {
+            use_cuda = true;
+            use_cuda_stream = true;
             continue;
         }
         if (std::strcmp(argv[argi], "--cuda-binary") == 0) {
@@ -369,7 +551,7 @@ int main(int argc, char** argv) {
     const uint64_t total_tiles = grid.total_tiles;
 
     std::printf("=== Gaussian Moat Campaign (%s tile path) ===\n",
-                use_cuda ? "CUDA" : "C++");
+                use_cuda ? (use_cuda_stream ? "CUDA stream" : "CUDA") : "C++");
     std::printf("R:            %" PRId64 "\n", R);
     std::printf("K_SQ:         %" PRIu32 "\n", k_sq);
     std::printf("TILE_SIDE:    %d\n", TILE_SIDE);
@@ -459,6 +641,176 @@ int main(int argc, char** argv) {
             const int32_t first_cuda_tower = 1;
             const int32_t remaining_towers = num_towers - first_cuda_tower;
 
+          if (use_cuda_stream) {
+            // =============================================================
+            // CUDA stream path: persistent subprocess with pipe protocol.
+            // One process launch, CUDA context initialized once, bursts
+            // streamed over stdin/stdout.
+            // =============================================================
+            CudaStreamProcess cuda_proc;
+            if (!cuda_proc.launch(resolved_cuda_binary)) {
+                std::fprintf(stderr, "error: failed to launch CUDA stream subprocess\n");
+                return 1;
+            }
+            std::fprintf(stderr, "cuda-stream: launched pid %d\n",
+                         static_cast<int>(cuda_proc.pid));
+
+            for (int32_t burst_start = 0;
+                 burst_start < remaining_towers && (!spanning_found || no_early_exit);
+                 burst_start += static_cast<int32_t>(burst_size)) {
+
+                const int32_t towers_in_burst = std::min(
+                    static_cast<int32_t>(burst_size),
+                    remaining_towers - burst_start);
+
+                // Build tiles_per_tower and coords for this burst
+                std::vector<uint32_t> burst_tpt(static_cast<size_t>(towers_in_burst));
+                uint32_t burst_total_tiles = 0;
+                for (int32_t bi = 0; bi < towers_in_burst; ++bi) {
+                    const int32_t j = first_cuda_tower + burst_start + bi;
+                    burst_tpt[static_cast<size_t>(bi)] =
+                        grid.tiles_per_tower[static_cast<std::size_t>(j)];
+                    burst_total_tiles += burst_tpt[static_cast<size_t>(bi)];
+                }
+
+                // Build coords array (tower-major order)
+                std::vector<TileCoord> burst_coords;
+                burst_coords.reserve(burst_total_tiles);
+                for (int32_t bi = 0; bi < towers_in_burst; ++bi) {
+                    const int32_t j = first_cuda_tower + burst_start + bi;
+                    const uint32_t tpt = burst_tpt[static_cast<size_t>(bi)];
+                    for (uint32_t r = 0; r < tpt; ++r) {
+                        const int64_t a_lo = static_cast<int64_t>(j) * TILE_SIDE;
+                        const int64_t b_lo = grid.base_y[static_cast<std::size_t>(j)]
+                                             + static_cast<int64_t>(r) * TILE_SIDE;
+                        burst_coords.push_back(TileCoord{a_lo, b_lo});
+                    }
+                }
+
+                // Serialize burst_index in memory (same binary format as file)
+                const uint32_t num_towers_u32 = static_cast<uint32_t>(towers_in_burst);
+                const uint32_t burst_idx_bytes = static_cast<uint32_t>(
+                    2 * sizeof(uint32_t) + static_cast<size_t>(towers_in_burst) * sizeof(uint32_t));
+                std::vector<uint8_t> burst_idx_buf(burst_idx_bytes);
+                {
+                    uint8_t* p = burst_idx_buf.data();
+                    std::memcpy(p, &num_towers_u32, sizeof(uint32_t)); p += sizeof(uint32_t);
+                    std::memcpy(p, &burst_total_tiles, sizeof(uint32_t)); p += sizeof(uint32_t);
+                    std::memcpy(p, burst_tpt.data(),
+                                static_cast<size_t>(towers_in_burst) * sizeof(uint32_t));
+                }
+
+                // Serialize coords in memory (same binary format as file)
+                const uint32_t coords_bytes = static_cast<uint32_t>(
+                    sizeof(uint32_t) + static_cast<size_t>(burst_total_tiles) * sizeof(TileCoord));
+                std::vector<uint8_t> coords_buf(coords_bytes);
+                {
+                    uint8_t* p = coords_buf.data();
+                    std::memcpy(p, &burst_total_tiles, sizeof(uint32_t)); p += sizeof(uint32_t);
+                    std::memcpy(p, burst_coords.data(),
+                                static_cast<size_t>(burst_total_tiles) * sizeof(TileCoord));
+                }
+
+                // Send burst to subprocess
+                if (!cuda_proc.send_burst(burst_idx_buf.data(), burst_idx_bytes,
+                                          coords_buf.data(), coords_bytes,
+                                          burst_total_tiles)) {
+                    std::fprintf(stderr, "error: failed to send burst to CUDA stream subprocess\n");
+                    cuda_proc.kill_and_reap();
+                    return 1;
+                }
+
+                // Read results from subprocess
+                const std::size_t output_alloc =
+                    static_cast<std::size_t>(burst_total_tiles) * TILEOP_SIZE;
+                std::vector<uint8_t> output_buf(output_alloc);
+
+                const uint32_t resp_tiles = cuda_proc.recv_burst(output_buf.data());
+                if (resp_tiles == 0 || resp_tiles != burst_total_tiles) {
+                    std::fprintf(stderr, "error: CUDA stream burst response mismatch: "
+                                 "expected %u tiles, got %u\n",
+                                 burst_total_tiles, resp_tiles);
+                    cuda_proc.kill_and_reap();
+                    return 1;
+                }
+
+                // Feed compositor tower-by-tower from the output buffer
+                uint32_t offset = 0;
+                for (int32_t bi = 0; bi < towers_in_burst; ++bi) {
+                    const int32_t j = first_cuda_tower + burst_start + bi;
+                    const uint32_t tpt = burst_tpt[static_cast<size_t>(bi)];
+
+                    // BUG-2 + BUG-5 FIX: overflow/malformed tile replacement
+                    for (uint32_t r = 0; r < tpt; ++r) {
+                        const std::size_t tile_off =
+                            (static_cast<std::size_t>(offset) + r) * TILEOP_SIZE;
+                        const uint8_t b0 = output_buf[tile_off];
+                        const uint8_t b1 = output_buf[tile_off + 1];
+                        const uint8_t b2 = output_buf[tile_off + 2];
+                        bool replace = false;
+                        const char* reason = nullptr;
+                        if (b0 == OVERFLOW_SENTINEL) {
+                            replace = true;
+                            reason = "overflow";
+                        } else if (b0 < TILEOP_HEADER_BYTES || b0 > b1 || b1 > b2
+                                   || b2 > TILEOP_SIZE) {
+                            replace = true;
+                            reason = "malformed";
+                        }
+                        if (replace) {
+                            overflow_count++;
+                            std::fprintf(stderr,
+                                "warning: %s tile at tower %d row %u "
+                                "(CUDA stream) replaced with empty\n",
+                                reason, static_cast<int>(j), r);
+                            std::memset(output_buf.data() + tile_off, 0, TILEOP_SIZE);
+                            output_buf[tile_off]     = EMPTY_OFFSET;
+                            output_buf[tile_off + 1] = EMPTY_OFFSET;
+                            output_buf[tile_off + 2] = EMPTY_OFFSET;
+                        }
+                    }
+
+                    compositor.ingest_tower(j,
+                        output_buf.data() + static_cast<std::size_t>(offset) * TILEOP_SIZE,
+                        nullptr);
+                    offset += tpt;
+                    tiles_processed += tpt;
+
+                    // Progress reporting
+                    if (((j + 1) % static_cast<int32_t>(progress_interval)) == 0 ||
+                        j + 1 == num_towers) {
+                        const double elapsed =
+                            std::chrono::duration<double>(Clock::now() - wall_start).count();
+                        const double pct = 100.0 * static_cast<double>(j + 1)
+                                           / static_cast<double>(num_towers);
+                        std::printf("  tower %d/%d (%.1f%%) elapsed %.1fs\n",
+                                    j + 1, num_towers, pct, elapsed);
+                        std::fflush(stdout);
+                    }
+
+                    // Incremental spanning check
+                    if (compositor.check_spanning_incremental()) {
+                        if (!spanning_found) {
+                            compositor.collect_outer_boundary(j);
+                            spanning_found = true;
+                            spanning_tower = j;
+                        }
+                        if (!no_early_exit) break;
+                    }
+                }
+            }
+
+            // Shut down the persistent subprocess
+            int cuda_exit = cuda_proc.shutdown();
+            if (cuda_exit != 0) {
+                std::fprintf(stderr, "warning: CUDA stream subprocess exited with status %d\n",
+                             cuda_exit);
+            }
+
+          } else {
+            // =============================================================
+            // Legacy CUDA burst path: file-based, one process per burst.
+            // =============================================================
             for (int32_t burst_start = 0;
                  burst_start < remaining_towers && (!spanning_found || no_early_exit);
                  burst_start += static_cast<int32_t>(burst_size)) {
@@ -623,6 +975,7 @@ int main(int argc, char** argv) {
                     }
                 }
             }
+          }  // use_cuda_stream vs legacy
         }
     } else {
         // =====================================================================
