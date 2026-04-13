@@ -698,7 +698,7 @@ bool stream_write_all(const void* buf, size_t len) {
 }
 
 int run_stream() {
-    constexpr int MAX_STREAM_TILES = 20000;  // matches CHUNK_SIZE in campaign mode
+    constexpr int MAX_STREAM_TILES = 400000;  // ~50KB/tile * 400K = 19.1GB — fits 24GB GPU
 
     // Allocate GPU buffers once at max capacity — reuse across all bursts
     TileBatchDeviceMemory mem{};
