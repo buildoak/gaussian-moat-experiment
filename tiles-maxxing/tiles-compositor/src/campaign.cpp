@@ -452,7 +452,7 @@ int main(int argc, char** argv) {
     bool use_cuda_stream = false;
     bool no_early_exit = false;
     std::string cuda_binary_path;
-    uint32_t burst_size = 4096;
+    uint32_t burst_size = 28000;
 
     for (int argi = 2; argi < argc; ++argi) {
         if (std::strcmp(argv[argi], "--k-sq") == 0) {

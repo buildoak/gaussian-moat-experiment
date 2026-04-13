@@ -237,31 +237,57 @@ void print_kernel_occupancy_generic(const char* name, const void* func, size_t s
     }
 }
 
+// Two-phase GPU memory allocation.
+//
+// Phase 1 buffers (K1 sieve + K2 MR): d_coords, d_cand_list, d_total_cands, d_bitmap
+//   Peak: ~34 KB/tile  (d_cand_list dominates at 24 KB/tile)
+// Phase 2 buffers (K3 compact + K4 UF + K5 face_encode): d_row_prefix, d_prime_pos,
+//   d_prime_count, d_parent, d_output, d_prime_counts_out
+//   Peak: ~26 KB/tile  (reuses d_coords + d_bitmap from Phase 1)
+// Overall peak: ~34 KB/tile (Phase 1), down from ~50 KB/tile with flat allocation.
+//
+// Phase 1 buffers are sized for capacity_tiles (the max tiles we want to support).
+// Phase 2 buffers are sized for chunk_tiles (the actual chunk size used per pipeline call).
+// This avoids huge Phase 2 allocations when capacity >> chunk size.
+// d_bitmap survives both phases (K2 writes, K3+K4 read).
 struct TileBatchDeviceMemory {
     TileBatchBuffers buf;
     uint16_t* d_fj64_table;
-    int num_tiles;
+    int capacity_tiles;   // Phase 1 buffer capacity (max tiles per burst)
+    int phase2_capacity;  // Phase 2 buffer capacity (chunk size, <= capacity_tiles)
 
-    void allocate(int n) {
-        num_tiles = n;
-        const size_t N = static_cast<size_t>(n);
+    // Allocate Phase 1 buffers at full capacity + Phase 2 buffers at chunk capacity.
+    // Phase 1 (d_coords, d_cand_list, d_total_cands, d_bitmap) sized for capacity.
+    // Phase 2 (d_row_prefix..d_prime_counts_out) sized for chunk_cap.
+    // When capacity == chunk_cap (non-chunked modes), all buffers are the same size.
+    void allocate(int capacity, int chunk_cap) {
+        capacity_tiles = capacity;
+        phase2_capacity = chunk_cap;
+        const size_t N = static_cast<size_t>(capacity);
+        const size_t C = static_cast<size_t>(chunk_cap);
 
+        // Phase 1 buffers — sized for full capacity
         check_cuda(cudaMalloc(&buf.d_coords, sizeof(TileCoord) * N), "alloc d_coords");
         check_cuda(cudaMalloc(&buf.d_cand_list, sizeof(uint32_t) * N * MAX_CANDIDATES_GPU), "alloc d_cand_list");
         check_cuda(cudaMalloc(&buf.d_total_cands, sizeof(uint32_t) * N), "alloc d_total_cands");
         check_cuda(cudaMalloc(&buf.d_bitmap, sizeof(uint32_t) * N * BITMAP_WORDS), "alloc d_bitmap");
-        check_cuda(cudaMalloc(&buf.d_row_prefix, sizeof(uint16_t) * N * (ACTIVE_ROWS + 1)), "alloc d_row_prefix");
-        check_cuda(cudaMalloc(&buf.d_prime_pos, sizeof(uint32_t) * N * MAX_PRIMES_GPU), "alloc d_prime_pos");
-        check_cuda(cudaMalloc(&buf.d_prime_count, sizeof(uint32_t) * N), "alloc d_prime_count");
-        check_cuda(cudaMalloc(&buf.d_parent, sizeof(uint16_t) * N * MAX_PRIMES_GPU), "alloc d_parent");
-        check_cuda(cudaMalloc(&buf.d_output, sizeof(TileOp) * N), "alloc d_output");
-        check_cuda(cudaMalloc(&buf.d_prime_counts_out, sizeof(uint32_t) * N), "alloc d_prime_counts_out");
+
+        // Phase 2 buffers — sized for chunk capacity
+        check_cuda(cudaMalloc(&buf.d_row_prefix, sizeof(uint16_t) * C * (ACTIVE_ROWS + 1)), "alloc d_row_prefix");
+        check_cuda(cudaMalloc(&buf.d_prime_pos, sizeof(uint32_t) * C * MAX_PRIMES_GPU), "alloc d_prime_pos");
+        check_cuda(cudaMalloc(&buf.d_prime_count, sizeof(uint32_t) * C), "alloc d_prime_count");
+        check_cuda(cudaMalloc(&buf.d_parent, sizeof(uint16_t) * C * MAX_PRIMES_GPU), "alloc d_parent");
+        check_cuda(cudaMalloc(&buf.d_output, sizeof(TileOp) * C), "alloc d_output");
+        check_cuda(cudaMalloc(&buf.d_prime_counts_out, sizeof(uint32_t) * C), "alloc d_prime_counts_out");
 
         // Upload FJ64_262K table to device
         check_cuda(cudaMalloc(&d_fj64_table, sizeof(uint16_t) * 262144), "alloc d_fj64_table");
         check_cuda(cudaMemcpy(d_fj64_table, FJ64_262K_TABLE, sizeof(uint16_t) * 262144,
                               cudaMemcpyHostToDevice), "upload fj64_table");
     }
+
+    // Convenience: allocate with capacity == chunk_cap (non-chunked modes).
+    void allocate(int n) { allocate(n, n); }
 
     void free() {
         cudaFree(buf.d_coords);
@@ -698,23 +724,26 @@ bool stream_write_all(const void* buf, size_t len) {
 }
 
 int run_stream() {
-    constexpr int MAX_STREAM_TILES = 400000;  // ~50KB/tile * 400K = 19.1GB — fits 24GB GPU
+    // Fixed-chunk streaming: GPU buffers allocated once at STREAM_CHUNK_SIZE.
+    // Burst coords are read into host memory (cheap — 8 bytes/tile), then
+    // processed in GPU-sized chunks. Burst size is unbounded — the GPU just
+    // iterates over as many chunks as needed.
+    constexpr int STREAM_CHUNK_SIZE = 200000;
 
-    // Allocate GPU buffers once at max capacity — reuse across all bursts
+    // Allocate GPU buffers once — all phases at chunk size (reused across bursts)
     TileBatchDeviceMemory mem{};
-    mem.allocate(MAX_STREAM_TILES);
+    mem.allocate(STREAM_CHUNK_SIZE);
 
-    // Host-side result buffer — allocated once at max capacity
-    std::vector<TileOp> tileops(MAX_STREAM_TILES);
-
-    // Host-side coord read buffer
-    std::vector<TileCoord> all_coords(MAX_STREAM_TILES);
+    // Host-side buffers — grow dynamically per burst
+    std::vector<TileOp> tileops;
+    std::vector<TileCoord> all_coords;
 
     uint64_t total_tiles_processed = 0;
     int burst_count = 0;
     const auto session_start = std::chrono::steady_clock::now();
 
-    std::fprintf(stderr, "stream: ready, max_tiles_per_burst=%d\n", MAX_STREAM_TILES);
+    std::fprintf(stderr, "stream: ready, chunk_size=%d (burst size unbounded)\n",
+                 STREAM_CHUNK_SIZE);
 
     for (;;) {
         // Read burst header: [num_tiles, burst_idx_bytes, coords_bytes]
@@ -728,12 +757,15 @@ int run_stream() {
         const uint32_t burst_idx_bytes = header[1];
         const uint32_t coords_bytes = header[2];
 
-        if (num_tiles == 0 || num_tiles > static_cast<uint32_t>(MAX_STREAM_TILES)) {
-            std::fprintf(stderr, "stream: invalid num_tiles=%u (max=%d)\n",
-                         num_tiles, MAX_STREAM_TILES);
+        if (num_tiles == 0) {
+            std::fprintf(stderr, "stream: invalid num_tiles=0\n");
             mem.free();
             return 1;
         }
+
+        // Ensure host buffers are large enough for this burst
+        if (all_coords.size() < num_tiles) all_coords.resize(num_tiles);
+        if (tileops.size() < num_tiles) tileops.resize(num_tiles);
 
         // Read and discard burst_index data (we only need coords for GPU processing;
         // the burst_index structure is used by the campaign side for compositor ingestion)
@@ -792,14 +824,13 @@ int run_stream() {
             }
         }
 
-        // Process on GPU — same chunking as campaign mode for large bursts
+        // Process on GPU — iterate in STREAM_CHUNK_SIZE chunks (GPU buffer capacity)
         const int total = static_cast<int>(num_tiles);
-        constexpr int CHUNK_SIZE = 20000;
-        const int num_chunks = (total + CHUNK_SIZE - 1) / CHUNK_SIZE;
+        const int num_chunks = (total + STREAM_CHUNK_SIZE - 1) / STREAM_CHUNK_SIZE;
 
         for (int chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
-            const int chunk_start = chunk_idx * CHUNK_SIZE;
-            const int chunk_tiles = std::min(CHUNK_SIZE, total - chunk_start);
+            const int chunk_start = chunk_idx * STREAM_CHUNK_SIZE;
+            const int chunk_tiles = std::min(STREAM_CHUNK_SIZE, total - chunk_start);
 
             check_cuda(cudaMemcpy(mem.buf.d_coords,
                                   all_coords.data() + chunk_start,
