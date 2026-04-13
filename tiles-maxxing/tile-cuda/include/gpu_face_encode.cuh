@@ -423,6 +423,9 @@ __device__ void encode_tileop_gpu(const FaceDataGPU* face_data, TileOp* output) 
     output->bytes[1] = EMPTY_OFFSET;
     output->bytes[2] = EMPTY_OFFSET;
 
+    // L/R face encoding steals bit 7 of the group byte for the h1 MSB,
+    // leaving only 7 bits (0-127) for the group ID.  Tiles with >= 128
+    // groups cannot represent all L/R group labels -- poison the TileOp.
     if (face_data->group_count > 127) {
         for (int i = 0; i < TILEOP_SIZE; ++i) {
             output->bytes[i] = OVERFLOW_SENTINEL;

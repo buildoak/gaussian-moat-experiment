@@ -182,6 +182,10 @@ uint8_t max_group_label(const TileOp& tileop) {
 TileOp encode_tileop(const FaceData& face_data) {
     TileOp tileop = make_empty_tileop();
 
+    // L/R face encoding steals bit 7 of the group byte for the h1 MSB,
+    // leaving only 7 bits (0-127) for the group ID.  Tiles with >= 128
+    // groups cannot represent all L/R group labels, so the entire TileOp
+    // must be poisoned to prevent silent corruption in the compositor.
     if (face_data.group_count > 127) {
         return make_overflow_tileop();
     }
