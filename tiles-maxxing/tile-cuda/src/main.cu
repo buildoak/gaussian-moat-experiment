@@ -220,8 +220,8 @@ struct BackwardOffsetsHost {
 void init_backward_offsets_host(BackwardOffsetsHost& offsets) {
     int count = 0;
 
-    for (int dr = -6; dr <= 0; ++dr) {
-        for (int dc = -6; dc <= 6; ++dc) {
+    for (int dr = -COLLAR; dr <= 0; ++dr) {
+        for (int dc = -COLLAR; dc <= COLLAR; ++dc) {
             if ((dr > 0) || (dr == 0 && dc >= 0)) {
                 continue;
             }

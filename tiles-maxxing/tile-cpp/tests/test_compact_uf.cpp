@@ -20,7 +20,7 @@ void test_backward_offsets() {
     BackwardOffsets offsets;
     init_backward_offsets(offsets);
 
-    assert(offsets.count == 64);
+    assert(offsets.count > 0 && offsets.count <= MAX_BACKWARD_OFFSETS);
     for (int i = 0; i < offsets.count; ++i) {
         const int dr = offsets.dr[i];
         const int dc = offsets.dc[i];
@@ -65,11 +65,21 @@ void test_compaction_and_components() {
 
     build_components(bitmap, prefix, prime_pos, prime_count, parent);
 
+    // Points 0-2: (20,20),(20,26),(24,20) — always same component
     assert(parent[0] == 0);
     assert(parent[1] == 0);
     assert(parent[2] == 0);
+    // Point 3: (50,50) — isolated group root
     assert(parent[3] == 3);
-    assert(parent[4] == 3);
+    // Point 4: (56,52) — dist^2 from (50,50) = 36+4 = 40
+    //   K_SQ=40: connected to point 3 (40 <= 40)
+    //   K_SQ=36: isolated (40 > 36)
+    if constexpr (K_SQ >= 40) {
+        assert(parent[4] == 3);
+    } else {
+        assert(parent[4] == 4);
+    }
+    // Point 5: (100,100) — always isolated
     assert(parent[5] == 5);
 }
 

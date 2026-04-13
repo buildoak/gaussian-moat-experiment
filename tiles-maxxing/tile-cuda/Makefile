@@ -1,10 +1,13 @@
 NVCC ?= /usr/local/cuda/bin/nvcc
 CXX ?= g++
 
+# K_SQ parameterization: `make K_SQ=36` or just `make` for default K_SQ=40
+K_SQ ?= 40
+
 TARGET := tile_kernel
 PROFILE_TARGET := tile_kernel_profile
 SRC_DIR := src
-OBJ_DIR := build
+OBJ_DIR := build-k$(K_SQ)
 INCLUDE_DIR := include
 TEST_DIR := test
 
@@ -15,8 +18,8 @@ CPP_INC := $(CPP_DIR)/include
 
 NVCCFLAGS := -arch=sm_87 -O3 -std=c++17 --expt-relaxed-constexpr -lineinfo
 NVCCFLAGS_PROFILE := $(NVCCFLAGS) -DPROFILE_PHASES
-CPPFLAGS := -I$(INCLUDE_DIR)
-CXXFLAGS := -O3 -std=c++17 -Wall -I$(CPP_INC) -I$(TEST_DIR)
+CPPFLAGS := -I$(INCLUDE_DIR) -DK_SQ_VAL=$(K_SQ)
+CXXFLAGS := -O3 -std=c++17 -Wall -I$(CPP_INC) -I$(TEST_DIR) -DK_SQ_VAL=$(K_SQ)
 LDFLAGS :=
 
 SRCS := $(SRC_DIR)/main.cu $(SRC_DIR)/tile_kernel.cu

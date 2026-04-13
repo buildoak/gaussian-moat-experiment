@@ -12,10 +12,12 @@ from uf import build_components, make_backward_offsets
 from analysis import packed_budget_counts
 from tileop import decode_tileop, parse_tileop
 
+import math as _math
+
 TILE_SIDE = 256
 S = TILE_SIDE
 DEFAULT_K = 40
-COLLAR = 7
+COLLAR = _math.ceil(_math.sqrt(DEFAULT_K))
 SIDE_EXP = TILE_SIDE + 2 * COLLAR + 1
 HALO = SIDE_EXP
 BIT_WORD_BITS = 32

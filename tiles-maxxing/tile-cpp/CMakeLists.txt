@@ -5,6 +5,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# K_SQ parameterization: cmake -DK_SQ=36 .. (default 40)
+if(NOT DEFINED K_SQ)
+    set(K_SQ 40)
+endif()
+message(STATUS "Building tile-cpp with K_SQ=${K_SQ}")
+add_compile_definitions(K_SQ_VAL=${K_SQ})
+
 # Warnings
 add_compile_options(-Wall -Wextra -Wpedantic -Wno-unused-parameter)
 

@@ -49,8 +49,8 @@ const BackwardOffsets& get_backward_offsets() {
 void init_backward_offsets(BackwardOffsets& offsets) {
     int count = 0;
 
-    for (int dr = -6; dr <= 0; ++dr) {
-        for (int dc = -6; dc <= 6; ++dc) {
+    for (int dr = -COLLAR; dr <= 0; ++dr) {
+        for (int dc = -COLLAR; dc <= COLLAR; ++dc) {
             if ((dr > 0) || (dr == 0 && dc >= 0)) {
                 continue;
             }
@@ -58,7 +58,7 @@ void init_backward_offsets(BackwardOffsets& offsets) {
                 continue;
             }
 
-            assert(count < 64);
+            assert(count < MAX_BACKWARD_OFFSETS);
             offsets.dr[count] = dr;
             offsets.dc[count] = dc;
             ++count;
@@ -66,7 +66,6 @@ void init_backward_offsets(BackwardOffsets& offsets) {
     }
 
     offsets.count = count;
-    assert(offsets.count == 64);
 }
 
 void build_components(const uint32_t* bitmap, const uint32_t* prefix,

@@ -3,12 +3,15 @@
 #include "constants.h"
 #include <cstdint>
 
+// Safe upper bound for backward offset arrays (covers K_SQ up to ~50).
+constexpr int MAX_BACKWARD_OFFSETS = 80;
+
 // Precomputed backward offsets for neighbor scan.
 // All (dr, dc) with dr^2 + dc^2 <= K_SQ and (dr < 0 or (dr == 0 and dc < 0)).
 struct BackwardOffsets {
-    int dr[64];
-    int dc[64];
-    int count;  // should be 64
+    int dr[MAX_BACKWARD_OFFSETS];
+    int dc[MAX_BACKWARD_OFFSETS];
+    int count;
 };
 
 // Compute backward offset table (call once at init).

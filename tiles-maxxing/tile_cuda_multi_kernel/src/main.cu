@@ -9,6 +9,7 @@
 
 #include <array>
 #include <chrono>
+#include <cinttypes>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
@@ -153,8 +154,8 @@ struct BackwardOffsetsHost {
 
 void init_backward_offsets_host(BackwardOffsetsHost& offsets) {
     int count = 0;
-    for (int dr = -6; dr <= 0; ++dr) {
-        for (int dc = -6; dc <= 6; ++dc) {
+    for (int dr = -COLLAR; dr <= 0; ++dr) {
+        for (int dc = -COLLAR; dc <= COLLAR; ++dc) {
             if ((dr > 0) || (dr == 0 && dc >= 0)) continue;
             if ((dr * dr + dc * dc) > K_SQ) continue;
             if (count >= NUM_BACKWARD_OFFSETS) {
@@ -379,6 +380,275 @@ Args parse_args(int argc, char** argv) {
     return Args{Mode::BENCH, n};
 }
 
+// Dump mode: process tiles from a binary coords file and write results to output file.
+// Input format (little-endian):
+//   uint32_t num_tiles
+//   Repeated num_tiles times: int64_t a_lo, int64_t b_lo
+// Output format (little-endian):
+//   uint32_t num_tiles
+//   Repeated num_tiles times: int64_t a_lo, int64_t b_lo, uint32_t prime_count, uint8_t tileop[128]
+int run_dump(const char* coords_path, const char* output_path) {
+    constexpr int CHUNK_SIZE = 20000;
+
+    // --- Read coords file ---
+    FILE* fin = std::fopen(coords_path, "rb");
+    if (!fin) {
+        std::fprintf(stderr, "dump: cannot open coords file: %s\n", coords_path);
+        return 1;
+    }
+
+    uint32_t num_tiles = 0;
+    if (std::fread(&num_tiles, sizeof(uint32_t), 1, fin) != 1) {
+        std::fprintf(stderr, "dump: failed to read num_tiles from %s\n", coords_path);
+        std::fclose(fin);
+        return 1;
+    }
+    std::printf("dump: reading %u tiles from %s\n", num_tiles, coords_path);
+
+    std::vector<TileCoord> all_coords(num_tiles);
+    for (uint32_t i = 0; i < num_tiles; ++i) {
+        int64_t a_lo = 0, b_lo = 0;
+        if (std::fread(&a_lo, sizeof(int64_t), 1, fin) != 1 ||
+            std::fread(&b_lo, sizeof(int64_t), 1, fin) != 1) {
+            std::fprintf(stderr, "dump: truncated coords file at tile %u\n", i);
+            std::fclose(fin);
+            return 1;
+        }
+        all_coords[i] = TileCoord{a_lo, b_lo};
+    }
+    std::fclose(fin);
+
+    // --- Open output file ---
+    FILE* fout = std::fopen(output_path, "wb");
+    if (!fout) {
+        std::fprintf(stderr, "dump: cannot open output file: %s\n", output_path);
+        return 1;
+    }
+
+    // Write header: total tile count
+    if (std::fwrite(&num_tiles, sizeof(uint32_t), 1, fout) != 1) {
+        std::fprintf(stderr, "dump: failed to write output header\n");
+        std::fclose(fout);
+        return 1;
+    }
+
+    // --- Wall-clock timer ---
+    const auto wall_start = std::chrono::steady_clock::now();
+
+    const int total = static_cast<int>(num_tiles);
+    const int num_chunks = (total + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    int tiles_done = 0;
+
+    // Allocate GPU buffers once for max chunk size — reuse across all chunks
+    TileBatchDeviceMemory mem{};
+    mem.allocate(CHUNK_SIZE);
+
+    // Host-side result buffers — allocated once at max chunk size
+    std::vector<TileOp> tileops(CHUNK_SIZE);
+    std::vector<uint32_t> prime_counts(CHUNK_SIZE, 0U);
+
+    for (int chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+        const int chunk_start = chunk_idx * CHUNK_SIZE;
+        const int chunk_tiles = std::min(CHUNK_SIZE, total - chunk_start);
+
+        // Upload coords for this chunk (only chunk_tiles worth)
+        check_cuda(cudaMemcpy(mem.buf.d_coords, all_coords.data() + chunk_start,
+                              sizeof(TileCoord) * static_cast<size_t>(chunk_tiles),
+                              cudaMemcpyHostToDevice), "dump: upload coords");
+
+        // Launch full pipeline (no timing overhead needed for dump)
+        launch_pipeline(mem, chunk_tiles, nullptr);
+
+        // Copy results back (only chunk_tiles worth)
+        check_cuda(cudaMemcpy(tileops.data(), mem.buf.d_output,
+                              sizeof(TileOp) * static_cast<size_t>(chunk_tiles),
+                              cudaMemcpyDeviceToHost), "dump: dl tileops");
+        check_cuda(cudaMemcpy(prime_counts.data(), mem.buf.d_prime_counts_out,
+                              sizeof(uint32_t) * static_cast<size_t>(chunk_tiles),
+                              cudaMemcpyDeviceToHost), "dump: dl prime_counts");
+
+        // Write chunk results to output file
+        for (int i = 0; i < chunk_tiles; ++i) {
+            const TileCoord& tc = all_coords[static_cast<size_t>(chunk_start + i)];
+            const uint32_t pc = prime_counts[static_cast<size_t>(i)];
+            if (std::fwrite(&tc.a_lo, sizeof(int64_t), 1, fout) != 1 ||
+                std::fwrite(&tc.b_lo, sizeof(int64_t), 1, fout) != 1 ||
+                std::fwrite(&pc, sizeof(uint32_t), 1, fout) != 1 ||
+                std::fwrite(tileops[static_cast<size_t>(i)].bytes, 1, sizeof(TileOp), fout) != sizeof(TileOp)) {
+                std::fprintf(stderr, "dump: write error at tile %d\n", chunk_start + i);
+                mem.free();
+                std::fclose(fout);
+                return 1;
+            }
+        }
+
+        tiles_done += chunk_tiles;
+        std::printf("Chunk %d/%d: %d tiles processed\n", chunk_idx + 1, num_chunks, chunk_tiles);
+    }
+
+    // Free GPU buffers after all chunks are done
+    mem.free();
+
+    std::fclose(fout);
+
+    const auto wall_end = std::chrono::steady_clock::now();
+    const double wall_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(wall_end - wall_start).count()) / 1000.0;
+
+    std::printf("dump: %d tiles -> %s  (%.1f ms total, %.3f ms/tile)\n",
+                tiles_done, output_path, wall_ms,
+                wall_ms / static_cast<double>(tiles_done > 0 ? tiles_done : 1));
+    return 0;
+}
+
+// Campaign mode: process tiles from burst_index + coords files, write raw TileOp bytes.
+// burst_index.bin format (little-endian):
+//   uint32_t  num_towers
+//   uint32_t  total_tiles
+//   uint32_t  tiles_per_tower[num_towers]
+// coords.bin format (little-endian):
+//   uint32_t  num_tiles
+//   TileCoord coords[num_tiles]    (int64_t a_lo, int64_t b_lo each)
+// Output: raw TileOp bytes only — total_tiles * 128 bytes, tower-major order.
+int run_campaign(const char* burst_index_path, const char* coords_path, const char* output_path) {
+    constexpr int CHUNK_SIZE = 20000;
+
+    // --- Read burst_index file ---
+    FILE* fburst = std::fopen(burst_index_path, "rb");
+    if (!fburst) {
+        std::fprintf(stderr, "campaign: cannot open burst index file: %s\n", burst_index_path);
+        return 1;
+    }
+
+    uint32_t num_towers = 0;
+    uint32_t total_tiles = 0;
+    if (std::fread(&num_towers, sizeof(uint32_t), 1, fburst) != 1 ||
+        std::fread(&total_tiles, sizeof(uint32_t), 1, fburst) != 1) {
+        std::fprintf(stderr, "campaign: failed to read burst index header from %s\n", burst_index_path);
+        std::fclose(fburst);
+        return 1;
+    }
+
+    std::vector<uint32_t> tiles_per_tower(num_towers);
+    if (num_towers > 0 &&
+        std::fread(tiles_per_tower.data(), sizeof(uint32_t), num_towers, fburst) != num_towers) {
+        std::fprintf(stderr, "campaign: truncated tiles_per_tower in %s\n", burst_index_path);
+        std::fclose(fburst);
+        return 1;
+    }
+    std::fclose(fburst);
+
+    // Validate sum(tiles_per_tower) == total_tiles
+    uint64_t sum_tpt = 0;
+    for (uint32_t i = 0; i < num_towers; ++i) {
+        sum_tpt += tiles_per_tower[i];
+    }
+    if (sum_tpt != static_cast<uint64_t>(total_tiles)) {
+        std::fprintf(stderr, "campaign: tiles_per_tower sum (%" PRIu64 ") != total_tiles (%u)\n",
+                     sum_tpt, total_tiles);
+        return 1;
+    }
+
+    // --- Read coords file ---
+    FILE* fin = std::fopen(coords_path, "rb");
+    if (!fin) {
+        std::fprintf(stderr, "campaign: cannot open coords file: %s\n", coords_path);
+        return 1;
+    }
+
+    uint32_t num_tiles_coord = 0;
+    if (std::fread(&num_tiles_coord, sizeof(uint32_t), 1, fin) != 1) {
+        std::fprintf(stderr, "campaign: failed to read num_tiles from %s\n", coords_path);
+        std::fclose(fin);
+        return 1;
+    }
+
+    // Validate coords.num_tiles == burst_index.total_tiles
+    if (num_tiles_coord != total_tiles) {
+        std::fprintf(stderr, "campaign: coords num_tiles (%u) != burst_index total_tiles (%u)\n",
+                     num_tiles_coord, total_tiles);
+        std::fclose(fin);
+        return 1;
+    }
+
+    std::vector<TileCoord> all_coords(total_tiles);
+    for (uint32_t i = 0; i < total_tiles; ++i) {
+        int64_t a_lo = 0, b_lo = 0;
+        if (std::fread(&a_lo, sizeof(int64_t), 1, fin) != 1 ||
+            std::fread(&b_lo, sizeof(int64_t), 1, fin) != 1) {
+            std::fprintf(stderr, "campaign: truncated coords file at tile %u\n", i);
+            std::fclose(fin);
+            return 1;
+        }
+        all_coords[i] = TileCoord{a_lo, b_lo};
+    }
+    std::fclose(fin);
+
+    // --- Open output file ---
+    FILE* fout = std::fopen(output_path, "wb");
+    if (!fout) {
+        std::fprintf(stderr, "campaign: cannot open output file: %s\n", output_path);
+        return 1;
+    }
+
+    // --- Wall-clock timer ---
+    const auto wall_start = std::chrono::steady_clock::now();
+
+    const int total = static_cast<int>(total_tiles);
+    const int num_chunks = (total + CHUNK_SIZE - 1) / CHUNK_SIZE;
+    int tiles_done = 0;
+
+    // Allocate GPU buffers once for max chunk size — reuse across all chunks
+    TileBatchDeviceMemory mem{};
+    mem.allocate(CHUNK_SIZE);
+
+    // Host-side result buffers — allocated once at max chunk size
+    std::vector<TileOp> tileops(CHUNK_SIZE);
+
+    for (int chunk_idx = 0; chunk_idx < num_chunks; ++chunk_idx) {
+        const int chunk_start = chunk_idx * CHUNK_SIZE;
+        const int chunk_tiles = std::min(CHUNK_SIZE, total - chunk_start);
+
+        // Upload coords for this chunk
+        check_cuda(cudaMemcpy(mem.buf.d_coords, all_coords.data() + chunk_start,
+                              sizeof(TileCoord) * static_cast<size_t>(chunk_tiles),
+                              cudaMemcpyHostToDevice), "campaign: upload coords");
+
+        // Launch full pipeline
+        launch_pipeline(mem, chunk_tiles, nullptr);
+
+        // Copy TileOp results back (no prime counts needed)
+        check_cuda(cudaMemcpy(tileops.data(), mem.buf.d_output,
+                              sizeof(TileOp) * static_cast<size_t>(chunk_tiles),
+                              cudaMemcpyDeviceToHost), "campaign: dl tileops");
+
+        // Write raw TileOp bytes only — no header, no metadata
+        for (int i = 0; i < chunk_tiles; ++i) {
+            if (std::fwrite(&tileops[i], TILEOP_SIZE, 1, fout) != 1) {
+                std::fprintf(stderr, "campaign: write error at tile %d\n", chunk_start + i);
+                mem.free();
+                std::fclose(fout);
+                return 1;
+            }
+        }
+
+        tiles_done += chunk_tiles;
+    }
+
+    mem.free();
+    std::fclose(fout);
+
+    const auto wall_end = std::chrono::steady_clock::now();
+    const double wall_ms = static_cast<double>(
+        std::chrono::duration_cast<std::chrono::microseconds>(wall_end - wall_start).count()) / 1000.0;
+
+    // Summary to stderr (not stdout)
+    std::fprintf(stderr, "campaign: %d tiles (%u towers) -> %s  (%.1f ms total, %.3f ms/tile)\n",
+                 tiles_done, num_towers, output_path, wall_ms,
+                 wall_ms / static_cast<double>(tiles_done > 0 ? tiles_done : 1));
+    return 0;
+}
+
 void run_test() {
     std::vector<TileCoord> coords = default_tiles();
     const int num_tiles = static_cast<int>(coords.size());
@@ -540,6 +810,46 @@ void run_bench(int tile_count) {
 }  // namespace
 
 int main(int argc, char** argv) {
+    // Early dispatch for campaign mode
+    if (argc >= 2 && std::strcmp(argv[1], "campaign") == 0) {
+        if (argc != 5) {
+            std::fprintf(stderr, "Usage: %s campaign <burst_index.bin> <coords.bin> <output.bin>\n", argv[0]);
+            return 1;
+        }
+        // GPU init (sieve tables, offsets, constants)
+        SieveTablesBarrett tables{};
+        if (!init_sieve_tables_host(tables)) {
+            std::fprintf(stderr, "failed to initialize sieve tables\n");
+            return 1;
+        }
+        BackwardOffsetsHost offsets{};
+        init_backward_offsets_host(offsets);
+        upload_sieve_tables(tables);
+        upload_backward_offsets(offsets.dr, offsets.dc, offsets.count);
+        upload_constants();
+        return run_campaign(argv[2], argv[3], argv[4]);
+    }
+
+    // Early dispatch for dump mode (before parse_args, which doesn't understand it)
+    if (argc >= 2 && std::strcmp(argv[1], "dump") == 0) {
+        if (argc < 4) {
+            std::fprintf(stderr, "Usage: %s dump <coords.bin> <output.bin>\n", argv[0]);
+            return 1;
+        }
+        // GPU init (sieve tables, offsets, constants) required before any kernel launch
+        SieveTablesBarrett tables{};
+        if (!init_sieve_tables_host(tables)) {
+            std::fprintf(stderr, "failed to initialize sieve tables\n");
+            return 1;
+        }
+        BackwardOffsetsHost offsets{};
+        init_backward_offsets_host(offsets);
+        upload_sieve_tables(tables);
+        upload_backward_offsets(offsets.dr, offsets.dc, offsets.count);
+        upload_constants();
+        return run_dump(argv[2], argv[3]);
+    }
+
     Args args = parse_args(argc, argv);
 
     SieveTablesBarrett tables{};

@@ -1,14 +1,17 @@
 NVCC ?= /usr/local/cuda/bin/nvcc
 
+# K_SQ parameterization: `make K_SQ=36` or just `make` for default K_SQ=40
+K_SQ ?= 40
+
 TARGET := tile_kernel_multi
 PROFILE_TARGET := tile_kernel_multi_profile
 SRC_DIR := src
-OBJ_DIR := build
+OBJ_DIR := build-k$(K_SQ)
 INCLUDE_DIR := include
 
-# Base flags
+# Base flags — K_SQ propagated to all translation units
 BASE_FLAGS := -arch=sm_87 -O3 -std=c++17 --expt-relaxed-constexpr -lineinfo --ptxas-options=-v
-CPPFLAGS := -I$(INCLUDE_DIR)
+CPPFLAGS := -I$(INCLUDE_DIR) -DK_SQ_VAL=$(K_SQ)
 LDFLAGS :=
 
 # Per-kernel register caps

@@ -93,24 +93,45 @@ void test_extract_faces() {
     const TileCoord coord = {850000128, 490746880};
     const FaceData face_data = extract_faces(coord, bitmap, prefix, prime_pos, 4, parent);
 
-    expect_eq_int(face_data.port_count, 4, "extracted port count");
-    expect_eq_int(face_data.group_count, 3, "extracted group count");
+    // Point D at tile_row=250: on FACE_O only when 250 >= TILE_SIDE - COLLAR + 1
+    // K_SQ=40 (COLLAR=7): 250 >= 250 => yes (4 ports, 3 groups)
+    // K_SQ=36 (COLLAR=6): 250 >= 251 => no  (3 ports, 2 groups)
+    constexpr bool d_on_face_o = (250 >= TILE_SIDE - COLLAR + 1);
+    if constexpr (d_on_face_o) {
+        expect_eq_int(face_data.port_count, 4, "extracted port count");
+        expect_eq_int(face_data.group_count, 3, "extracted group count");
 
-    expect_eq_int(face_data.ports[0].face, FACE_I, "port 0 face");
-    expect_eq_int(face_data.ports[0].group, 1, "port 0 group");
-    expect_eq_u16(face_data.ports[0].h1, 0, "port 0 h1");
+        expect_eq_int(face_data.ports[0].face, FACE_I, "port 0 face");
+        expect_eq_int(face_data.ports[0].group, 1, "port 0 group");
+        expect_eq_u16(face_data.ports[0].h1, 0, "port 0 h1");
 
-    expect_eq_int(face_data.ports[1].face, FACE_I, "port 1 face");
-    expect_eq_int(face_data.ports[1].group, 2, "port 1 group");
-    expect_eq_u16(face_data.ports[1].h1, 20, "port 1 h1");
+        expect_eq_int(face_data.ports[1].face, FACE_I, "port 1 face");
+        expect_eq_int(face_data.ports[1].group, 2, "port 1 group");
+        expect_eq_u16(face_data.ports[1].h1, 20, "port 1 h1");
 
-    expect_eq_int(face_data.ports[2].face, FACE_O, "port 2 face");
-    expect_eq_int(face_data.ports[2].group, 3, "port 2 group");
-    expect_eq_u16(face_data.ports[2].h1, 30, "port 2 h1");
+        expect_eq_int(face_data.ports[2].face, FACE_O, "port 2 face");
+        expect_eq_int(face_data.ports[2].group, 3, "port 2 group");
+        expect_eq_u16(face_data.ports[2].h1, 30, "port 2 h1");
 
-    expect_eq_int(face_data.ports[3].face, FACE_L, "port 3 face");
-    expect_eq_int(face_data.ports[3].group, 1, "port 3 group");
-    expect_eq_u16(face_data.ports[3].h1, 0, "port 3 h1");
+        expect_eq_int(face_data.ports[3].face, FACE_L, "port 3 face");
+        expect_eq_int(face_data.ports[3].group, 1, "port 3 group");
+        expect_eq_u16(face_data.ports[3].h1, 0, "port 3 h1");
+    } else {
+        expect_eq_int(face_data.port_count, 3, "extracted port count");
+        expect_eq_int(face_data.group_count, 2, "extracted group count");
+
+        expect_eq_int(face_data.ports[0].face, FACE_I, "port 0 face");
+        expect_eq_int(face_data.ports[0].group, 1, "port 0 group");
+        expect_eq_u16(face_data.ports[0].h1, 0, "port 0 h1");
+
+        expect_eq_int(face_data.ports[1].face, FACE_I, "port 1 face");
+        expect_eq_int(face_data.ports[1].group, 2, "port 1 group");
+        expect_eq_u16(face_data.ports[1].h1, 20, "port 1 h1");
+
+        expect_eq_int(face_data.ports[2].face, FACE_L, "port 2 face");
+        expect_eq_int(face_data.ports[2].group, 1, "port 2 group");
+        expect_eq_u16(face_data.ports[2].h1, 0, "port 2 h1");
+    }
 }
 
 void test_extract_shared_boundary_points() {

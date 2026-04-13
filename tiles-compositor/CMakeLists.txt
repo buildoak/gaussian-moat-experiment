@@ -52,6 +52,21 @@ add_executable(test_compositor_octant test/test_compositor_octant.cpp)
 target_link_libraries(test_compositor_octant PRIVATE compositor)
 target_compile_options(test_compositor_octant PRIVATE -Wall -Wextra)
 
+add_executable(dump_grid test/dump_grid.cpp)
+target_link_libraries(dump_grid PRIVATE compositor)
+target_compile_options(dump_grid PRIVATE -Wall -Wextra)
+
+# K_SQ parameterization: cmake -DK_SQ=36 .. (default 40)
+if(NOT DEFINED K_SQ)
+    set(K_SQ 40)
+endif()
+message(STATUS "Building tiles-compositor with K_SQ=${K_SQ}")
+
+set(TILE_CPP_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../tiles-maxxing/tile-cpp")
+
 add_executable(campaign src/campaign.cpp)
-target_link_libraries(campaign PRIVATE compositor)
+target_link_libraries(campaign PRIVATE compositor
+    "${TILE_CPP_ROOT}/build-k${K_SQ}/libtile.a")
+target_include_directories(campaign PRIVATE "${TILE_CPP_ROOT}/include")
+target_compile_definitions(campaign PRIVATE K_SQ_VAL=${K_SQ})
 target_compile_options(campaign PRIVATE -Wall -Wextra)

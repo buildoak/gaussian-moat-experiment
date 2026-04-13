@@ -1,12 +1,29 @@
 #pragma once
 #include <cstdint>
 
+// ---------------------------------------------------------------------------
+// K_SQ parameterization: pass -DK_SQ_VAL=N at compile time, default 40
+// All dependent geometry constants are auto-derived via constexpr.
+// ---------------------------------------------------------------------------
+#ifndef K_SQ_VAL
+#define K_SQ_VAL 40
+#endif
+
+namespace detail {
+constexpr int32_t ceil_isqrt(int32_t n) {
+    if (n <= 0) return 0;
+    int32_t x = 1;
+    while (x * x < n) ++x;
+    return x;
+}
+}  // namespace detail
+
 // Tile geometry
 constexpr int32_t TILE_SIDE   = 256;
-constexpr int32_t COLLAR      = 7;
-constexpr int32_t TILE_POINTS = TILE_SIDE + 1;            // 257 lattice points per axis
-constexpr int32_t SIDE_EXP    = TILE_POINTS + 2 * COLLAR; // 271 = 257 tile points + 14 collar
-constexpr int32_t K_SQ        = 40;                       // connectivity threshold (distance^2)
+constexpr int32_t K_SQ        = K_SQ_VAL;                        // connectivity threshold (distance^2)
+constexpr int32_t COLLAR      = detail::ceil_isqrt(K_SQ);        // ceil(sqrt(K_SQ))
+constexpr int32_t TILE_POINTS = TILE_SIDE + 1;                   // 257 lattice points per axis
+constexpr int32_t SIDE_EXP    = TILE_POINTS + 2 * COLLAR;        // expanded domain side
 
 // Sieve parameters
 constexpr uint32_t SIEVE_LIMIT = 10000;
