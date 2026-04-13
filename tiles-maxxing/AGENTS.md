@@ -6,18 +6,56 @@
 
 When building CUDA kernels, design from the specs — not by porting legacy `.cu` files. The old kernels encode assumptions (buffer sizes, phase boundaries, memory layout) that may not survive the spec.
 
+## Directory Layout
+
+```
+tiles-maxxing/
+├── tile-cpp/                  — C++ reference implementation (libtile.a)
+├── tile_cuda_multi_kernel/    — Current GPU path, 5-kernel pipeline
+│                                (K1 Sieve → K2 MR → K3 Compact → K4 UF → K5 FaceEncode)
+├── tiles-compositor/          — Campaign runner + compositor library + grid
+│                                (moved in-tree from sibling directory 2026-04-13)
+├── tile-compare/              — Python comparison tools (compare.py, analyze.py, dump_io.py)
+├── tile-validator/            — Python tile validation
+├── docs/                      — 6 canonical specs + docs/supportive/ (analysis/audit reports)
+├── vast-ai/                   — Deploy script for vast.ai instances
+├── results/                   — Benchmark and campaign result dumps
+│   ├── 4090-300k/             — 300K tile benchmark (42MB)
+│   └── 4090-octant/           — Full octant dump R=850M K_SQ=40 (10GB)
+├── artifacts/                 — Data artifacts, coordinate files, scratch, profiling
+│   ├── *.bin                  — Coordinate and C++ dump files
+│   ├── gen_coords.py          — Coordinate generation script
+│   ├── parallel_cpp_dump.py   — Parallel C++ dump
+│   ├── tmp/                   — Old codex prompts, planner prompts
+│   └── profiling/             — 4090 profiling data
+├── _archive/                  — Superseded or historical items
+│   ├── tile-cuda/             — Old single-kernel CUDA (superseded by tile_cuda_multi_kernel)
+│   └── .dispatch-*            — Old agent dispatch prompts (Apr 9)
+├── AGENTS.md                  — This file (project status and structure)
+└── CLAUDE.md                  — Agent instructions
+```
+
 ## Authoritative Specs
 
-Three documents in `docs/` are the **single most authoritative source of truth** for this project:
+Six documents in `docs/` are the **single most authoritative source of truth** for this project:
 
 | Spec | File | Governs |
 |------|------|---------|
 | Tile Spec | `docs/tile_spec.md` | Tile geometry, coordinate system, collar, sieve domain |
 | Grid Spec | `docs/grid_spec.md` | Grid layout, tiling scheme, octant structure, radial shells |
 | Tile Internals Spec | `docs/tile_operations.md` | 5-phase pipeline, TileOp encoding, port structure, group semantics |
+| CUDA Internals | `docs/tile_internals_cuda.md` | GPU kernel implementation details |
 | Compositor Spec | `docs/compositor_spec.md` | Tile composition, seam merging, multi-tile operations |
+| Campaign Spec | `docs/campaign_spec.md` | Campaign runner pipeline, burst mode, radial sweep |
 
 **Authority chain:** User input > Specs > Code. Code must align with specs. If code contradicts a spec, the code is wrong unless there is strong enough evidence to challenge the spec — in which case the agent **must explicitly surface the conflict to the user** before proceeding. Agents do not silently override specs.
+
+## Build Parameterization
+
+K_SQ is now a build parameter, not hardcoded:
+- `make K_SQ=36` or `cmake -DK_SQ=36` — all derived constants auto-computed via constexpr
+- Separate build directories: `build-k36/`, `build-k40/`
+- Default is **K_SQ=40**
 
 ## Tile Boundary Convention (HARD RULE)
 
@@ -77,6 +115,60 @@ The grid sweeps from the Y axis (tower j=0, x≈0) rightward to y=x (45°). Spli
 7. **256 threads/block breaks correctness** — kernels assume 288 for 257-column coverage. 320 threads works but performs identically. 288 is the only valid choice.
 8. **Pipeline is at hardware INT32 throughput limits.** All tested optimizations (mont_to_gpu fix, `__ldg`, register sweep, multi-stream, K1 smem, sieve extension) are neutral or harmful. The pipeline is bound by the Ada Lovelace INT32 pipe across K1, K2, and K4. Remaining paths: algorithmic changes to reduce total INT operations per candidate (e.g., faster primality test, reduced sieve iteration cost), or moving to hardware with higher INT32 throughput (H100's 128 SM x 4 INT32 units/SM).
 
+## Compositor (tiles-compositor/)
+
+The compositor is an in-tree C++ library at `tiles-compositor/` that takes TileOp binaries and produces a SPANNING/MOAT verdict via union-find over tile groups. Includes the campaign runner and grid logic.
+
+**Reference document:** `tiles-compositor/docs/supportive/2026-04-12-compositor-logic.md` — single source of truth for all compositor logic. Read it before touching compositor code.
+
+### Face Convention (HARD RULE)
+
+| Face | Enum | Position | Direction | h1 stored? |
+|------|------|----------|-----------|------------|
+| FACE_I | 0 | Bottom of tile (low b) | Within-tower | No |
+| FACE_O | 1 | Top of tile (high b) | Within-tower | No |
+| FACE_L | 2 | Left side (low a) | Between-tower | Yes |
+| FACE_R | 3 | Right side (high a) | Between-tower | Yes |
+
+- `tile_row = b - b_lo` (vertical offset). `tile_col = a - a_lo` (horizontal offset).
+- Tile row 0 = bottom (lowest b). Row 31 = top (highest b). Tiles stack UPWARD.
+- h1 for L/R faces = tile_row = b-offset along the vertical edge. Needed because adjacent towers have different base_y.
+- I/O faces have NO h1 — within-tower tiles share the same a-range, matching is exact by position.
+
+### decode_group_id: L/R faces ONLY (HARD RULE)
+
+`decode_group_id(group_byte)` masks `& 0x7F` to strip the h1 bit-steal from L/R group bytes. **Never apply it to I/O face groups** — I/O groups are plain 8-bit labels with no bit-steal. Applying decode_group_id to I/O groups silently truncates labels >= 128.
+
+**Fixed 2026-04-13** (commit `7e28a44`): Removed decode_group_id() from I/O face paths in compositor boundary collectors. Was silently corrupting groups >= 128. Additionally, a defensive 128-group poison guard was added — if max_group_label >= 128, the tile is treated as dead (belt-and-suspenders with the existing encoder poison checks).
+
+### Between-Tower Row Mapping (HARD RULE)
+
+Current tower j's row r maps to previous tower j-1's row `r - q` (where `q = delta[j-1] / TILE_SIDE`). **NOT `r + q`.** The previous tower starts HIGHER (larger base_y), so the same absolute b corresponds to a LOWER row index in the previous tower. This was a bug that shipped and was caught by audit on 2026-04-12.
+
+## Bug Fixes (2026-04-13)
+
+1. **decode_group_id I/O face fix** (commit `7e28a44`) — Removed decode_group_id() from I/O face paths in compositor. I/O faces use raw 8-bit group labels, not the L/R h1-encoded format. Was silently corrupting groups >= 128.
+
+2. **Defensive 128-group poison guard** (commit `7e28a44`) — Added compositor-side guard: if max_group_label >= 128, tile treated as dead. Belt-and-suspenders with existing encoder poison checks.
+
+3. **O(N^2) spanning check fix** — Replaced has_spanning() recompute-from-scratch (O(T^2) total) with incremental reachability tracking. Maintains inner/outer reachability bitmasks per UF root, detects spanning on union. O(1) check, O(new_members) per tower. Debug assert in finalize() cross-checks against old algorithm.
+
+## K_SQ=36 Campaign Post-Mortem (2026-04-13)
+
+First campaign attempt at R=80,015,782 with K_SQ=36 on RTX 4090 failed. Three issues found:
+
+1. **O(N^2) compositor scaling** — now fixed (see bug fix #3 above)
+2. **22% overflow tile rate** — GPU caps (`MAX_FACE_PRIMES_PER_FACE=256`, `MAX_FACE_PORTS_GPU=32`, `MAX_TOTAL_PORTS_GPU=128`) too tight for K_SQ=36
+3. **Latent parse failure** — suggesting CUDA memory corruption
+
+Full post-mortem: `docs/supportive/2026-04-13-k36-campaign-postmortem.md`
+
+## Current State (2026-04-13)
+
+- **K_SQ=40 pipeline:** Ready for campaign verification at R=600M
+- **K_SQ=36 pipeline:** Blocked on GPU cap adjustment and overflow investigation
+- **Next step:** sqrt(40) campaign at R=600M to validate campaign runner logic end-to-end
+
 ## Working Documents
 
 All documents produced during tiles-maxxing work go to `docs/supportive/`. No exceptions — audits, analyses, benchmarks, investigations, design notes, all land there.
@@ -99,13 +191,13 @@ All fields required except `refs` (include when the document relates to a specif
 
 ## Testing Requirements
 
-**All tests must run at R ≥ 800M.** No tests at low radii. The system was not designed for the near-origin regime — prime density, buffer sizing, and port structure behave differently there. Tests at (0,0), (100,100), or (10000,10000) are not meaningful validation.
+**All tests must run at R >= 800M.** No tests at low radii. The system was not designed for the near-origin regime — prime density, buffer sizing, and port structure behave differently there. Tests at (0,0), (100,100), or (10000,10000) are not meaningful validation.
 
 Concrete minimums for test tiles:
 - Use off-axis coordinates (not on real or imaginary axis)
-- All `(a_lo, b_lo)` must satisfy `sqrt(a_lo² + b_lo²) ≥ 800,000,000`
+- All `(a_lo, b_lo)` must satisfy `sqrt(a_lo^2 + b_lo^2) >= 800,000,000`
 - Coordinates must be multiples of `TILE_SIDE` (256)
-- Include at least two angular positions (e.g., 30° and 45°) to catch anisotropy
+- Include at least two angular positions (e.g., 30 deg and 45 deg) to catch anisotropy
 
 Legacy test coordinates in `test_e2e.cpp` and `test_sieve.cpp` are placeholders from initial development. They should be replaced with operating-point coordinates.
 
