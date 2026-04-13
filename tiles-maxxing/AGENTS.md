@@ -114,6 +114,8 @@ The grid sweeps from the Y axis (tower j=0, x≈0) rightward to y=x (45°). Spli
 6. **ncu requires CAP_SYS_ADMIN on vast.ai.** Standard containers block GPU performance counters. Use bare-metal or request privileged containers for detailed warp stall / throughput analysis.
 7. **256 threads/block breaks correctness** — kernels assume 288 for 257-column coverage. 320 threads works but performs identically. 288 is the only valid choice.
 8. **Pipeline is at hardware INT32 throughput limits.** All tested optimizations (mont_to_gpu fix, `__ldg`, register sweep, multi-stream, K1 smem, sieve extension) are neutral or harmful. The pipeline is bound by the Ada Lovelace INT32 pipe across K1, K2, and K4. Remaining paths: algorithmic changes to reduce total INT operations per candidate (e.g., faster primality test, reduced sieve iteration cost), or moving to hardware with higher INT32 throughput (H100's 128 SM x 4 INT32 units/SM).
+9. **Fixed-chunk streaming decouples GPU memory from burst size.** As of `3ffd202`, `run_stream()` allocates GPU buffers at a fixed `STREAM_CHUNK_SIZE` (200K tiles, ~10GB) and processes arbitrarily large bursts in internal chunks. Coords are read into host memory, processed in GPU-sized bites, results accumulated and sent as one pipe response. Burst size is now purely a campaign concept (when to check spanning), not a GPU memory constraint. Default `--burst-size` raised to 28K towers (~1M tiles/burst). Effective rate ~134K tiles/s (86% of 155K GPU benchmark).
+10. **Compositor CPU overhead is the remaining bottleneck.** The 14% gap between GPU benchmark (155K tiles/s) and campaign effective rate (134K tiles/s) is compositor work: parsing 1M TileOps and union-find merges take ~1s per burst, during which the GPU idles waiting for the next burst. Pipe I/O (~0.05s) and cudaMemcpy (~5ms) are noise. **Fix:** double-buffered async pipeline in `campaign.cpp` — send burst N+1 coords to GPU while compositor processes burst N results. Requires two threads or non-blocking pipe I/O. This would fully hide compositor cost behind GPU compute and close the gap to ~155K tiles/s.
 
 ## Compositor (tiles-compositor/)
 
@@ -165,9 +167,30 @@ Full post-mortem: `docs/supportive/2026-04-13-k36-campaign-postmortem.md`
 
 ## Current State (2026-04-13)
 
-- **K_SQ=40 pipeline:** Ready for campaign verification at R=600M
-- **K_SQ=36 pipeline:** Blocked on GPU cap adjustment and overflow investigation
-- **Next step:** sqrt(40) campaign at R=600M to validate campaign runner logic end-to-end
+- **K_SQ=40 pipeline:** Verified at scale. R-sweep complete (875M–1125M), 11 R-values tested.
+- **K_SQ=36 pipeline:** Blocked on GPU cap adjustment and overflow investigation.
+- **CUDA streaming:** Fixed-chunk architecture (`3ffd202`). GPU allocates for 200K tiles, processes any burst in internal chunks. Burst size decoupled from GPU memory.
+
+### K_SQ=40 R-Sweep Results
+
+| R | Verdict | Wall (s) | Note |
+|---|---------|----------|------|
+| 600M | SPANNING | — | Tower 931 (instant) |
+| 875M | SPANNING | 188.8 | Tower ~660K (27% — barely spans) |
+| 900M | **MOAT** | 756.5 | First MOAT in sweep |
+| 925M | **MOAT** | 774.4 | |
+| 950M | SPANNING | 7.6 | Non-monotonic island — instant |
+| 975M | **MOAT** | 814.2 | |
+| 1000M | **MOAT** | 828.1 | |
+| 1025M | **MOAT** | 849.9 | |
+| 1050M | **MOAT** | 879.1 | |
+| 1075M | **MOAT** | 880.1 | |
+| 1100M | **MOAT** | 916.9 | |
+| 1125M | **MOAT** | 933.0 | |
+
+**Key finding: the transition is non-monotonic.** R=950M SPANs instantly despite MOATs at 925M and 975M. The ISE estimate (~839M) captures the statistical trend but not the local prime structure.
+
+Full report: `docs/supportive/2026-04-13-r-sweep-results.md`
 
 ## Working Documents
 

@@ -1,0 +1,150 @@
+{
+  "R": 875000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2416893,
+  "total_tiles": 87290165,
+  "towers_processed": 692488,
+  "tiles_processed": 22852103,
+  "wall_time_seconds": 188.776,
+  "overflow_count": 0,
+  "total_groups": 224507992,
+  "inner_roots": 2604606,
+  "outer_roots": 2591307,
+  "peak_rss_mb": 1862.1
+}
+{
+  "R": 900000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2485947,
+  "total_tiles": 89784166,
+  "towers_processed": 2485947,
+  "tiles_processed": 89784166,
+  "wall_time_seconds": 756.505,
+  "overflow_count": 0,
+  "total_groups": 887949873,
+  "inner_roots": 10960189,
+  "outer_roots": 10903931,
+  "peak_rss_mb": 7007.6
+}
+{
+  "R": 925000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2555000,
+  "total_tiles": 92278122,
+  "towers_processed": 2555000,
+  "tiles_processed": 92278122,
+  "wall_time_seconds": 774.416,
+  "overflow_count": 0,
+  "total_groups": 918448525,
+  "inner_roots": 11339108,
+  "outer_roots": 11273997,
+  "peak_rss_mb": 7202.5
+}
+{
+  "R": 950000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2624054,
+  "total_tiles": 94772122,
+  "towers_processed": 1888,
+  "tiles_processed": 62303,
+  "wall_time_seconds": 7.556,
+  "overflow_count": 0,
+  "total_groups": 624390,
+  "inner_roots": 6763,
+  "outer_roots": 6982,
+  "peak_rss_mb": 578.0
+}
+{
+  "R": 975000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2693107,
+  "total_tiles": 97266079,
+  "towers_processed": 2693107,
+  "tiles_processed": 97266079,
+  "wall_time_seconds": 814.219,
+  "overflow_count": 0,
+  "total_groups": 979808137,
+  "inner_roots": 12089610,
+  "outer_roots": 12022497,
+  "peak_rss_mb": 7577.0
+}
+{
+  "R": 1025000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2831214,
+  "total_tiles": 102254036,
+  "towers_processed": 2831214,
+  "tiles_processed": 102254036,
+  "wall_time_seconds": 849.863,
+  "overflow_count": 0,
+  "total_groups": 1041632542,
+  "inner_roots": 12841826,
+  "outer_roots": 12767811,
+  "peak_rss_mb": 7954.5
+}
+{
+  "R": 1050000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2900267,
+  "total_tiles": 104747989,
+  "towers_processed": 2900267,
+  "tiles_processed": 104747989,
+  "wall_time_seconds": 879.097,
+  "overflow_count": 0,
+  "total_groups": 1072618474,
+  "inner_roots": 13225020,
+  "outer_roots": 13147769,
+  "peak_rss_mb": 8147.1
+}
+{
+  "R": 1075000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2969321,
+  "total_tiles": 107241989,
+  "towers_processed": 2969321,
+  "tiles_processed": 107241989,
+  "wall_time_seconds": 880.140,
+  "overflow_count": 0,
+  "total_groups": 1103861739,
+  "inner_roots": 13607225,
+  "outer_roots": 13524242,
+  "peak_rss_mb": 8336.0
+}
+{
+  "R": 1100000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 3038374,
+  "total_tiles": 109735945,
+  "towers_processed": 3038374,
+  "tiles_processed": 109735945,
+  "wall_time_seconds": 916.895,
+  "overflow_count": 0,
+  "total_groups": 1135098204,
+  "inner_roots": 13980394,
+  "outer_roots": 13897780,
+  "peak_rss_mb": 8524.1
+}
+{
+  "R": 1125000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 3107427,
+  "total_tiles": 112229900,
+  "towers_processed": 3107427,
+  "tiles_processed": 112229900,
+  "wall_time_seconds": 932.990,
+  "overflow_count": 0,
+  "total_groups": 1166540260,
+  "inner_roots": 14361125,
+  "outer_roots": 14274274,
+  "peak_rss_mb": 8704.6
+}
