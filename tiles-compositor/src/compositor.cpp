@@ -18,6 +18,8 @@ void Compositor::init(const Grid& grid) {
     grid_ = &grid;
     last_ingested_ = -1;
     parent_.clear();
+    root_reach_.clear();
+    spanning_detected_ = false;
     inner_members_.clear();
     outer_members_.clear();
     prev_tower_height_ = 0;
@@ -26,6 +28,7 @@ void Compositor::init(const Grid& grid) {
     const std::size_t num_tiles = static_cast<std::size_t>(grid.total_tiles);
     group_offset_.assign(num_tiles + 1U, 0U);
     parent_.reserve(num_tiles * 8U);
+    root_reach_.reserve(num_tiles * 8U);
     std::memset(prev_tower_tiles_, 0, sizeof(prev_tower_tiles_));
 }
 
@@ -57,25 +60,13 @@ void Compositor::ingest_tower(int32_t j, const uint8_t* tower_tileops, const Ext
 }
 
 bool Compositor::has_spanning() {
-    std::unordered_set<uint32_t> inner_roots;
-    inner_roots.reserve(inner_members_.size());
-    for (uint32_t member : inner_members_) {
-        inner_roots.insert(find(member));
-    }
-
-    for (uint32_t member : outer_members_) {
-        if (inner_roots.count(find(member)) > 0U) {
-            return true;
-        }
-    }
-
-    return false;
+    return spanning_detected_;
 }
 
-// C1: Incremental spanning check -- identical logic to has_spanning().
+// C1: Incremental spanning check -- returns cached flag. O(1).
 // Called between bursts; does NOT finalize.
 bool Compositor::check_spanning_incremental() {
-    return has_spanning();
+    return spanning_detected_;
 }
 
 // C1: Explicit outer boundary collection for tower j.
@@ -117,7 +108,9 @@ void Compositor::collect_outer_boundary(int32_t j) {
                 for (uint8_t ri = 0; ri < r_slice.count; ++ri) {
                     const uint8_t group = decode_group_id(r_slice.groups[ri]);
                     if (group == 0U) continue;
-                    outer_members_.push_back(global_id(flat, group));
+                    const uint32_t gid = global_id(flat, group);
+                    outer_members_.push_back(gid);
+                    mark_outer(gid);
                 }
             }
         }
@@ -141,7 +134,9 @@ void Compositor::collect_outer_boundary(int32_t j) {
                         if (group == 0U) continue;
                         const uint16_t h = decode_h1(r_slice.groups[ri], r_h1[ri]);
                         if (h >= static_cast<uint16_t>(TILE_SIDE - f)) {
-                            outer_members_.push_back(global_id(flat, group));
+                            const uint32_t gid = global_id(flat, group);
+                            outer_members_.push_back(gid);
+                            mark_outer(gid);
                         }
                     }
                 }
@@ -168,7 +163,9 @@ void Compositor::collect_outer_boundary(int32_t j) {
                 for (uint8_t ri = 0; ri < r_slice.count; ++ri) {
                     const uint8_t group = decode_group_id(r_slice.groups[ri]);
                     if (group == 0U) continue;
-                    outer_members_.push_back(global_id(flat, group));
+                    const uint32_t gid = global_id(flat, group);
+                    outer_members_.push_back(gid);
+                    mark_outer(gid);
                 }
             }
         }
@@ -193,7 +190,9 @@ void Compositor::collect_outer_boundary(int32_t j) {
                 for (uint8_t li = 0; li < l_slice.count; ++li) {
                     const uint8_t group = decode_group_id(l_slice.groups[li]);
                     if (group == 0U) continue;
-                    outer_members_.push_back(global_id(flat, group));
+                    const uint32_t gid = global_id(flat, group);
+                    outer_members_.push_back(gid);
+                    mark_outer(gid);
                 }
             }
         }
@@ -213,13 +212,22 @@ CompositorResult Compositor::finalize() {
         outer_roots.insert(find(member));
     }
 
-    CompositorResult::Verdict verdict = CompositorResult::MOAT;
+    // Use the incrementally-maintained flag for the verdict.
+    // Cross-check against set intersection in debug builds.
+    CompositorResult::Verdict verdict = spanning_detected_
+        ? CompositorResult::SPANNING
+        : CompositorResult::MOAT;
+
+#ifndef NDEBUG
+    bool set_check = false;
     for (uint32_t root : outer_roots) {
         if (inner_roots.count(root) > 0U) {
-            verdict = CompositorResult::SPANNING;
+            set_check = true;
             break;
         }
     }
+    assert(set_check == spanning_detected_);
+#endif
 
     return CompositorResult{
         verdict,
@@ -248,7 +256,30 @@ void Compositor::unite(uint32_t a, uint32_t b) {
         ra = rb;
         rb = tmp;
     }
+    // Merge reachability: new root ra inherits both sides' flags
+    const uint8_t merged = root_reach_[ra] | root_reach_[rb];
     parent_[rb] = ra;
+    root_reach_[ra] = merged;
+    // root_reach_[rb] is now stale (rb is no longer a root), but harmless
+    if (merged == REACH_BOTH) {
+        spanning_detected_ = true;
+    }
+}
+
+void Compositor::mark_inner(uint32_t member) {
+    const uint32_t root = find(member);
+    root_reach_[root] |= REACH_INNER;
+    if (root_reach_[root] == REACH_BOTH) {
+        spanning_detected_ = true;
+    }
+}
+
+void Compositor::mark_outer(uint32_t member) {
+    const uint32_t root = find(member);
+    root_reach_[root] |= REACH_OUTER;
+    if (root_reach_[root] == REACH_BOTH) {
+        spanning_detected_ = true;
+    }
 }
 
 const uint8_t* Compositor::get_tile_data(uint32_t flat_idx, const uint8_t* base_ptr, int row,
@@ -295,6 +326,7 @@ void Compositor::compute_offsets_for_tower(int32_t j, const uint8_t* tower_tileo
         group_offset_[flat_idx + 1U] = base + static_cast<uint32_t>(max_label);
         for (uint32_t group = 0; group < static_cast<uint32_t>(max_label); ++group) {
             parent_.push_back(base + group);
+            root_reach_.push_back(0U);
         }
     }
 
@@ -474,7 +506,9 @@ void Compositor::collect_inner_boundary(int32_t j, const uint8_t* tower_tileops,
                 // decode_group_id would mask & 0x7F, truncating labels >= 128.
                 const uint8_t group = i_slice.groups[slot];
                 if (group > 0U) {
-                    inner_members_.push_back(global_id(row0_flat, group));
+                    const uint32_t gid = global_id(row0_flat, group);
+                    inner_members_.push_back(gid);
+                    mark_inner(gid);
                 }
             }
         }
@@ -516,7 +550,9 @@ void Compositor::collect_inner_boundary(int32_t j, const uint8_t* tower_tileops,
                 if (group == 0U) {
                     continue;
                 }
-                inner_members_.push_back(global_id(flat, group));
+                const uint32_t gid = global_id(flat, group);
+                inner_members_.push_back(gid);
+                mark_inner(gid);
             }
         }
     }
@@ -539,7 +575,9 @@ void Compositor::collect_inner_boundary(int32_t j, const uint8_t* tower_tileops,
                     }
                     const uint16_t h = decode_h1(l_slice.groups[li], l_h1[li]);
                     if (h < static_cast<uint16_t>(f_prev)) {
-                        inner_members_.push_back(global_id(flat, group));
+                        const uint32_t gid = global_id(flat, group);
+                        inner_members_.push_back(gid);
+                        mark_inner(gid);
                     }
                 }
             }
@@ -566,7 +604,9 @@ void Compositor::collect_outer_boundary_ingest(int32_t j, const uint8_t* tower_t
                 // decode_group_id would mask & 0x7F, truncating labels >= 128.
                 const uint8_t group = o_slice.groups[slot];
                 if (group > 0U) {
-                    outer_members_.push_back(global_id(row_last_flat, group));
+                    const uint32_t gid = global_id(row_last_flat, group);
+                    outer_members_.push_back(gid);
+                    mark_outer(gid);
                 }
             }
         }
@@ -592,7 +632,9 @@ void Compositor::collect_outer_boundary_ingest(int32_t j, const uint8_t* tower_t
                 for (uint8_t li = 0; li < l_slice.count; ++li) {
                     const uint8_t group = decode_group_id(l_slice.groups[li]);
                     if (group == 0U) continue;
-                    outer_members_.push_back(global_id(flat, group));
+                    const uint32_t gid = global_id(flat, group);
+                    outer_members_.push_back(gid);
+                    mark_outer(gid);
                 }
             }
         }
@@ -622,7 +664,9 @@ void Compositor::collect_outer_boundary_ingest(int32_t j, const uint8_t* tower_t
                 for (uint8_t ri = 0; ri < r_slice.count; ++ri) {
                     const uint8_t group = decode_group_id(r_slice.groups[ri]);
                     if (group == 0U) continue;
-                    outer_members_.push_back(global_id(flat, group));
+                    const uint32_t gid = global_id(flat, group);
+                    outer_members_.push_back(gid);
+                    mark_outer(gid);
                 }
             }
         }
@@ -660,7 +704,9 @@ void Compositor::collect_outer_boundary_ingest(int32_t j, const uint8_t* tower_t
                 for (uint8_t ri = 0; ri < r_slice.count; ++ri) {
                     const uint8_t group = decode_group_id(r_slice.groups[ri]);
                     if (group == 0U) continue;
-                    outer_members_.push_back(global_id(flat, group));
+                    const uint32_t gid = global_id(flat, group);
+                    outer_members_.push_back(gid);
+                    mark_outer(gid);
                 }
             }
         }
@@ -685,7 +731,9 @@ void Compositor::collect_outer_boundary_ingest(int32_t j, const uint8_t* tower_t
                         if (group == 0U) continue;
                         const uint16_t h = decode_h1(r_slice.groups[ri], r_h1[ri]);
                         if (h >= static_cast<uint16_t>(TILE_SIDE - f_prev)) {
-                            outer_members_.push_back(global_id(flat, group));
+                            const uint32_t gid = global_id(flat, group);
+                            outer_members_.push_back(gid);
+                            mark_outer(gid);
                         }
                     }
                 }
@@ -736,7 +784,9 @@ void Compositor::collect_outer_boundary_ingest(int32_t j, const uint8_t* tower_t
                 if (group == 0U) {
                     continue;
                 }
-                outer_members_.push_back(global_id(flat, group));
+                const uint32_t gid = global_id(flat, group);
+                outer_members_.push_back(gid);
+                mark_outer(gid);
             }
         }
     }
@@ -760,7 +810,9 @@ void Compositor::collect_outer_boundary_ingest(int32_t j, const uint8_t* tower_t
                     }
                     const uint16_t h = decode_h1(r_slice.groups[ri], r_h1[ri]);
                     if (h >= static_cast<uint16_t>(TILE_SIDE - f_d)) {
-                        outer_members_.push_back(global_id(flat, group));
+                        const uint32_t gid = global_id(flat, group);
+                        outer_members_.push_back(gid);
+                        mark_outer(gid);
                     }
                 }
             }
