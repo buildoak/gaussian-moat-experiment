@@ -220,8 +220,10 @@ __device__ void extract_faces_gpu_parallel_k5(
 
     if (tid < NUM_FACES) {
         if (face_prime_counts[tid] > MAX_FACE_PRIMES_PER_FACE) {
-            face_prime_counts[tid] = MAX_FACE_PRIMES_PER_FACE;
+            scratch->overflow = 1u;
         }
+        face_prime_counts[tid] = min(face_prime_counts[tid],
+                                     static_cast<uint32_t>(MAX_FACE_PRIMES_PER_FACE));
     }
     __syncthreads();
 
