@@ -537,7 +537,7 @@ int run_dump(const char* coords_path, const char* output_path) {
 // coords.bin format (little-endian):
 //   uint32_t  num_tiles
 //   TileCoord coords[num_tiles]    (int64_t a_lo, int64_t b_lo each)
-// Output: raw TileOp bytes only — total_tiles * 128 bytes, tower-major order.
+// Output: raw TileOp bytes only — total_tiles * 256 bytes, tower-major order.
 int run_campaign(const char* burst_index_path, const char* coords_path, const char* output_path) {
     constexpr int CHUNK_SIZE = 20000;
 
@@ -688,7 +688,7 @@ int run_campaign(const char* burst_index_path, const char* coords_path, const ch
 //   Per-burst output (to campaign):
 //     uint32_t num_tiles
 //     uint32_t output_bytes
-//     [raw TileOp data: num_tiles * 128 bytes]
+//     [raw TileOp data: num_tiles * 256 bytes]
 //   Termination: stdin EOF → clean exit.
 
 bool stream_read_all(void* buf, size_t len) {

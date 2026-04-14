@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Extract or verify 128-byte TileOps from 148-byte CUDA binary records."""
+"""Extract or verify 256-byte TileOps from 276-byte CUDA binary records."""
 
 from __future__ import annotations
 
@@ -11,15 +11,15 @@ from dataclasses import dataclass
 
 TILES_PER_TOWER = 32
 TILE_SIDE = 256
-TILEOP_SIZE = 128
+TILEOP_SIZE = 256
 TILEOP_HEADER_BYTES = 3
-TILEOP_PAYLOAD_BYTES = 125
-CUDA_RECORD_SIZE = 148
+TILEOP_PAYLOAD_BYTES = 253
+CUDA_RECORD_SIZE = 276
 OVERFLOW_SENTINEL = 0xFF
 EMPTY_OFFSET = 3
 
 INPUT_HEADER_STRUCT = struct.Struct("<I")
-CUDA_RECORD_STRUCT = struct.Struct("<qqI128s")
+CUDA_RECORD_STRUCT = struct.Struct("<qqI256s")
 OUTPUT_HEADER_STRUCT = struct.Struct("<II")
 
 
@@ -278,7 +278,7 @@ def verify_file(input_path: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Extract 128-byte TileOps from 148-byte CUDA binary records."
+        description="Extract 256-byte TileOps from 276-byte CUDA binary records."
     )
     parser.add_argument(
         "--verify",

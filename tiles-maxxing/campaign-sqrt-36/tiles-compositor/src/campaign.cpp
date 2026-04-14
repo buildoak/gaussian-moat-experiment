@@ -57,7 +57,7 @@ struct TileCoord {
 };
 
 struct TileOp {
-    uint8_t bytes[TILEOP_SIZE];  // TILEOP_SIZE = 128, from compositor types.h
+    uint8_t bytes[TILEOP_SIZE];  // TILEOP_SIZE = 256, from compositor types.h
 };
 
 struct PhaseTimings {
@@ -194,7 +194,7 @@ bool write_coords_file(const char* path, const std::vector<TileCoord>& coords, u
     return ok;
 }
 
-// Read raw TileOp output from CUDA campaign — just total_tiles * 128 bytes.
+// Read raw TileOp output from CUDA campaign — just total_tiles * 256 bytes.
 bool read_raw_tileops(const char* path, uint8_t* buf, uint32_t total_tiles) {
     FILE* f = std::fopen(path, "rb");
     if (!f) return false;
@@ -265,7 +265,7 @@ double peak_rss_mb() {
 //   CUDA → Campaign (per burst):
 //     uint32_t num_tiles
 //     uint32_t output_bytes
-//     [raw TileOp data: num_tiles * 128 bytes]
+//     [raw TileOp data: num_tiles * 256 bytes]
 //
 //   Termination: close write pipe → CUDA sees EOF → exits.
 // ---------------------------------------------------------------------------
@@ -888,7 +888,7 @@ int main(int argc, char** argv) {
                     return 1;
                 }
 
-                // Read output — burst_total_tiles * 128 bytes of raw TileOps
+                // Read output — burst_total_tiles * 256 bytes of raw TileOps
                 const std::size_t output_bytes =
                     static_cast<std::size_t>(burst_total_tiles) * TILEOP_SIZE;
                 std::vector<uint8_t> output_buf(output_bytes);

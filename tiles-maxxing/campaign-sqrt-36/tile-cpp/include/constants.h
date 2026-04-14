@@ -36,7 +36,7 @@ constexpr int BITMAP_BITS  = SIDE_EXP * SIDE_EXP;      // 73,441
 constexpr int BITMAP_WORDS = (BITMAP_BITS + 31) / 32;  // 2,296
 
 // TileOp encoding
-constexpr int TILEOP_SIZE          = 128;
+constexpr int TILEOP_SIZE          = 256;
 constexpr int TILEOP_HEADER_BYTES  = 3;
 constexpr int TILEOP_PAYLOAD_BYTES = TILEOP_SIZE - TILEOP_HEADER_BYTES;
 constexpr uint8_t EMPTY_OFFSET     = 3;

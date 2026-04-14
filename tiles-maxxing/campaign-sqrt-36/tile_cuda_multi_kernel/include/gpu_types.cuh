@@ -115,7 +115,11 @@ struct TileBatchBuffers {
     uint32_t*   d_prime_counts_out; // [N] K5->host
 };
 
-static_assert(sizeof(TileOp) == TILEOP_SIZE, "TileOp must stay 128 bytes");
+static_assert(sizeof(TileOp) == 256, "TileOp must be 256 bytes");
+static_assert(TILEOP_SIZE == TILEOP_HEADER_BYTES + TILEOP_PAYLOAD_BYTES,
+              "TILEOP_SIZE must equal header + payload");
+static_assert(MAX_TOTAL_PORTS_GPU >= 4 * MAX_FACE_PORTS_GPU,
+              "MAX_TOTAL_PORTS_GPU must hold all 4 faces at max capacity");
 static_assert(sizeof(PortGPU) == 4, "PortGPU ABI changed");
 static_assert(sizeof(FaceCellGPU) == 16, "FaceCellGPU ABI changed");
 static_assert(sizeof(FacePrimeGPU) == 8, "FacePrimeGPU ABI changed");

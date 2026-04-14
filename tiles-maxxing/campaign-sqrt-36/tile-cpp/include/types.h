@@ -9,7 +9,7 @@ struct TileCoord {
 };
 
 struct TileOp {
-    uint8_t bytes[TILEOP_SIZE];  // 128 bytes, layout per spec Section 8.1
+    uint8_t bytes[TILEOP_SIZE];  // 256 bytes, layout per spec Section 8.1
 };
 
 struct TileOpFaceView {

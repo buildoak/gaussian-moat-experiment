@@ -53,14 +53,14 @@ constexpr int MAX_PRIMES_GPU = 2560;
 constexpr int MAX_PORTS_GPU = 256;
 constexpr int MAX_FACE_PRIMES_GPU = 900;
 constexpr int MAX_FACE_PRIMES_PER_FACE = 256;
-constexpr int MAX_FACE_PORTS_GPU = 32;
-constexpr int MAX_TOTAL_PORTS_GPU = 128;
+constexpr int MAX_FACE_PORTS_GPU = 48;
+constexpr int MAX_TOTAL_PORTS_GPU = 192;
 constexpr int MAX_GROUPS_GPU = 127;
 constexpr int FACES_PER_PASS = 2;
 
-constexpr int TILEOP_SIZE = 128;
+constexpr int TILEOP_SIZE = 256;
 constexpr int TILEOP_HEADER_BYTES = 3;
-constexpr int TILEOP_PAYLOAD_BYTES = 125;
+constexpr int TILEOP_PAYLOAD_BYTES = 253;
 constexpr uint8_t EMPTY_OFFSET = 3;
 constexpr uint8_t OVERFLOW_SENTINEL = 0xFFu;
 
