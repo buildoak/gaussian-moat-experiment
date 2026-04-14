@@ -141,16 +141,7 @@ TileCensusMetrics analyze_tile(const TileCoord& coord, const SieveTables& tables
     sieve_tile(coord, tables, bitmap);
 
     const int bitmap_prime_count = compact_primes(bitmap, prefix, prime_pos);
-    for (int i = 0; i < bitmap_prime_count; ++i) {
-        const uint32_t pos = prime_pos[i];
-        const int row = static_cast<int>(pos / SIDE_EXP);
-        const int col = static_cast<int>(pos % SIDE_EXP);
-        const int tile_row = row - COLLAR;
-        const int tile_col = col - COLLAR;
-        if (tile_row >= 0 && tile_row <= TILE_SIDE && tile_col >= 0 && tile_col <= TILE_SIDE) {
-            ++metrics.result.prime_count;
-        }
-    }
+    metrics.result.prime_count = static_cast<uint32_t>(bitmap_prime_count);  // match CUDA: all bitmap primes incl. collar
 
     if (bitmap_prime_count == 0) {
         return metrics;

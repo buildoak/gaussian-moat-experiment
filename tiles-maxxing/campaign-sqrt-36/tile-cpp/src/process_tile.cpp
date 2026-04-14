@@ -47,7 +47,7 @@ TileResult process_tile(const TileCoord& coord, const SieveTables& tables,
     uint32_t prefix[BITMAP_WORDS];
     uint32_t prime_pos[MAX_PRIMES];
     const int bitmap_prime_count = compact_primes(bitmap, prefix, prime_pos);
-    result.prime_count = count_tile_proper_primes(prime_pos, bitmap_prime_count);
+    result.prime_count = static_cast<uint32_t>(bitmap_prime_count);  // match CUDA: count all bitmap primes incl. collar
     const auto t2 = timings ? clock::now() : clock::time_point{};
 
     if (bitmap_prime_count == 0) {
@@ -80,7 +80,7 @@ TileResult process_tile(const TileCoord& coord, const SieveTables& tables,
     result.ports_after_pruning = static_cast<uint32_t>(pruned_face_data.port_count);
     result.group_count = static_cast<uint32_t>(pruned_face_data.group_count);
 
-    // Phase 5b: Encode — produce the 128-byte TileOp from already-pruned face data
+    // Phase 5b: Encode — produce the 256-byte TileOp from already-pruned face data
     result.tileop = encode_tileop(pruned_face_data);
     const auto t5 = timings ? clock::now() : clock::time_point{};
 
