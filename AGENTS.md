@@ -115,6 +115,24 @@ The grid sweeps from the Y axis (tower j=0, x≈0) rightward to y=x (45°). Spli
 9. **Fixed-chunk streaming decouples GPU memory from burst size.** As of `3ffd202`, `run_stream()` allocates GPU buffers at a fixed `STREAM_CHUNK_SIZE` (200K tiles, ~10GB) and processes arbitrarily large bursts in internal chunks. Coords are read into host memory, processed in GPU-sized bites, results accumulated and sent as one pipe response. Burst size is now purely a campaign concept (when to check spanning), not a GPU memory constraint. Default `--burst-size` raised to 28K towers (~1M tiles/burst). Effective rate ~134K tiles/s (86% of 155K GPU benchmark).
 10. **Compositor CPU overhead is the remaining bottleneck.** The 14% gap between GPU benchmark (155K tiles/s) and campaign effective rate (134K tiles/s) is compositor work: parsing 1M TileOps and union-find merges take ~1s per burst, during which the GPU idles waiting for the next burst. Pipe I/O (~0.05s) and cudaMemcpy (~5ms) are noise. **Fix:** double-buffered async pipeline in `campaign.cpp` — send burst N+1 coords to GPU while compositor processes burst N results. Requires two threads or non-blocking pipe I/O. This would fully hide compositor cost behind GPU compute and close the gap to ~155K tiles/s.
 
+## Warp Profiling Investigation TODO
+
+**Observation (2026-04-14):** K_SQ=36 (256B TileOp) on RTX 4090 hit **151K tiles/s** — nearly identical to K_SQ=40 (128B TileOp) at ~155K tiles/s. K5 FaceEncode is only **2.2% of total kernel time**. Doubling the payload size had negligible throughput impact.
+
+**Hypothesis:** K2 Miller-Rabin dominates at 58.1%. K5 is memory-bound but the 4090's bandwidth absorbs the 2x payload doubling. TileOp size is simply not on the critical path.
+
+**Investigation needed (requires privileged container — ncu is blocked by CAP_SYS_ADMIN on standard vast.ai):**
+
+1. **Warp-level profiling** — warp occupancy, warp stall reasons (memory dependency vs issue, execution, etc.), achieved vs theoretical occupancy per kernel. Use `ncu --set full` or `ncu --metrics` targeting stall reasons.
+2. **Memory throughput on K5** — global load/store throughput, L2 hit rate, DRAM bandwidth utilization. Confirm K5 is bandwidth-bound and that 4090 has headroom at the 256B write size.
+3. **Register pressure** — compile all 5 kernels with `--ptxas-options=-v` and log spills, registers/thread, shared memory usage for both K_SQ=36 and K_SQ=40 builds side-by-side.
+4. **Shared memory vs L1 partition** — check whether K5's larger writes pressure the L1/shared partition and affect co-resident kernels.
+5. **Cliff check at higher K_SQ** — does the invariant hold at K_SQ=44 (sqrt(44) ≈ 6.63) and K_SQ=48 (sqrt(48) ≈ 6.93)? TileOp payload grows further. Need at least one data point to confirm no bandwidth cliff before declaring the format universal.
+
+**Implication if confirmed:** The 256B TileOp format is the universal format for all K_SQ campaigns. No per-campaign format negotiation, no payload-size tuning, no separate build variants for different K_SQ values — one wire format covers everything up to at least K_SQ=48.
+
+**How to unblock ncu:** Request a bare-metal or privileged container on vast.ai (`--disk=50` and add `--privileged` in the offer filter). Estimated session cost: ~$0.10-0.15 on 4090.
+
 ## Compositor (tiles-compositor/)
 
 The compositor is an in-tree C++ library at `tiles-compositor/` that takes TileOp binaries and produces a SPANNING/MOAT verdict via union-find over tile groups. Includes the campaign runner and grid logic.
