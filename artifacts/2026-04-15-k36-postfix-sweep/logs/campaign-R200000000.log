@@ -1,0 +1,141 @@
+=== Gaussian Moat Campaign (CUDA stream tile path) ===
+R:            200000000
+K_SQ:         36
+TILE_SIDE:    256
+num_towers:   552452
+total_tiles:  19952921
+cuda_binary:  ./tile_kernel_multi
+burst_size:   56000
+
+  tower 1/552452 (C++ j=0) elapsed 0.4s
+cuda-stream: launched pid 14932
+stream: ready, chunk_size=200000 (burst size unbounded)
+  tower 5000/552452 (0.9%) elapsed 13.1s
+  tower 10000/552452 (1.8%) elapsed 13.4s
+  tower 15000/552452 (2.7%) elapsed 13.7s
+  tower 20000/552452 (3.6%) elapsed 14.0s
+  tower 25000/552452 (4.5%) elapsed 14.4s
+  tower 30000/552452 (5.4%) elapsed 14.7s
+  tower 35000/552452 (6.3%) elapsed 15.0s
+  tower 40000/552452 (7.2%) elapsed 15.3s
+  tower 45000/552452 (8.1%) elapsed 15.6s
+  tower 50000/552452 (9.1%) elapsed 15.9s
+  tower 55000/552452 (10.0%) elapsed 16.3s
+  tower 60000/552452 (10.9%) elapsed 28.7s
+  tower 65000/552452 (11.8%) elapsed 29.0s
+  tower 70000/552452 (12.7%) elapsed 29.3s
+  tower 75000/552452 (13.6%) elapsed 29.6s
+  tower 80000/552452 (14.5%) elapsed 29.9s
+  tower 85000/552452 (15.4%) elapsed 30.2s
+  tower 90000/552452 (16.3%) elapsed 30.5s
+  tower 95000/552452 (17.2%) elapsed 30.9s
+  tower 100000/552452 (18.1%) elapsed 31.2s
+  tower 105000/552452 (19.0%) elapsed 31.5s
+  tower 110000/552452 (19.9%) elapsed 31.8s
+  tower 115000/552452 (20.8%) elapsed 44.2s
+  tower 120000/552452 (21.7%) elapsed 44.5s
+  tower 125000/552452 (22.6%) elapsed 44.8s
+  tower 130000/552452 (23.5%) elapsed 45.1s
+  tower 135000/552452 (24.4%) elapsed 45.5s
+  tower 140000/552452 (25.3%) elapsed 45.8s
+  tower 145000/552452 (26.2%) elapsed 46.1s
+  tower 150000/552452 (27.2%) elapsed 46.4s
+  tower 155000/552452 (28.1%) elapsed 46.7s
+  tower 160000/552452 (29.0%) elapsed 47.1s
+  tower 165000/552452 (29.9%) elapsed 47.4s
+  tower 170000/552452 (30.8%) elapsed 60.4s
+  tower 175000/552452 (31.7%) elapsed 60.7s
+  tower 180000/552452 (32.6%) elapsed 61.0s
+  tower 185000/552452 (33.5%) elapsed 61.3s
+  tower 190000/552452 (34.4%) elapsed 61.6s
+  tower 195000/552452 (35.3%) elapsed 62.0s
+  tower 200000/552452 (36.2%) elapsed 62.3s
+  tower 205000/552452 (37.1%) elapsed 62.6s
+  tower 210000/552452 (38.0%) elapsed 62.9s
+  tower 215000/552452 (38.9%) elapsed 63.3s
+  tower 220000/552452 (39.8%) elapsed 63.6s
+  tower 225000/552452 (40.7%) elapsed 76.4s
+  tower 230000/552452 (41.6%) elapsed 76.8s
+  tower 235000/552452 (42.5%) elapsed 77.1s
+  tower 240000/552452 (43.4%) elapsed 77.4s
+  tower 245000/552452 (44.3%) elapsed 77.8s
+  tower 250000/552452 (45.3%) elapsed 78.1s
+  tower 255000/552452 (46.2%) elapsed 78.4s
+  tower 260000/552452 (47.1%) elapsed 78.7s
+  tower 265000/552452 (48.0%) elapsed 79.1s
+  tower 270000/552452 (48.9%) elapsed 79.4s
+  tower 275000/552452 (49.8%) elapsed 79.8s
+  tower 280000/552452 (50.7%) elapsed 80.1s
+  tower 285000/552452 (51.6%) elapsed 93.4s
+  tower 290000/552452 (52.5%) elapsed 93.7s
+  tower 295000/552452 (53.4%) elapsed 94.0s
+  tower 300000/552452 (54.3%) elapsed 94.4s
+  tower 305000/552452 (55.2%) elapsed 94.7s
+  tower 310000/552452 (56.1%) elapsed 95.0s
+  tower 315000/552452 (57.0%) elapsed 95.4s
+  tower 320000/552452 (57.9%) elapsed 95.7s
+  tower 325000/552452 (58.8%) elapsed 96.1s
+  tower 330000/552452 (59.7%) elapsed 96.4s
+  tower 335000/552452 (60.6%) elapsed 96.8s
+  tower 340000/552452 (61.5%) elapsed 110.5s
+  tower 345000/552452 (62.4%) elapsed 110.8s
+  tower 350000/552452 (63.4%) elapsed 111.7s
+  tower 355000/552452 (64.3%) elapsed 112.0s
+  tower 360000/552452 (65.2%) elapsed 112.4s
+  tower 365000/552452 (66.1%) elapsed 112.8s
+  tower 370000/552452 (67.0%) elapsed 113.1s
+  tower 375000/552452 (67.9%) elapsed 113.5s
+  tower 380000/552452 (68.8%) elapsed 113.8s
+  tower 385000/552452 (69.7%) elapsed 114.2s
+  tower 390000/552452 (70.6%) elapsed 114.5s
+  tower 395000/552452 (71.5%) elapsed 129.1s
+  tower 400000/552452 (72.4%) elapsed 129.5s
+  tower 405000/552452 (73.3%) elapsed 129.8s
+  tower 410000/552452 (74.2%) elapsed 130.2s
+  tower 415000/552452 (75.1%) elapsed 130.6s
+  tower 420000/552452 (76.0%) elapsed 130.9s
+  tower 425000/552452 (76.9%) elapsed 131.3s
+  tower 430000/552452 (77.8%) elapsed 131.7s
+  tower 435000/552452 (78.7%) elapsed 132.0s
+  tower 440000/552452 (79.6%) elapsed 132.4s
+  tower 445000/552452 (80.5%) elapsed 132.8s
+  tower 450000/552452 (81.5%) elapsed 148.3s
+  tower 455000/552452 (82.4%) elapsed 148.7s
+  tower 460000/552452 (83.3%) elapsed 149.1s
+  tower 465000/552452 (84.2%) elapsed 149.5s
+  tower 470000/552452 (85.1%) elapsed 149.9s
+  tower 475000/552452 (86.0%) elapsed 150.3s
+  tower 480000/552452 (86.9%) elapsed 150.7s
+  tower 485000/552452 (87.8%) elapsed 151.1s
+  tower 490000/552452 (88.7%) elapsed 151.5s
+  tower 495000/552452 (89.6%) elapsed 151.9s
+  tower 500000/552452 (90.5%) elapsed 152.3s
+  tower 505000/552452 (91.4%) elapsed 166.6s
+  tower 510000/552452 (92.3%) elapsed 167.0s
+  tower 515000/552452 (93.2%) elapsed 167.4s
+  tower 520000/552452 (94.1%) elapsed 167.8s
+  tower 525000/552452 (95.0%) elapsed 168.2s
+  tower 530000/552452 (95.9%) elapsed 168.7s
+  tower 535000/552452 (96.8%) elapsed 169.1s
+  tower 540000/552452 (97.7%) elapsed 169.5s
+  tower 545000/552452 (98.7%) elapsed 169.9s
+  tower 550000/552452 (99.6%) elapsed 170.4s
+  tower 552452/552452 (100.0%) elapsed 170.6s
+stream: 10 bursts, 19952889 tiles, 170016.6 ms total
+
+=== RESULT ===
+{
+  "R": 200000000,
+  "K_SQ": 36,
+  "verdict": "MOAT",
+  "num_towers": 552452,
+  "total_tiles": 19952921,
+  "towers_processed": 552452,
+  "tiles_processed": 19952921,
+  "wall_time_seconds": 171.613,
+  "overflow_count": 0,
+  "total_groups": 271112012,
+  "inner_roots": 3197174,
+  "outer_roots": 3168614,
+  "peak_rss_mb": 2103.0
+}

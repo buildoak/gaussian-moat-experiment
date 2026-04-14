@@ -1,0 +1,52 @@
+=== Gaussian Moat Campaign (CUDA stream tile path) ===
+R:            64000000
+K_SQ:         36
+TILE_SIDE:    256
+num_towers:   176801
+total_tiles:  6385681
+cuda_binary:  ./tile_kernel_multi
+burst_size:   56000
+
+  tower 1/176801 (C++ j=0) elapsed 0.4s
+cuda-stream: launched pid 14316
+stream: ready, chunk_size=200000 (burst size unbounded)
+  tower 5000/176801 (2.8%) elapsed 13.2s
+  tower 10000/176801 (5.7%) elapsed 13.5s
+  tower 15000/176801 (8.5%) elapsed 13.9s
+  tower 20000/176801 (11.3%) elapsed 14.2s
+  tower 25000/176801 (14.1%) elapsed 14.5s
+  tower 30000/176801 (17.0%) elapsed 14.9s
+  tower 35000/176801 (19.8%) elapsed 15.2s
+  tower 40000/176801 (22.6%) elapsed 15.6s
+  tower 45000/176801 (25.5%) elapsed 15.9s
+  tower 50000/176801 (28.3%) elapsed 16.2s
+  tower 55000/176801 (31.1%) elapsed 16.6s
+  tower 60000/176801 (33.9%) elapsed 30.0s
+  tower 65000/176801 (36.8%) elapsed 30.3s
+  tower 70000/176801 (39.6%) elapsed 30.6s
+  tower 75000/176801 (42.4%) elapsed 31.0s
+  tower 80000/176801 (45.2%) elapsed 31.3s
+  tower 85000/176801 (48.1%) elapsed 31.7s
+  tower 90000/176801 (50.9%) elapsed 32.0s
+  tower 95000/176801 (53.7%) elapsed 32.4s
+  tower 100000/176801 (56.6%) elapsed 32.7s
+  tower 105000/176801 (59.4%) elapsed 33.1s
+  tower 110000/176801 (62.2%) elapsed 33.5s
+stream: 3 bursts, 5992205 tiles, 47662.6 ms total
+
+=== RESULT ===
+{
+  "R": 64000000,
+  "K_SQ": 36,
+  "verdict": "SPANNING",
+  "num_towers": 176801,
+  "total_tiles": 6385681,
+  "towers_processed": 114137,
+  "tiles_processed": 3862106,
+  "wall_time_seconds": 48.626,
+  "overflow_count": 0,
+  "total_groups": 41069464,
+  "inner_roots": 487392,
+  "outer_roots": 484371,
+  "peak_rss_mb": 848.5
+}

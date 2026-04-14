@@ -1,0 +1,69 @@
+=== Gaussian Moat Campaign (CUDA stream tile path) ===
+R:            69000000
+K_SQ:         36
+TILE_SIDE:    256
+num_towers:   190612
+total_tiles:  6884493
+cuda_binary:  ./tile_kernel_multi
+burst_size:   56000
+
+  tower 1/190612 (C++ j=0) elapsed 0.4s
+cuda-stream: launched pid 14561
+stream: ready, chunk_size=200000 (burst size unbounded)
+  tower 5000/190612 (2.6%) elapsed 13.2s
+  tower 10000/190612 (5.2%) elapsed 13.5s
+  tower 15000/190612 (7.9%) elapsed 13.8s
+  tower 20000/190612 (10.5%) elapsed 14.2s
+  tower 25000/190612 (13.1%) elapsed 14.5s
+  tower 30000/190612 (15.7%) elapsed 14.8s
+  tower 35000/190612 (18.4%) elapsed 15.1s
+  tower 40000/190612 (21.0%) elapsed 15.5s
+  tower 45000/190612 (23.6%) elapsed 15.8s
+  tower 50000/190612 (26.2%) elapsed 16.1s
+  tower 55000/190612 (28.9%) elapsed 16.5s
+  tower 60000/190612 (31.5%) elapsed 29.6s
+  tower 65000/190612 (34.1%) elapsed 30.0s
+  tower 70000/190612 (36.7%) elapsed 30.3s
+  tower 75000/190612 (39.3%) elapsed 30.6s
+  tower 80000/190612 (42.0%) elapsed 31.0s
+  tower 85000/190612 (44.6%) elapsed 31.3s
+  tower 90000/190612 (47.2%) elapsed 31.6s
+  tower 95000/190612 (49.8%) elapsed 32.0s
+  tower 100000/190612 (52.5%) elapsed 32.3s
+  tower 105000/190612 (55.1%) elapsed 32.7s
+  tower 110000/190612 (57.7%) elapsed 33.1s
+  tower 115000/190612 (60.3%) elapsed 47.4s
+  tower 120000/190612 (63.0%) elapsed 47.8s
+  tower 125000/190612 (65.6%) elapsed 48.2s
+  tower 130000/190612 (68.2%) elapsed 48.5s
+  tower 135000/190612 (70.8%) elapsed 48.9s
+  tower 140000/190612 (73.4%) elapsed 49.3s
+  tower 145000/190612 (76.1%) elapsed 49.7s
+  tower 150000/190612 (78.7%) elapsed 50.2s
+  tower 155000/190612 (81.3%) elapsed 50.6s
+  tower 160000/190612 (83.9%) elapsed 51.0s
+  tower 165000/190612 (86.6%) elapsed 51.4s
+  tower 170000/190612 (89.2%) elapsed 58.3s
+  tower 175000/190612 (91.8%) elapsed 58.8s
+  tower 180000/190612 (94.4%) elapsed 59.2s
+  tower 185000/190612 (97.1%) elapsed 59.6s
+  tower 190000/190612 (99.7%) elapsed 60.1s
+  tower 190612/190612 (100.0%) elapsed 60.1s
+stream: 4 bursts, 6884461 tiles, 59538.3 ms total
+
+=== RESULT ===
+{
+  "R": 69000000,
+  "K_SQ": 36,
+  "verdict": "MOAT",
+  "num_towers": 190612,
+  "total_tiles": 6884493,
+  "towers_processed": 190612,
+  "tiles_processed": 6884493,
+  "wall_time_seconds": 60.637,
+  "overflow_count": 0,
+  "total_groups": 74759320,
+  "inner_roots": 903955,
+  "outer_roots": 898812,
+  "peak_rss_mb": 1129.4
+}

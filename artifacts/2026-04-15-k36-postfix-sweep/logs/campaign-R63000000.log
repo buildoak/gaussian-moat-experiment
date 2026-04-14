@@ -1,0 +1,34 @@
+=== Gaussian Moat Campaign (CUDA stream tile path) ===
+R:            63000000
+K_SQ:         36
+TILE_SIDE:    256
+num_towers:   174039
+total_tiles:  6285928
+cuda_binary:  ./tile_kernel_multi
+burst_size:   56000
+
+  tower 1/174039 (C++ j=0) elapsed 0.4s
+cuda-stream: launched pid 14302
+stream: ready, chunk_size=200000 (burst size unbounded)
+  tower 5000/174039 (2.9%) elapsed 13.1s
+  tower 10000/174039 (5.7%) elapsed 13.5s
+  tower 15000/174039 (8.6%) elapsed 13.8s
+  tower 20000/174039 (11.5%) elapsed 14.1s
+stream: 1 bursts, 1848000 tiles, 13889.5 ms total
+
+=== RESULT ===
+{
+  "R": 63000000,
+  "K_SQ": 36,
+  "verdict": "SPANNING",
+  "num_towers": 174039,
+  "total_tiles": 6285928,
+  "towers_processed": 24729,
+  "tiles_processed": 816056,
+  "wall_time_seconds": 14.726,
+  "overflow_count": 0,
+  "total_groups": 8638679,
+  "inner_roots": 95189,
+  "outer_roots": 94796,
+  "peak_rss_mb": 585.0
+}
