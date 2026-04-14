@@ -1,38 +1,36 @@
-# AGENTS.md — tiles-maxxing
+# AGENTS.md — gaussian-moat-cuda
 
 ## Canonical Status
 
-`tiles-maxxing/` is the **new canonical state** of all progress for the gaussian-moat-cuda project. The old CUDA implementations (`src/gpu_uf.cu`, `src/fat_stripe_cuda.cu`, `tile-probe/` crates) are **inefficient legacy**. They were first-generation proof-of-concept code. Do not treat them as reference implementations or optimization targets. New work starts from the specs and tile-cpp reference in this directory.
+`tiles-maxxing/` contains all active code for the gaussian-moat-cuda project. Specs, results, artifacts, and documentation live at the repo root. Legacy code (first-generation CUDA implementations, old crates) is in `legacy/`. Do not treat legacy as reference — new work starts from the specs and tile-cpp reference.
 
 When building CUDA kernels, design from the specs — not by porting legacy `.cu` files. The old kernels encode assumptions (buffer sizes, phase boundaries, memory layout) that may not survive the spec.
 
 ## Directory Layout
 
 ```
-tiles-maxxing/
-├── tile-cpp/                  — C++ reference implementation (libtile.a)
-├── tile_cuda_multi_kernel/    — Current GPU path, 5-kernel pipeline
-│                                (K1 Sieve → K2 MR → K3 Compact → K4 UF → K5 FaceEncode)
-├── tiles-compositor/          — Campaign runner + compositor library + grid
-│                                (moved in-tree from sibling directory 2026-04-13)
-├── tile-compare/              — Python comparison tools (compare.py, analyze.py, dump_io.py)
-├── tile-validator/            — Python tile validation
-├── docs/                      — 6 canonical specs + docs/supportive/ (analysis/audit reports)
-├── vast-ai/                   — Deploy script for vast.ai instances
-├── results/                   — Benchmark and campaign result dumps
-│   ├── 4090-300k/             — 300K tile benchmark (42MB)
-│   └── 4090-octant/           — Full octant dump R=850M K_SQ=40 (10GB)
-├── artifacts/                 — Data artifacts, coordinate files, scratch, profiling
-│   ├── *.bin                  — Coordinate and C++ dump files
-│   ├── gen_coords.py          — Coordinate generation script
-│   ├── parallel_cpp_dump.py   — Parallel C++ dump
-│   ├── tmp/                   — Old codex prompts, planner prompts
-│   └── profiling/             — 4090 profiling data
-├── _archive/                  — Superseded or historical items
-│   ├── tile-cuda/             — Old single-kernel CUDA (superseded by tile_cuda_multi_kernel)
-│   └── .dispatch-*            — Old agent dispatch prompts (Apr 9)
-├── AGENTS.md                  — This file (project status and structure)
-└── CLAUDE.md                  — Agent instructions
+gaussian-moat-cuda/
+├── tiles-maxxing/                 — All active code
+│   ├── tile-cpp/                  — C++ reference implementation (libtile.a)
+│   ├── tile_cuda_multi_kernel/    — Current GPU path, 5-kernel pipeline
+│   │                                (K1 Sieve → K2 MR → K3 Compact → K4 UF → K5 FaceEncode)
+│   ├── tiles-compositor/          — Campaign runner + compositor library + grid
+│   ├── tile-compare/              — Python comparison tools (compare.py, analyze.py, dump_io.py)
+│   ├── tile-validator/            — Python tile validation
+│   └── vast-ai/                   — Deploy script for vast.ai instances
+├── docs/                          — 6 canonical specs + docs/supportive/ (analysis/audit reports)
+├── results/                       — Benchmark and campaign result dumps
+│   ├── 4090-300k/                 — 300K tile benchmark (42MB)
+│   └── 4090-octant/               — Full octant dump R=850M K_SQ=40 (10GB)
+├── artifacts/                     — Data artifacts, coordinate files, profiling, sweep data
+│   ├── 2026-04-14-sweep4/         — Canonical 4090 R-sweep dataset (68 runs, 55 R values)
+│   ├── 2026-04-13-r-sweep/        — Earlier R-sweep (historical subset)
+│   ├── *.bin                      — Coordinate and C++ dump files
+│   └── profiling/                 — 4090 profiling data
+├── legacy/                        — First-generation code (src/, tile-probe/, old crates)
+│   └── tiles-maxxing-archive/     — Superseded tile-cuda variants, old dispatch prompts
+├── AGENTS.md                      — This file (project status and structure)
+└── CLAUDE.md                      — Agent instructions
 ```
 
 ## Authoritative Specs
@@ -165,11 +163,26 @@ First campaign attempt at R=80,015,782 with K_SQ=36 on RTX 4090 failed. Three is
 
 Full post-mortem: `docs/supportive/2026-04-13-k36-campaign-postmortem.md`
 
-## Current State (2026-04-13)
+## Strategy (2026-04-14)
 
-- **K_SQ=40 pipeline:** Verified at scale. R-sweep complete (875M–1125M), 11 R-values tested.
+_claim by claim
+lemma by lemma
+move towards the paper_
+
+## Current State (2026-04-14)
+
+- **K_SQ=40 pipeline:** Verified at scale. Full R-sweep complete — 68 runs, 55 unique R values, zero overflows. Deployed code pinned to `c73085f`.
 - **K_SQ=36 pipeline:** Blocked on GPU cap adjustment and overflow investigation.
 - **CUDA streaming:** Fixed-chunk architecture (`3ffd202`). GPU allocates for 200K tiles, processes any burst in internal chunks. Burst size decoupled from GPU memory.
+- **4090 instance:** Destroyed 2026-04-14 after full data verification (MD5-verified all artifacts). No active cloud instances.
+
+### Latest Results
+
+Canonical sweep dataset: `artifacts/2026-04-14-sweep4/`
+- `RUN-CATALOG.md` — provenance, exact parameters, full run list (68 runs)
+- `sweep4-results.jsonl` — final 47-run overnight sweep
+- `sweep-intermediate.jsonl` — earlier intermediate runs
+- `sweep4-summary.txt`, `sweep4-console.log`, `logs/` — campaign logs
 
 ### K_SQ=40 R-Sweep Results
 
@@ -194,7 +207,7 @@ Full report: `docs/supportive/2026-04-13-r-sweep-results.md`
 
 ## Working Documents
 
-All documents produced during tiles-maxxing work go to `docs/supportive/`. No exceptions — audits, analyses, benchmarks, investigations, design notes, all land there.
+All documents produced during work go to `docs/supportive/`. No exceptions — audits, analyses, benchmarks, investigations, design notes, all land there.
 
 **Naming:** `YYYY-MM-DD-slug.md` (e.g., `2026-04-09-encoding-overflow-analysis.md`)
 
@@ -252,13 +265,13 @@ Both directories are synced from the local `tiles-maxxing/` tree. `tile-cpp/` mu
 **Push code to Jetson:**
 ```bash
 # Push CUDA kernel
-rsync -avz --delete tile-cuda/ jetson:~/tiles-maxxing/tile-cuda/
+rsync -avz --delete tiles-maxxing/tile-cuda/ jetson:~/tiles-maxxing/tile-cuda/
 
 # Push C++ reference (for cross-validation)
-rsync -avz --delete tile-cpp/ jetson:~/tiles-maxxing/tile-cpp/
+rsync -avz --delete tiles-maxxing/tile-cpp/ jetson:~/tiles-maxxing/tile-cpp/
 ```
 
-Run from `tiles-maxxing/` on the Mac.
+Run from the repo root on the Mac.
 
 **Compile on Jetson:**
 ```bash
@@ -300,7 +313,7 @@ For shared memory configuration, set at launch site with `cudaFuncSetAttribute` 
 
 ## vast.ai Cloud GPU
 
-Operational docs and deploy scripts live in `vast-ai/`. Read `vast-ai/README.md` for the full workflow.
+Operational docs and deploy scripts live in `tiles-maxxing/vast-ai/`. Read `tiles-maxxing/vast-ai/README.md` for the full workflow.
 
 ### Hard Rules
 
