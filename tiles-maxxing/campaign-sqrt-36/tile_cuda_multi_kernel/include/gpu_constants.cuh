@@ -49,7 +49,7 @@ constexpr int LAST_WORD_VALID_BITS = SIDE_EXP % 32;
 static_assert(LAST_WORD_VALID_BITS != 0, "SIDE_EXP divisible by 32 needs LAST_WORD_MASK=0xFFFFFFFF logic");
 constexpr uint32_t LAST_WORD_MASK = (1u << LAST_WORD_VALID_BITS) - 1u;
 
-constexpr int MAX_PRIMES_GPU = 2560;
+constexpr int MAX_PRIMES_GPU = 4096;  // was 2560; raised to eliminate overflow at R≤79M (see campaign report)
 constexpr int MAX_PORTS_GPU = 256;
 constexpr int MAX_FACE_PRIMES_GPU = 900;
 constexpr int MAX_FACE_PRIMES_PER_FACE = 256;

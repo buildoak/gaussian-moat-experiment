@@ -240,9 +240,10 @@ void mkdirs(const char* path) {
 int main(int argc, char** argv) {
     int64_t R = 860'000'000LL;
     int num_towers = 3125;
+    int start_tower = 0;
     bool multithreaded = false;
 
-    // Parse CLI args
+    // Parse CLI args: R [num_towers] [start_tower] [--mt]
     int positional = 0;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--mt") == 0) {
@@ -252,6 +253,8 @@ int main(int argc, char** argv) {
                 R = std::atoll(argv[i]);
             } else if (positional == 1) {
                 num_towers = std::atoi(argv[i]);
+            } else if (positional == 2) {
+                start_tower = std::atoi(argv[i]);
             }
             ++positional;
         }
@@ -261,8 +264,8 @@ int main(int argc, char** argv) {
     const unsigned hw_threads = std::thread::hardware_concurrency();
 
     std::printf("=== Tile Census ===\n");
-    std::printf("R: %lld, Towers: %d, Tiles: %d, Mode: %s, HW threads: %u\n\n",
-                static_cast<long long>(R), num_towers, total_tiles,
+    std::printf("R: %lld, Towers: %d (start=%d), Tiles: %d, Mode: %s, HW threads: %u\n\n",
+                static_cast<long long>(R), num_towers, start_tower, total_tiles,
                 multithreaded ? "multithreaded (GCD)" : "single-threaded",
                 hw_threads);
 
@@ -280,7 +283,7 @@ int main(int argc, char** argv) {
     std::vector<int> tile_indices(total_tiles);
 
     int idx = 0;
-    for (int j = 0; j < num_towers; ++j) {
+    for (int j = start_tower; j < start_tower + num_towers; ++j) {
         const int64_t a_lo = static_cast<int64_t>(j) * TILE_SIDE;
         const double a_lo_d = static_cast<double>(a_lo);
 
@@ -301,11 +304,11 @@ int main(int argc, char** argv) {
                         j, static_cast<long long>(a_lo),
                         static_cast<long long>(b_lo_base), j);
             // Resize to actual count
-            const int actual_tiles = j * TILES_PER_TOWER;
+            const int actual_tiles = (j - start_tower) * TILES_PER_TOWER;
             coords.resize(actual_tiles);
             tower_indices.resize(actual_tiles);
             tile_indices.resize(actual_tiles);
-            num_towers = j;
+            num_towers = j - start_tower;
             break;
         }
 
@@ -396,8 +399,8 @@ int main(int argc, char** argv) {
     // Write CSV
     char csv_path[4096];
     std::snprintf(csv_path, sizeof(csv_path),
-                  "/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/tile-cpp/census_output/census_R%lld_T%d.csv",
-                  static_cast<long long>(R), num_towers);
+                  "/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/tile-cpp/census_output/census_R%lld_T%d_S%d.csv",
+                  static_cast<long long>(R), num_towers, start_tower);
 
     // Ensure output directory exists
     mkdirs("/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/tile-cpp/census_output");
