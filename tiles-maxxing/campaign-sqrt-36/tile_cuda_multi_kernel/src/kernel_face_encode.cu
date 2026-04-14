@@ -29,22 +29,22 @@ static __device__ __forceinline__ bool face_membership(
     int face, int tile_row, int tile_col, uint16_t* h, uint16_t* depth) {
     switch (face) {
         case FACE_I:
-            if (tile_row < 0 || tile_row >= COLLAR) return false;
+            if (tile_row < 0 || tile_row > COLLAR) return false;
             *h = static_cast<uint16_t>(tile_col);
             *depth = static_cast<uint16_t>(tile_row);
             return true;
         case FACE_O:
-            if (tile_row < (TILE_SIDE - COLLAR + 1) || tile_row > TILE_SIDE) return false;
+            if (tile_row < (TILE_SIDE - COLLAR) || tile_row > TILE_SIDE) return false;
             *h = static_cast<uint16_t>(tile_col);
             *depth = static_cast<uint16_t>(TILE_SIDE - tile_row);
             return true;
         case FACE_L:
-            if (tile_col < 0 || tile_col >= COLLAR) return false;
+            if (tile_col < 0 || tile_col > COLLAR) return false;
             *h = static_cast<uint16_t>(tile_row);
             *depth = static_cast<uint16_t>(tile_col);
             return true;
         case FACE_R:
-            if (tile_col < (TILE_SIDE - COLLAR + 1) || tile_col > TILE_SIDE) return false;
+            if (tile_col < (TILE_SIDE - COLLAR) || tile_col > TILE_SIDE) return false;
             *h = static_cast<uint16_t>(tile_row);
             *depth = static_cast<uint16_t>(TILE_SIDE - tile_col);
             return true;

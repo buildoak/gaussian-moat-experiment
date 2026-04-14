@@ -86,19 +86,19 @@ void collect_face_primes(int face,
         uint16_t h = 0;
         switch (face) {
             case FACE_I:
-                on_face = tile_row < COLLAR;
+                on_face = tile_row <= COLLAR;
                 h = static_cast<uint16_t>(tile_col);
                 break;
             case FACE_O:
-                on_face = tile_row >= TILE_SIDE - COLLAR + 1;
+                on_face = tile_row >= TILE_SIDE - COLLAR;
                 h = static_cast<uint16_t>(tile_col);
                 break;
             case FACE_L:
-                on_face = tile_col < COLLAR;
+                on_face = tile_col <= COLLAR;
                 h = static_cast<uint16_t>(tile_row);
                 break;
             case FACE_R:
-                on_face = tile_col >= TILE_SIDE - COLLAR + 1;
+                on_face = tile_col >= TILE_SIDE - COLLAR;
                 h = static_cast<uint16_t>(tile_row);
                 break;
             default:
