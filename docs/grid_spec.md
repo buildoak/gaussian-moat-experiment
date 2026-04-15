@@ -1,12 +1,12 @@
 ---
-title: "Grid Specification v2 — Tower Geometry and Compositor"
-date: 2026-04-09
-version: 2
+title: "Grid Specification v6 — Tower Geometry and Compositor"
+date: 2026-04-13
+version: 6
 status: draft
 depends: tile_spec.md (v5)
 ---
 
-# Grid Specification v2 — Tower Geometry and Compositor
+# Grid Specification v6 — Tower Geometry and Compositor
 
 ## S1. Overview
 
@@ -16,8 +16,8 @@ Gaussian primes, with step distance at most sqrt(k), from the origin to
 infinity?
 
 The search operates on annular bands of the Gaussian integer lattice. Each
-band is tiled by a rectangular array of **towers** — vertical columns of 32
-tiles each — that follow the inner arc of the annulus. A Rust **compositor**
+band is tiled by a rectangular array of **towers** — vertical columns of
+variable height (32--46 tiles) — that follow the inner arc of the annulus. A C++ **compositor**
 wires TileOps together via union-find and checks whether any connected
 component of boundary ports spans from the inner edge to the outer edge of
 the annulus. If no component spans: the annulus is a moat at that radius.
@@ -25,15 +25,15 @@ the annulus. If no component spans: the annulus is a moat at that radius.
 Key properties:
 
 - **Pure rectangular array** — no irregular tiles, no gap-filling, no special
-  zones. Every tower has exactly 32 tiles.
+  zones. Tower height varies (32--46 tiles) for consistent radial coverage.
 - **O(1) neighbor lookup** — within a tower by row arithmetic, between towers
   by a precomputed delta table.
 - **Two matching modes** — I/O faces use the positional shortcut (groups
   only); L/R faces use decoded h1 equality with a per-tower-pair delta_h.
 - **8-fold symmetry** — only one octant is tiled. Octant stitching at the
   y = x diagonal completes the annulus.
-- **Memory-bounded** — 9.38 GB TileOps + ~1.76 GB group-level UF metadata at
-  R = 830M (~11.2 GB total). Fits a single 80 GB GPU with room for working
+- **Memory-bounded** — 10.85 GB TileOps + ~2.04 GB group-level UF metadata at
+  R = 830M (~12.9 GB total). Fits a single 80 GB GPU with room for working
   memory.
 
 ### S1.1 Relationship to tile_spec.md
@@ -61,11 +61,27 @@ All constants from tile_spec.md S11 apply. Grid-level additions:
 | Name | Value | Derivation |
 |------|-------|------------|
 | S | 256 | Tile side (lattice units). From tile_spec. |
-| W | 8192 | Annulus radial depth = TILES_PER_TOWER * S. |
-| TILES_PER_TOWER | 32 | W / S. |
+| TILES_PER_TOWER_MIN | 32 | At Y-axis, where radial direction = vertical. |
+| TILES_PER_TOWER_MAX | 46 | At 45°, where ceil(32 × sqrt(2)) = 46. |
+| W_RADIAL | 8192 | Guaranteed minimum radial depth at every angle = 32 * S. |
 | K | 40 | Step distance squared. From tile_spec. |
 | COLLAR | 7 | ceil(sqrt(K)). From tile_spec. |
 | MIN_OVERLAP | COLLAR | Minimum L/R face overlap for any port to exist in the shared zone (S5.3). |
+
+**Variable tower height.** `TILES_PER_TOWER` is no longer a single constant.
+Each tower j has `tiles_per_tower[j]` tiles, computed from the angle between
+the radial direction and the vertical at that tower's position (S4.2a).
+The per-tower vertical height is `W_j = tiles_per_tower[j] * S`, which
+ranges from `TILES_PER_TOWER_MIN * S = 8192` (at the Y-axis) to
+`TILES_PER_TOWER_MAX * S = 11776` (at 45°).
+
+**Motivation.** Towers are vertical stacks, but the radial direction tilts
+away from vertical as the angle approaches 45°. With a fixed height of 32
+tiles, the effective radial coverage at 45° is only 32/sqrt(2) ~ 22.6 tiles
+instead of 32. This shortfall can cause false SPANNING: the outer boundary
+at high angles falls below a real moat, creating a spurious inner-outer
+connection. Variable tower height guarantees W_RADIAL = 8192 lattice units
+of radial coverage at every angle.
 
 ---
 
@@ -80,7 +96,7 @@ annulus is the set of lattice points (x, y) with:
 R^2 <= x^2 + y^2 <= (R + W)^2
 ```
 
-where W = 8192 is the radial depth. By 8-fold Gaussian integer symmetry
+where W = W_RADIAL = 8192 is the minimum radial depth. By 8-fold Gaussian integer symmetry
 (the units {1, -1, i, -i} and the conjugation map z -> z*), it suffices to
 search one octant and stitch at the boundary.
 
@@ -104,7 +120,7 @@ bottom edge and Face O is the top edge.
 
 - **Tower index j** increases with x: tower j has base_x = j * S.
 - **Row index r** increases with y (outward): row 0 is the innermost tile
-  of the tower, row 31 is the outermost.
+  of the tower, row `tiles_per_tower[j]-1` is the outermost.
 
 ---
 
@@ -112,20 +128,24 @@ bottom edge and Face O is the top edge.
 
 ### S4.1 Tower Definition
 
-A **tower** is a column of TILES_PER_TOWER = 32 tiles stacked vertically.
-Tower j is defined by:
+A **tower** is a column of `tiles_per_tower[j]` tiles stacked vertically
+(32 at the Y-axis, ramping to 46 at 45°). Tower j is defined by:
 
 ```
 base_x[j] = j * S
 base_y[j] = computed from the inner arc (S4.2)
 ```
 
-Tile (j, r) occupies the axis-aligned square:
+Tile (j, r) occupies the axis-aligned square of lattice points:
 
 ```
-x in [base_x[j],  base_x[j] + S)
-y in [base_y[j] + r*S,  base_y[j] + (r+1)*S)
+x in [base_x[j],  base_x[j] + S]
+y in [base_y[j] + r*S,  base_y[j] + (r+1)*S]
 ```
+
+This is a 257x257 lattice-point domain. Adjacent tiles share their boundary
+row/column (the last row of one tile is the first row of the next), which is
+the shared collar that makes I/O and L/R matching possible.
 
 The origin corner of tile (j, r) is (base_x[j], base_y[j] + r * S),
 consistent with tile_spec S2.1.
@@ -142,33 +162,78 @@ y_cont[j] = sqrt(R^2 - (j * S)^2)
 This is the inner-arc y-coordinate at x = j * S. The tower's bottom edge is
 placed at an integer approximation of this value.
 
-**Accumulated-correction rounding.** Naive rounding of each y_cont[j]
-independently introduces O(1) error per tower, which can accumulate. Instead,
-we track the fractional error and correct:
+**Threshold rounding.** Each y_cont[j] is rounded to the nearest integer,
+then clamped to enforce monotonicity (base_y[j] <= base_y[j-1]):
 
 ```
 function compute_base_y(R, S):
-    err = 0.0
     base_y = []
+    prev_y = 0
     for j = 0, 1, 2, ...:
         x_j = j * S
         if x_j^2 > R^2:
             break       // tower base is beyond the y-axis intercept
         y_cont = sqrt(R^2 - x_j^2)
-        y_j = round(y_cont - err)
-        err += y_j - y_cont
+        y_j = round(y_cont)
+        if j > 0 and y_j > prev_y:
+            y_j = prev_y    // monotonicity clamp
+        prev_y = y_j
         base_y.push(y_j)
     return base_y
 ```
 
-**Invariant:** |err| <= 0.5 at all times. The accumulated correction
-distributes the total rounding error evenly, preventing drift between the
-discrete tower base and the continuous arc.
+**Invariant:** |base_y[j] - y_cont[j]| <= 0.5 for all j. This holds because
+round() gives at most 0.5 deviation, and the min-clamp only moves base_y[j]
+downward (closer to the arc, since y_cont is non-increasing along the octant).
+Monotonicity is structural — no accumulated error state is needed.
+
+**Dual construction modes.** Two grid construction functions exist:
+
+1. `compute_grid(R)` — production mode. Uses threshold rounding
+   as described above. Used by the campaign runner when generating new tiles.
+2. `compute_grid_from_coords(R, coords, n_tiles)` — extraction mode. Reads
+   `base_y` directly from the first tile of each tower in pre-existing tile
+   data (using `b_lo` from the tile coordinates). Used when compositing tiles
+   generated by external tools (e.g., the CUDA pipeline via `gen_coords.py`).
+   These two modes produce DIFFERENT `base_y` values because the external
+   tool uses `isqrt(R^2 - x_j^2)` per-tower, while `compute_grid` uses
+   threshold rounding with monotonicity clamp. The compositor must use the
+   same grid that generated the tiles.
 
 **Integer arithmetic note.** In the CUDA/Rust implementation, R^2 and x_j^2
 are computed in u128 or i128 to avoid overflow at R ~ 870M (R^2 ~ 7.6e17,
 which exceeds u32 and i64 ranges). The sqrt is computed via integer Newton's
 method or via f64 with a +-1 correction step.
+
+### S4.2a Per-Tower Height Computation
+
+Each tower gets enough tiles to guarantee W_RADIAL = 8192 lattice units of
+radial coverage. At tower j, the angle theta_j between the radial direction
+and the vertical satisfies:
+
+```
+cos_theta_j = base_y[j] / sqrt((j*S)^2 + base_y[j]^2)
+tiles_per_tower[j] = ceil(32 / cos_theta_j)
+```
+
+Near the Y-axis (j ~ 0), cos_theta_j ~ 1, so tiles_per_tower[j] = 32.
+At the 45-degree diagonal (j*S ~ base_y[j]), cos_theta_j ~ 1/sqrt(2),
+so tiles_per_tower[j] = ceil(32 * sqrt(2)) = 46.
+
+**Gentle ramp property.** Between adjacent towers, the height changes by at
+most 1 tile. This follows from the smoothness of the arc: the change in
+cos_theta between adjacent towers at spacing S = 256 is small relative to
+the quantization step (1/32). Formally,
+`|tiles_per_tower[j] - tiles_per_tower[j+1]| <= 1` for all j.
+
+**Extra tiles at the top.** The base of every tower stays on the inner arc
+(base_y[j] is unchanged). The additional tiles are appended at the top,
+extending the tower's outer reach. This preserves all inner-arc geometry
+and the inner staircase structure.
+
+**Storage.** `tiles_per_tower[]` is stored as grid metadata alongside
+`base_y[]` and `delta[]`. It is a per-tower u8 array (1 byte per tower,
+~2.3 MB at R = 830M).
 
 ### S4.3 Tower Count and Termination
 
@@ -178,20 +243,21 @@ downward. The octant boundary is the line y = x. We continue placing towers
 
 ```
 Termination predicate: stop adding towers when
-    base_y[j] + W <= j * S
+    base_y[j] + tiles_per_tower[j] * S + MARGIN <= j * S
 ```
 
-That is, tower j is included only if its topmost tile's top edge
-(base_y[j] + W) is strictly above the line y = x (which at x = j*S has
-y = j*S). The first tower that fails this test is NOT included.
+where MARGIN = 2 * S = 512. That is, tower j is included only if its
+topmost tile's top edge plus MARGIN is strictly above the line y = x
+(which at x = j*S has y = j*S). The first tower that fails this test is
+NOT included. The MARGIN guarantees sufficient sub-diagonal coverage for
+cross-diagonal connectivity (S7.1, S7.4).
 
 Let J denote the number of towers (j ranges from 0 to J-1).
 
-**Justification.** Tiles above y = x are "alive" (part of our octant). Tiles
-below y = x are "dead" (belong to the reflected octant). By continuing past
-y = x, the topmost alive tiles of the last few towers overlap with the
-reflected octant's tiles along the diagonal — this overlap zone is the
-natural seam for octant stitching (S8).
+**Justification.** Tower generation extends past y = x until the
+termination predicate (S7.1) is satisfied. Sub-diagonal tiles in extended
+towers provide second-octant coverage for cross-diagonal connectivity —
+no separate infill stage is needed (S8.2).
 
 ### S4.4 Tower Geometry at Search Radius
 
@@ -201,10 +267,11 @@ At R = 830M:
 J ≈ R / (sqrt(2) * S) + O(1) ≈ 830e6 / (1.414 * 256) ≈ 2,293,126 towers
 ```
 
-The "+O(1)" accounts for the overshoot past y = x. Total tiles:
+The "+O(1)" accounts for the overshoot past y = x. Total tiles (variable
+tower height; average ~37 tiles/tower across the octant):
 
 ```
-N = J * 32 ≈ 73.4M tiles
+N = sum(tiles_per_tower[j] for j in 0..J) ≈ 84.8M tiles
 ```
 
 ---
@@ -279,6 +346,14 @@ Since base_y[j+1] = base_y[j] - d, tile (j+1, r') spans:
 [base_y[j] - d + r'*S,  base_y[j] - d + (r'+1)*S)
 ```
 
+**Note on interval convention.** The half-open intervals above describe
+face *segments* (continuous spans along the y-axis) used to compute
+overlap lengths. This is distinct from the closed lattice-point domain
+in S4.1: a tile's sieve domain is [lo, lo+S] (257 lattice points, shared
+boundaries), while the face segment [lo, lo+S) has length S for clean
+overlap arithmetic. Both conventions are correct in their respective
+contexts.
+
 **Decompose d into tile-rows and fractional offset:**
 
 ```
@@ -306,10 +381,10 @@ in tower j+1's local coordinates intersects at most two tile-rows:
 When f = 0, only the primary neighbor exists (overlap = S, full alignment).
 When f > 0, both neighbors exist, with overlap S - f and f respectively.
 
-**Existence check.** A neighbor (j+1, r') is valid only if 0 <= r' < 32.
-If r + q >= 32 or r + q < 0, there is no primary neighbor (the R-face of
-tile (j, r) extends beyond tower j+1's vertical extent). Similarly for
-r + q + 1.
+**Existence check.** A neighbor (j+1, r') is valid only if
+0 <= r' < tiles_per_tower[j+1]. If r + q >= tiles_per_tower[j+1] or
+r + q < 0, there is no primary neighbor (the R-face of tile (j, r) extends
+beyond tower j+1's vertical extent). Similarly for r + q + 1.
 
 ### S5.4 Delta_h for L/R Matching
 
@@ -393,14 +468,44 @@ contain a prime. The compositor must check all neighbors with overlap > 0.
 Skipping based on overlap < COLLAR would risk missing a port whose anchor
 prime falls in the narrow overlap — the unsafe direction (false moat).
 
-### S5.6 Summary: L/R Neighbor Table
+### S5.6 Outer Staircase (Variable Tower Heights)
+
+Variable tower heights create a staircase pattern at the **outer** boundary,
+analogous to the inner staircase caused by base_y differences. When tower j+1
+is taller than tower j by 1 tile, the topmost tile of tower j+1 has its
+L-face exposed (tower j does not reach this row) — this is an outer boundary
+face.
+
+Define per-tower height deltas:
+
+```
+height_delta_left[j]  = tiles_per_tower[j] - tiles_per_tower[j-1]
+height_delta_right[j] = tiles_per_tower[j] - tiles_per_tower[j+1]
+```
+
+When `height_delta_left[j] > 0`, the top `height_delta_left[j]` tiles of
+tower j have their L-face exposed (the left neighbor tower is shorter and
+does not reach these rows). These exposed L-faces are outer boundary faces.
+
+When `height_delta_right[j] > 0`, the top `height_delta_right[j]` tiles of
+tower j have their R-face exposed (the right neighbor tower is shorter).
+These exposed R-faces are outer boundary faces.
+
+A "bump" tower — one taller than both neighbors — has both L-face and R-face
+exposed on its topmost tile(s).
+
+**Boundary implications.** The spanning check (S9.7) must include these
+staircase-exposed faces when identifying outer boundary ports, in addition to
+the O-face of each tower's topmost tile.
+
+### S5.7 Summary: L/R Neighbor Table
 
 For tile (j, r) with d = delta[j], q = d div S, f = d mod S:
 
 | Neighbor | Row in tower j+1 | Overlap (lattice units) | delta_h | Valid if |
 |----------|-------------------|-------------------------|---------|----------|
-| Primary | r + q | S - f | -f | 0 <= r + q < 32 |
-| Secondary | r + q + 1 | f | S - f | f > 0 AND 0 <= r + q + 1 < 32 |
+| Primary | r + q | S - f | -f | 0 <= r + q < tiles_per_tower[j+1] |
+| Secondary | r + q + 1 | f | S - f | f > 0 AND 0 <= r + q + 1 < tiles_per_tower[j+1] |
 
 The symmetric case (L-face of tile (j, r) matched against R-faces in tower
 j-1) uses delta[j-1] with the roles reversed.
@@ -416,30 +521,32 @@ Each tile is addressed by a composite `(tower_id: u32, tile_pos: u8)`:
 ```
 tower_id: u32   — tower index j (0 to J-1). At R = 830M, J ~ 2.29M;
                   at R = 2B, J ~ 5.5M. Fits u32 comfortably.
-tile_pos: u8    — row within tower (0 to 31).
+tile_pos: u8    — row within tower (0 to tiles_per_tower[j]-1). Max 45.
 ```
 
-Total tiles: N = J * 32, where J is the tower count.
+Total tiles: N = sum(tiles_per_tower[j]), where J is the tower count.
 
-**Why not a flat u32 index.** A flat index `j * 32 + r` fits u32 at 73.4M
-tiles (max ~2.29M * 32 = 73.4M < 4.29B). However, port addressing in the
+**Why not a flat u32 index.** A flat index fits u32 at ~84.8M tiles
+(< 4.29B). However, port addressing in the
 naive UF scheme requires `tile_index * 64` which reaches 4.7B — overflowing
 u32. The composite address avoids this: port addresses use the composite
 tile address directly (see S9.2), never requiring a global flat tile index
 multiplied by a slot count.
 
 **Flat index for array layout.** TileOps are still stored contiguously in
-tower-major order: `tile_ops[j * 32 + r]`. The flat index is used ONLY for
-array addressing (always within u32 range at 73.4M tiles), never for port
-identity computation.
+tower-major order: `tile_ops[tile_offset[j] + r]` where `tile_offset[j]`
+is the prefix-sum of `tiles_per_tower` (S10.6). The flat index is used ONLY
+for array addressing (always within u32 range at ~84.8M tiles), never for
+port identity computation.
 
 ### S6.2 Inverse Addressing
 
-From the flat array index:
+With variable tower heights, flat-to-composite mapping requires the
+`tile_offset[]` prefix-sum array (S10.6). From a flat array index:
 
 ```
-tower_id(flat_index) = flat_index / 32     (integer division)
-tile_pos(flat_index) = flat_index mod 32
+tower_id(flat_index) = binary_search(tile_offset, flat_index)
+tile_pos(flat_index) = flat_index - tile_offset[tower_id]
 ```
 
 ### S6.3 Absolute Lattice Coordinates
@@ -454,11 +561,11 @@ tile_y(j, r) = base_y[j] + r * S
 | Neighbor | Address (tower_id, tile_pos) | Condition |
 |----------|------------------------------|-----------|
 | I (inner) | (j, r-1) | r > 0 |
-| O (outer) | (j, r+1) | r < 31 |
-| R primary | (j+1, r + q) | j < J-1, 0 <= r+q < 32 |
-| R secondary | (j+1, r + q + 1) | j < J-1, f > 0, 0 <= r+q+1 < 32 |
-| L primary | (j-1, r - q') | j > 0, 0 <= r-q' < 32 |
-| L secondary | (j-1, r - q' - 1) | j > 0, f' > 0, 0 <= r-q'-1 < 32 |
+| O (outer) | (j, r+1) | r < tiles_per_tower[j]-1 |
+| R primary | (j+1, r + q) | j < J-1, 0 <= r+q < tiles_per_tower[j+1] |
+| R secondary | (j+1, r + q + 1) | j < J-1, f > 0, 0 <= r+q+1 < tiles_per_tower[j+1] |
+| L primary | (j-1, r - q') | j > 0, 0 <= r-q' < tiles_per_tower[j-1] |
+| L secondary | (j-1, r - q' - 1) | j > 0, f' > 0, 0 <= r-q'-1 < tiles_per_tower[j-1] |
 
 Where q = delta[j] div S, f = delta[j] mod S for R-neighbors, and
 q' = delta[j-1] div S, f' = delta[j-1] mod S for L-neighbors.
@@ -471,147 +578,121 @@ A port is addressed by `(tower_id: u32, tile_pos: u8, face: u2, slot: u4)`:
 
 ```
 tower_id: u32   — which tower
-tile_pos: u8    — which tile within tower (0-31)
+tile_pos: u8    — which tile within tower (0 to tiles_per_tower[j]-1, max 45)
 face:     u2    — which face (0=I, 1=O, 2=L, 3=R)
 slot:     u4    — which port slot on that face (0-15)
 ```
 
 Packed representation: 8 bytes (u32 + u8 + u8 packed with face:2 + slot:4
 + 2 spare bits). This replaces the flat `global_id = t * 64 + f * 16 + s`
-which overflows u32 at 73.4M tiles.
+which overflows u32 at ~84.8M tiles.
 
 ---
 
-## S7. Dead Tile Predicate
+## S7. Tower Termination and Sub-Diagonal Tiles
 
-### S7.1 Definition
+### S7.1 Tower Termination Predicate
 
-A tile (j, r) is **dead** if its entire area lies below the line y = x (i.e.,
-it belongs to the reflected octant, not our working octant):
-
-```
-dead(j, r) := (base_y[j] + (r+1)*S) <= (j * S)
-```
-
-Equivalently: the tile's top edge (max y) is at or below the diagonal at
-the tile's x-coordinate. Since the tile is axis-aligned and y = x is linear,
-if the top-right corner is below y = x, the entire tile is below.
-
-A more precise predicate (the top-left corner is also below y = x):
+Tower generation extends past the y = x diagonal. A tower j is
+**terminated** when its highest tile (row tiles_per_tower[j]-1) is fully
+submerged below y = x by at least MARGIN lattice units:
 
 ```
-dead(j, r) := (base_y[j] + (r+1)*S) <= (j * S)
+terminated(j) := base_y[j] + tiles_per_tower[j] * S + MARGIN <= j * S
 ```
 
-This suffices because base_y[j] + (r+1)*S is the tile's max y-value, and
-j*S is the tile's min x-value. If max_y <= min_x, then for all points
-(x, y) in the tile, y <= max_y <= min_x <= x, so y <= x throughout.
+where MARGIN = 2 * S = 512. Tile generation stops at the first terminated
+tower. All towers with index < j are generated; all tiles_per_tower[j]
+tiles in each generated tower are emitted to CUDA.
 
-### S7.2 CUDA Kernel Behavior
+### S7.2 Sub-Diagonal Tiles
 
-The CUDA kernel checks the dead predicate before sieving. For dead tiles:
+Tiles whose area is partially or entirely below y = x are called
+**sub-diagonal tiles**. They are NOT filtered — they are processed normally
+by CUDA. Their sieve domain includes second-octant primes, which provide
+cross-diagonal connectivity via standard face matching with adjacent
+towers. This is deliberate and necessary for correctness (S8.2).
 
-- Emit the empty TileOp v2 header state: `off_I = off_L = off_R = 3`, with
-  zero payload. This signals a dead tile to the compositor.
-- No sieving, no primality testing, no union-find work.
+### S7.3 Empty Tiles
 
-### S7.3 Alive Tiles Near the Diagonal
+A tile with zero collar-zone primes (possible but rare) emits the empty
+TileOp sentinel: `off_I = off_L = off_R = 3`, zero payload. This is a
+**zero-prime condition**, not a diagonal condition — it can occur anywhere
+in the grid. The compositor skips empty tiles in all phases.
 
-Tiles that straddle y = x (partially above, partially below) are alive.
-They are processed normally. Their interior prime graph includes primes both
-above and below y = x — this is correct and necessary for octant stitching
-(S8).
+### S7.4 Coverage Guarantee
 
-### S7.4 Dead Tile Fraction
-
-At R = 830M, the last ~32 towers before termination contain dead tiles. The
-fraction of dead tiles is small: approximately (number of sub-diagonal tiles)
-/ N. Since the diagonal only clips the bottom rows of the last few towers,
-the dead fraction is < 1% of total tiles.
+At M = 2, the extended towers provide at least 512 lattice units of
+second-octant coverage past the diagonal. Since COLLAR <= 7 for all
+supported K_SQ values, any multi-step cross-diagonal path within the
+annulus is captured by sub-diagonal tiles in adjacent towers — no C++
+infill band is needed.
 
 ---
 
-## S8. Octant Boundary — C++ Infill Strategy
+## S8. Octant Boundary — Extended Tower Generation
 
 ### S8.1 The Problem
 
-We tile only the octant {y >= x >= 0} with CUDA at high throughput. A
-connected path of Gaussian primes may cross the y = x line, entering the
-adjacent octant {x >= y >= 0}. If we compose only within our octant, we
-miss such cross-octant paths and may report a false moat.
+We tile the octant {y >= x >= 0} with CUDA at high throughput. A connected
+path of Gaussian primes may cross the y = x line, entering the adjacent
+octant {x >= y >= 0}. If we compose only within our octant, we miss such
+cross-octant paths and may report a false moat.
 
-### S8.2 Why Special Stitching Is Avoided
+### S8.2 Architectural Decision: Extended Tower Generation
 
-The y = x diagonal is at 45° to the tile grid. Tile faces are horizontal
-(I/O) or vertical (L/R). No parallel face-to-face alignment exists at the
-reflection boundary. This means:
+**Approach:** Tower generation continues past y = x until the termination
+predicate (S7.1) is satisfied. All tiles in generated towers — including
+sub-diagonal tiles — are processed by CUDA at full throughput.
+Cross-diagonal connectivity falls out from standard L/R face matching
+between adjacent towers that straddle y = x.
 
-- Standard I/O matching cannot handle the diagonal seam.
-- Standard L/R matching cannot handle it either (perpendicular faces).
-- The current TileOp v2 format omits I/O h1 storage, so reflected face
-  data is unrecoverable from packed records alone.
+**Why this works:** Adjacent towers on both sides of y = x have standard
+L/R face adjacency. The compositor's delta/q/f matching handles the
+curvature offset regardless of the diagonal. No special stitching, no
+diagonal buffers, no auxiliary tile sources. Sub-diagonal tiles sieve
+second-octant primes that participate in standard face matching with their
+neighbors — cross-diagonal paths are captured by the same composition
+pipeline that handles all other inter-tile connections. UF transitivity
+handles multi-hop paths that zigzag across the diagonal.
 
-Any one-octant stitching approach requires either K5 kernel modifications
-(diagonal prime buffers, auxiliary seam records) or an unproven deformation
-theorem (S8.2 of grid_spec v2, now superseded). Both add complexity to the
-CUDA pipeline and compositor for marginal benefit.
-
-### S8.3 Architectural Decision: C++ Diagonal Infill
-
-**Approach:** The C++ reference tiler fills a narrow band of tiles around
-the y = x diagonal in the second octant. These tiles are fed to the
-compositor alongside the CUDA-computed first-octant tiles. The compositor
-sees tiles from both sources and composes them using standard I/O/L/R face
-matching — no special stitching pass, no diagonal buffers, no K5 changes.
-
-**How it works:**
-
-1. CUDA tiles the first octant {y >= x} at full throughput (~155K tiles/s
-   on 4090). This is the bulk computation.
-
-2. C++ tiles the diagonal-adjacent region in the second octant {x > y},
-   covering all tiles within COLLAR distance of y = x. This is a narrow
-   band — at R = 830M, roughly 1-3% of the total tile count (low millions
-   of tiles).
-
-3. The compositor receives TileOps from both sources. The C++ tiles
-   provide the cross-diagonal connectivity: they contain primes in the
-   second octant that connect to first-octant primes via standard face
-   adjacency. No reflection map, no face remapping, no diagonal-specific
-   matching.
-
-**Why this is correct:** The combined tile set covers all primes in the
-first octant plus all primes within COLLAR of the diagonal in the second
-octant. Any cross-diagonal step (distance <= sqrt(k) < COLLAR) has both
-endpoints covered by at least one tile on each side. Standard face
-composition captures all inter-tile connections. UF transitivity handles
-multi-hop paths that zigzag across the diagonal.
-
-**Why this is practical:** The C++ tiler runs at ~1,000 tiles/s on a
-12-core Mac Mini. A few million diagonal-band tiles take minutes — a small
-fraction of the total pipeline time, and negligible compared to the CUDA
-tiling of the full octant. The C++ code already produces TileOp-compatible
-output (validated byte-identical against CUDA).
+**Cost:** At R = 830M, ~10-50 extra towers past the diagonal before
+termination. A few hundred to ~1600 extra tiles at ~155K tiles/s on
+4090 — microseconds of GPU time. The overhead is negligible compared to
+the full octant tiling.
 
 **Key property:** No special tile format, no auxiliary buffers, no K5
-modifications. The compositor is unaware that some tiles came from C++ and
-others from CUDA. It just composes tiles.
+modifications, no separate tile source. The compositor is unaware of the
+diagonal — it composes all tiles uniformly.
 
-### S8.4 Spanning Check After Infill
+### S8.3 Why C++ Infill Is Superseded
 
-The spanning check (S9, Phase 4) operates on the combined UF from both
-CUDA and C++ tiles. Cross-diagonal paths are captured by the infill tiles
-and connected to the first-octant components via standard face matching.
-No post-composition stitching phase is needed.
+The previous approach (grid_spec v3 S8.3) used a separate C++ reference
+tiler to fill a narrow band in the second octant. This worked but added:
 
-### S8.5 Historical Note
+- A separate pipeline stage (C++ at ~1K tiles/s vs CUDA at ~155K tiles/s).
+- A separate tile source that the campaign runner must merge.
+- Additional complexity in the compositor's input handling.
 
-Previous versions of this spec (v2, S8.2-S8.3) explored one-octant
-approaches: an unproven single-octant symmetry shortcut and a face-based
-boundary stitching protocol. Both were superseded by the C++ infill
-strategy, which is simpler, provably correct, and requires zero changes
-to the CUDA pipeline or compositor algorithm. Analysis of the abandoned
-approaches is preserved in:
+Extended tower generation achieves the same coverage using the existing
+CUDA pipeline with no modifications to kernels, compositor, or TileOp
+format. All cross-diagonal connectivity is handled by standard face
+matching on sub-diagonal tiles that CUDA produces natively.
+
+### S8.4 Historical Note
+
+Previous versions of this spec explored alternative cross-diagonal
+strategies:
+
+- **v2, S8.2-S8.3:** One-octant approaches — an unproven single-octant
+  symmetry shortcut and a face-based boundary stitching protocol.
+- **v3, S8.3:** C++ diagonal infill — a separate C++ reference tiler
+  filling a narrow second-octant band alongside CUDA tiles.
+
+Both are superseded by extended tower generation (S8.2), which is simpler,
+provably correct, and requires zero changes to the CUDA pipeline or
+compositor algorithm. Analysis of the abandoned v2 approaches is preserved
+in:
 - `docs/supportive/2026-04-11-octant-stitching-codex-hypothesis.md`
 
 ---
@@ -632,7 +713,7 @@ or **moat** (no such path exists).
 **Note:** the old port-level compositor in
 `tile-probe/crates/moat-kernel/src/compose.rs` (operating on `FacePort`
 structs with O(n^2) distance matching) is superseded by this spec and by
-compositor_spec.md v3. Do not reference compose.rs for the production
+compositor_spec.md v8. Do not reference compose.rs for the production
 compositor.
 
 ### S9.2 TileOp v2 Access Model
@@ -666,7 +747,7 @@ L h1     = tile[h_start .. h_start + l_cnt]
 R h1     = tile[h_start + l_cnt .. h_start + l_cnt + r_cnt]
 ```
 
-Dead tile:
+Empty tile (zero primes):
 
 ```
 tile[0] == 3 && tile[1] == 3 && tile[2] == 3 && tile[3] == 0
@@ -687,10 +768,13 @@ builds a prefix-sum:
 ```
 group_offset[0] = 0
 for t in 0..N:
-    if dead(t) or overflow(t):
+    assert(!is_overflow(t))   // caller must pre-process all overflow tiles
+    if empty(t):
         group_offset[t + 1] = group_offset[t]
     else:
-        group_offset[t + 1] = group_offset[t] + max_group_label(tile_ops[t])
+        // tile_data(t) returns 256-byte data from side table for extended tiles
+        budget = is_extended(t) ? 253 : 125
+        group_offset[t + 1] = group_offset[t] + max_group_label(tile_data(t), budget)
 ```
 
 Global ID:
@@ -704,15 +788,13 @@ embedded-parent schemes are not part of v2.
 
 ### S9.4 Phase 1: I/O Matching (Within Towers)
 
-For each tower `j`, for each row `r` in `[0, 31)`:
+For each tower `j`, for each row `r` in `[0, tiles_per_tower[j]-1)`:
 
 ```
 a = tile_index(j, r)       // lower tile, O-face
 b = tile_index(j, r + 1)   // upper tile, I-face
 
-if dead(a) || dead(b): continue
-if overflow(a) { handle_overflow(a); continue }
-if overflow(b) { handle_overflow(b); continue }
+if empty(a) || empty(b): continue
 
 a_groups = face_groups(a, O)   // packed O section
 b_groups = face_groups(b, I)   // packed I section
@@ -734,21 +816,20 @@ d = delta[j]
 q = d / S
 f = d % S
 
-for r in 0..32:
+for r in 0..tiles_per_tower[j]:
     a = tile_index(j, r)
-    if dead(a): continue
-    if overflow(a) { handle_overflow(a); continue }
+    if empty(a): continue
 
     // primary neighbor
-    if r + q < 32:
+    if r + q < tiles_per_tower[j + 1]:
         b = tile_index(j + 1, r + q)
-        if !dead(b) && !overflow(b):
+        if !empty(b):
             match_lr(a, b, -f)
 
     // secondary neighbor
-    if f > 0 && r + q + 1 < 32:
+    if f > 0 && r + q + 1 < tiles_per_tower[j + 1]:
         b = tile_index(j + 1, r + q + 1)
-        if !dead(b) && !overflow(b):
+        if !empty(b):
             match_lr(a, b, S - f)
 ```
 
@@ -761,55 +842,85 @@ function match_lr(a, b, delta_h):
     b_groups = face_groups(b, L)
     b_h1     = face_h1(b, L)   // decoded from group byte bit 7 + h1 byte
     for sa in 0..len(a_groups):
+        gid_a = decode_group_id(a_groups[sa])
+        if gid_a == 0: continue   // zero-padded R slot
         target = a_h1[sa] - delta_h
         for sb in 0..len(b_groups):
+            gid_b = decode_group_id(b_groups[sb])
+            if gid_b == 0: continue   // zero-padded L slot
             if b_h1[sb] == target:
-                uf.union(global_id(a, a_groups[sa]),
-                         global_id(b, b_groups[sb]))
-                break
+                uf.union(global_id(a, gid_a),
+                         global_id(b, gid_b))
+                // No break — a port at h1_l == f can match both
+                // primary and secondary neighbors (dual-neighbor matching)
 ```
 
 The packed sections are variable-length, so the inner loops run to the actual
-face counts rather than to a fixed slot count.
+face counts rather than to a fixed slot count. The derived `r_cnt` may include
+zero-padded trailing entries where `decode_group_id(group_byte) == 0` — these
+must be skipped to avoid unsigned underflow in `global_id(t, 0)`.
+
+**No overflow tiles reach the compositor.** The caller pre-processes all
+overflow tiles into 256-byte extended TileOps before invoking the compositor.
+See compositor_spec.md v8, S7.1.
 
 ### S9.6 Overflow Handling
 
-When `tile[0] == 0xFF`, the compositor applies conservative bridging:
-
-```
-function handle_overflow(t):
-    bridge = overflow_global_id(t)
-    for each neighbor n of tile t:
-        if dead(n): continue
-        if overflow(n):
-            uf.union(bridge, overflow_global_id(n))
-            continue
-        for g in face_groups(n, face_toward(t)):
-            uf.union(bridge, global_id(n, g))
-```
-
-This adds false connectivity only and is therefore safe in the moat-search
-direction.
+**No overflow tiles reach the compositor.** The caller (campaign runner or
+test harness) detects overflow tiles (`tile[0] == 0xFF`) and reprocesses
+them via C++ into 256-byte extended TileOps BEFORE calling the compositor.
+The compositor asserts `!is_overflow(tile)` for every tile. Extended tiles
+are parsed normally via the side table with `payload_budget = 253`. See
+compositor_spec.md v8, S7.1 for details.
 
 ### S9.7 Phase 3: Spanning Check
 
-After all matching and octant stitching:
+After all matching:
 
 ```
-inner_roots = HashSet()
+inner_members = []   // raw global_ids, not roots
 
-for each row-0 tile:
-    add roots of all I-face groups
-    add roots of exposed L/R boundary groups
+for each tower j:
+    // I-face of row 0 (horizontal tread)
+    add global_ids of all I-face groups of tile(j, 0)
 
-for each row-31 tile:
-    if any O-face group root is in inner_roots: return Spanning
-    if any exposed L/R boundary group root is in inner_roots: return Spanning
+    // Exposed L-face ports at inner staircase risers (j > 0 only)
+    if j > 0:
+        q_prev, f_prev from delta[j-1]
+        if q_prev > 0: add ALL L-face ports of rows 0..q_prev-1 (skip empty, skip group_id==0)
+        if f_prev > 0: add L-face ports of row q_prev with h1 < f_prev (skip empty, skip group_id==0)
+
+// Re-find all inner members to get current roots
+inner_roots = { find(id) for id in inner_members }
+
+for each tower j:
+    let T_j = tiles_per_tower[j]
+
+    // O-face of topmost row (horizontal tread)
+    if any O-face group root of tile(j, T_j-1) is in inner_roots: return Spanning
+
+    // Exposed R-face ports at delta-based outer staircase risers (j < J-1 only)
+    if j < J-1:
+        q, f from delta[j]
+        if q > 0: check ALL R-face ports of rows (T_j-q)..T_j-1 (skip empty, skip group_id==0)
+        if f > 0: check R-face ports of row (T_j-1-q) with h1 >= S-f (skip empty, skip group_id==0)
+
+    // Exposed R-face ports at height-staircase risers (tower j taller than j+1)
+    if j < J-1:
+        let hd = T_j - tiles_per_tower[j+1]
+        if hd > 0: check ALL R-face ports of rows (T_j-hd)..T_j-1 (skip empty, skip group_id==0)
+
+    // Exposed L-face ports at height-staircase risers (tower j taller than j-1)
+    if j > 0:
+        let hd = T_j - tiles_per_tower[j-1]
+        if hd > 0: check ALL L-face ports of rows (T_j-hd)..T_j-1 (skip empty, skip group_id==0)
 
 return Moat
 ```
 
-The exposure rules from S5 still apply; only the face access method changes.
+The exposure rules from S5 still apply. Boundary tracking stores member
+global_ids (not roots) during ingestion; `finalize()` re-finds all members.
+See compositor_spec.md v8, S6.5 for the detailed pseudocode.
 
 ### S9.8 Cost Model
 
@@ -826,22 +937,24 @@ count arithmetic per tile. This is negligible relative to UF traffic.
 TileOps are stored in tower-major order:
 
 ```
-tile_ops[j * 32 + r]    // 128 bytes each
+tile_ops[tile_offset[j] + r]    // 128 bytes each
 ```
 
+where `tile_offset[j] = sum(tiles_per_tower[0..j])` is the prefix-sum array
+(S10.6).
+
 **Spatial locality:**
-- I/O matching (Phase 2): accesses tile_ops[j*32 + r] and tile_ops[j*32 + r+1]
-  — consecutive in memory. Sequential scan within each tower. Stride: 128
-  bytes. Excellent prefetch behavior.
-- L/R matching (Phase 3): accesses tile_ops[j*32 + r] and
-  tile_ops[(j+1)*32 + r'] — stride of 32 * 128 = 4096 bytes between towers.
-  Still L2-friendly on modern CPUs (L2 line = 64 B, L2 size = 1-4 MB;
-  two towers fit in 8 KB).
+- I/O matching (Phase 2): accesses tile_ops[tile_offset[j] + r] and
+  tile_ops[tile_offset[j] + r+1] — consecutive in memory. Sequential scan
+  within each tower. Stride: 128 bytes. Excellent prefetch behavior.
+- L/R matching (Phase 3): accesses tiles in tower j and tower j+1 — stride
+  of tiles_per_tower[j] * 128 bytes (4096--5888 bytes) between towers.
+  Still L2-friendly on modern CPUs.
 
 ### S10.2 Tile Status Access
 
-Tile status for tile (j, r) is derived from group data in `tile_ops[j * 32 + r]`
-(tile_spec S4.3). Overflow: `bytes[0] == 0xFF`. Dead:
+Tile status for tile (j, r) is derived from group data in `tile_ops[tile_offset[j] + r]`
+(tile_spec S4.3). Overflow: `bytes[0] == 0xFF`. Empty (zero primes):
 `bytes[0] == bytes[1] == bytes[2] == 3` and `bytes[3] == 0`. No separate
 status array exists.
 
@@ -866,16 +979,28 @@ derivation and octant stitching, not for the hot composition loop.
 
 | Structure | Size | Notes |
 |-----------|------|-------|
-| tile_ops | 9.38 GB | 73.4M tiles * 128 B |
-| group-level UF parent | 1.47 GB | ~367M groups * 4 B (5 groups/tile avg) |
-| group_offset prefix-sum | 294 MB | 73.4M tiles * 4 B |
+| tile_ops | 10.85 GB | ~84.8M tiles * 128 B |
+| group-level UF parent | 1.70 GB | ~424M groups * 4 B (5 groups/tile avg) |
+| group_offset prefix-sum | 339 MB | ~84.8M tiles * 4 B |
 | delta table | 9 MB | 2.3M towers * 4 B |
 | base_y table | 18 MB | 2.3M towers * 8 B |
-| **Total** | **~11.2 GB** | |
+| tiles_per_tower table | 2.3 MB | 2.3M towers * 1 B (u8) |
+| tile_offset prefix-sum | 9.2 MB | 2.3M towers * 4 B |
+| **Total** | **~12.9 GB** | |
 
 An 80 GB A100 has ample room. A 24 GB consumer GPU can also hold this footprint
 with tighter overhead margins, though sector batching remains useful for
 pipeline flexibility and future larger-band experiments.
+
+### S10.6 Tile Offset Prefix-Sum
+
+```
+tile_offset[0] = 0
+tile_offset[j] = tile_offset[j-1] + tiles_per_tower[j-1]
+```
+
+Total: J * 4 bytes (u32) ~ 9.2 MB. Used for tower-major array indexing
+and inverse addressing (S6.2).
 
 ---
 
@@ -884,11 +1009,10 @@ pipeline flexibility and future larger-band experiments.
 ### S11.1 Pseudocode
 
 ```
-function build_grid(R: i64, S: i64 = 256, W: i64 = 8192) -> Grid:
-    assert(W == 32 * S)
-    
+function build_grid(R: i64, S: i64 = 256) -> Grid:
     let mut towers: Vec<Tower> = []
-    let mut err: f64 = 0.0
+    let mut prev_y: i64 = 0
+    let mut tpt: Vec<u8> = []       // tiles_per_tower
     
     for j in 0, 1, 2, ...:
         let x_j: i64 = j * S
@@ -900,15 +1024,23 @@ function build_grid(R: i64, S: i64 = 256, W: i64 = 8192) -> Grid:
         // Inner arc y-coordinate (continuous)
         let y_cont: f64 = sqrt((R as f64)^2 - (x_j as f64)^2)
         
-        // Integer rounding with accumulated correction
-        let y_j: i64 = round(y_cont - err)
-        err += (y_j as f64) - y_cont
+        // Threshold rounding with monotonicity clamp
+        let y_j: i64 = round(y_cont)
+        if j > 0 && y_j > prev_y:
+            y_j = prev_y
+        prev_y = y_j
         
-        // Termination: tower top must be above y = x
-        if y_j + W <= x_j:
+        // Per-tower height (S4.2a)
+        let cos_theta = y_j as f64 / sqrt((x_j as f64)^2 + (y_j as f64)^2)
+        let h: u8 = ceil(32.0 / cos_theta).clamp(32, 46)
+        
+        // Termination: tower top + MARGIN must be above y = x (S4.3, S7.1)
+        let MARGIN: i64 = 2 * S
+        if y_j + (h as i64) * S + MARGIN <= x_j:
             break
         
         towers.push(Tower { base_x: x_j, base_y: y_j, id: j })
+        tpt.push(h)
     
     let J = towers.len()
     
@@ -919,25 +1051,30 @@ function build_grid(R: i64, S: i64 = 256, W: i64 = 8192) -> Grid:
         assert(d >= 0, "delta must be non-negative (arc descends)")
         delta.push(d as u32)
     
-    // Count dead tiles
-    let mut dead_count = 0
+    // Precompute tile_offset prefix-sum (S10.6)
+    let mut tile_offset: Vec<u32> = Vec::with_capacity(J)
+    tile_offset.push(0)
+    for j in 0..J-1:
+        tile_offset.push(tile_offset[j] + tpt[j] as u32)
+    
+    // Count sub-diagonal tiles (informational; all tiles are processed)
+    let mut sub_diag_count = 0
     for j in 0..J:
-        for r in 0..32:
+        for r in 0..tpt[j]:
             let top_y = towers[j].base_y + (r + 1) * S
             let min_x = towers[j].base_x
             if top_y <= min_x:
-                dead_count += 1
+                sub_diag_count += 1
     
-    let total_tiles = J * 32
-    let alive_tiles = total_tiles - dead_count
+    let total_tiles = tile_offset[J-1] + tpt[J-1] as u32
     
     return Grid {
-        R, S, W,
+        R, S,
         towers,
         delta,
+        tiles_per_tower: tpt,
+        tile_offset,
         total_tiles,
-        alive_tiles,
-        tiles_per_tower: 32,
     }
 ```
 
@@ -950,26 +1087,29 @@ The inner-arc computation uses f64 for sqrt. At R = 870M:
   (catastrophic cancellation).
 - **Mitigation:** for towers near the diagonal (x_j ~ R/sqrt(2)),
   R^2 - x_j^2 ~ R^2/2 ~ 3.8e17, which has 59 bits — still exceeds f64
-  mantissa. However, the loss is at most a few ULP, and the accumulated
-  correction mechanism absorbs this: the absolute error in y_j is at most 1
-  lattice unit, and err tracks the cumulative deviation.
+  mantissa. However, the loss is at most a few ULP, and the threshold
+  rounding absorbs this: the absolute error in y_j is at most 0.5
+  lattice units per tower by construction.
 - **Stronger mitigation (recommended):** compute R^2 - x_j^2 in i128, then
   apply integer sqrt (Newton's method) to get an exact integer floor. This
-  eliminates all floating-point concerns. The accumulated-correction rounding
+  eliminates all floating-point concerns. The threshold rounding
   then operates on the integer floor value.
 
 ### S11.3 Verification
 
 The grid construction can be verified by checking:
 
-1. **Arc tracking:** for each tower j, |base_y[j] - sqrt(R^2 - (j*S)^2)| <= 1.
+1. **Arc tracking:** for each tower j, |base_y[j] - sqrt(R^2 - (j*S)^2)| <= 0.5.
 2. **Delta consistency:** delta[j] = base_y[j] - base_y[j+1] for all j.
 3. **Monotonicity:** delta[j] >= 0 and non-decreasing (approximately; exact
    monotonicity depends on rounding).
-4. **Termination:** the last tower has at least one alive tile; the tower
-   after termination would have no alive tiles.
-5. **Coverage:** every lattice point in the octant annulus with y >= x is
-   within S/2 lattice units of some alive tile's center (approximate; exact
+4. **Termination:** the last tower has its top edge + MARGIN above y = x;
+   the next tower would fail the termination predicate (S4.3).
+5a. **Tower height bounds:** tiles_per_tower[j] >= 32 for all j, and
+   tiles_per_tower[j] <= 46 for all j.
+5b. **Gentle ramp:** |tiles_per_tower[j] - tiles_per_tower[j+1]| <= 1.
+6. **Coverage:** every lattice point in the octant annulus with y >= x is
+   within S/2 lattice units of some tile's center (approximate; exact
    coverage depends on arc curvature vs. tile size).
 
 ---
@@ -1039,6 +1179,7 @@ Let N = total tiles, G = total active groups, and J = number of towers.
 | 0 (prefix-sum) | O(N) | header + packed group sections | One pass over all TileOps |
 | 1 (I/O matching) | O(P_IO) | packed O/I sections | Shared-prime identity |
 | 2 (L/R matching) | O(P_LR * avg_face_ports) | packed L/R sections + decoded h1 | h1 matching, two faces per pair |
+| 3 (octant boundary) | 0 | — | No computation: first-octant sufficiency via extended tower generation (S8.2) |
 | 4 (spanning check) | O(P_boundary) | boundary port roots | Hash set lookup |
 
 Where P_IO = total O-face ports matched (= I-face ports of the next row) and
@@ -1054,12 +1195,12 @@ O(N + G * alpha(G))
 where alpha is the inverse Ackermann function from union-find. Effectively
 linear in the number of tiles.
 
-At R = 830M: N = 73.4M tiles, G ~ 367M groups (about 5 groups/tile average).
+At R = 830M: N ~ 84.8M tiles, G ~ 424M groups (about 5 groups/tile average).
 With union-find operations dominating, and each operation being a few
 nanoseconds after path compression:
 
 ```
-Estimated UF work: 367M * 5 ns ~ 1.8 seconds
+Estimated UF work: 424M * 5 ns ~ 2.1 seconds
 ```
 
 Plus TileOp scanning and boundary handling, the compositor remains comfortably
@@ -1105,11 +1246,10 @@ resides in the lowest byte offsets.
 ### S14.3 Octant Boundary (Resolved)
 
 TileOp v2 omits I/O h1 storage. This was previously a blocker for
-face-based diagonal stitching. With the C++ infill strategy (S8.3),
-no diagonal stitching is performed — the C++ tiler produces standard
-TileOps for the second-octant band, and standard I/O/L/R composition
-handles all cross-diagonal connectivity. No spare-byte escape hatch
-is needed.
+face-based diagonal stitching. With extended tower generation (S8.2),
+no diagonal stitching is performed — sub-diagonal tiles are standard
+CUDA-produced TileOps, and standard I/O/L/R composition handles all
+cross-diagonal connectivity. No spare-byte escape hatch is needed.
 
 ---
 
@@ -1117,10 +1257,10 @@ is needed.
 
 ### Q1. Octant Stitching Detail — RESOLVED
 
-Resolved by C++ infill strategy (S8.3). No face-based diagonal stitching
-is performed. The C++ tiler fills the second-octant band with standard
-TileOps, and standard composition handles cross-diagonal connectivity.
-The face-mapping and delta_h questions are moot.
+Resolved by extended tower generation (S8.2). No face-based diagonal
+stitching is performed. Sub-diagonal tiles in extended towers provide
+second-octant coverage, and standard composition handles cross-diagonal
+connectivity. The face-mapping and delta_h questions are moot.
 
 ### Q2. Parallelism Strategy
 
@@ -1187,8 +1327,8 @@ useful. Do not implement until Q3 is resolved.
 
 ### Q4. Sector Batching
 
-At R = 830M, the full octant has J ~ 2.3M towers and 73M tiles. If memory
-permits processing the full octant at once (11.8 GB), no batching is needed.
+At R = 830M, the full octant has J ~ 2.3M towers and ~85M tiles. If memory
+permits processing the full octant at once (~12.9 GB), no batching is needed.
 If the target GPU has less memory (e.g., 24 GB RTX 4090, which cannot hold
 TileOps + UF simultaneously), the octant must be split into angular sectors.
 
@@ -1223,20 +1363,30 @@ composition. Violation of any invariant is a hard error.
    in the first octant is 1 (at y = x), yielding delta ~ S = 256. The
    factor-of-2 bound provides margin for rounding.)
 
-4. **Row validity:** all computed neighbor rows r' are in [0, 32). (Enforced
-   by the bounds checks in S6.4.)
+4. **Row validity:** all computed neighbor rows r' are in
+   [0, tiles_per_tower[j]). (Enforced by the bounds checks in S6.4.)
 
 5. **Port count agreement on aligned faces:** for tiles (j, r) and (j, r+1),
    the number of nonzero groups on (j, r)'s O-face equals the number on
    (j, r+1)'s I-face. (Guaranteed by tile_spec determinism: both kernels
    see the same primes in the shared collar.)
 
-6. **No false moats from dead tiles:** every dead tile has the empty TileOp v2
-   header state (tile_spec S4.3).
-   The compositor never matches a dead tile's ports.
+6. **No false moats from empty tiles:** every empty tile (zero collar-zone
+   primes) has the empty TileOp sentinel (S7.3, tile_spec S4.3).
+   The compositor never matches an empty tile's ports.
 
 7. **Spanning monotonicity within a band:** not assumed. The spanning check
    examines the full UF after all matching is complete.
+
+8. **Tower height lower bound:** tiles_per_tower[j] >= 32 for all j.
+   (Every tower has at least the minimum radial depth.)
+
+9. **Gentle ramp:** |tiles_per_tower[j] - tiles_per_tower[j+1]| <= 1
+   for all j. (Tower heights change by at most 1 tile between neighbors.)
+
+10. **Radial coverage:** effective radial coverage >=
+    W_RADIAL = 8192 lattice units at all angles. (Guaranteed by the
+    per-tower height formula in S4.2a.)
 
 ---
 
@@ -1244,13 +1394,15 @@ composition. Violation of any invariant is a hard error.
 
 | Term | Definition |
 |------|------------|
-| **Tower** | A vertical column of 32 tiles, addressed by tower index j. |
-| **Row** | A tile's position within its tower, r in [0, 31]. Row 0 is innermost. |
+| **Tower** | A vertical column of tiles (32--46), addressed by tower index j. Height varies for consistent radial coverage. |
+| **Row** | A tile's position within its tower, r in [0, tiles_per_tower[j]-1]. Row 0 is innermost. |
 | **Delta** | The vertical offset delta[j] = base_y[j] - base_y[j+1] between adjacent towers. |
 | **Primary neighbor** | The main overlapping tile in the adjacent tower (overlap = S - f). |
 | **Secondary neighbor** | The secondary overlapping tile (overlap = f). Exists only when f > 0. |
-| **Alive tile** | A tile that is neither dead nor overflow — has at least one nonzero group slot. |
-| **Dead tile** | A tile entirely below y = x, all group slots zero. |
+| **Non-empty tile** | A tile that is neither empty nor overflow — has at least one nonzero group slot. |
+| **Empty tile** | A tile with zero collar-zone primes. Emits the empty TileOp sentinel (S7.3). |
+| **Sub-diagonal tile** | A tile partially or entirely below y = x. Processed normally by CUDA (S7.2). |
 | **Spanning** | A connected component of ports touches both the inner and outer boundary. |
 | **Moat** | No connected component spans the annulus — a gap in Gaussian prime connectivity. |
+| **Outer staircase** | The staircase pattern at the outer boundary caused by variable tower heights, analogous to the inner staircase from base_y differences. Towers that are taller than their neighbors expose L/R faces at the top (S5.6). |
 | **Octant stitching** | Connecting ports across the y = x diagonal between the working octant and its reflection. |

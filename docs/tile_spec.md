@@ -28,12 +28,15 @@ Key properties:
 ## 2. Tile Geometry
 
 ```
-S = 256            // tile side length (lattice units, 256 segments)
-k = 40             // step parameter (moat step = sqrt(k) ~ 6.32)
-collar = 7         // perpendicular depth into tile from each face (1..7 lattice units)
-halo = (S + 1) + 2*7 // CUDA kernel processes 271 x 271 lattice points per tile
-                      // = 257 tile-proper points + 14 collar points
+S      = 256                    // tile side length (lattice units, 256 segments)
+K_SQ   = step distance squared  // connectivity threshold (two primes connect iff dist^2 <= K_SQ)
+COLLAR = ceil(sqrt(K_SQ))       // perpendicular depth into tile from each face
+halo   = (S + 1) + 2*COLLAR    // CUDA kernel processes (S+1+2*COLLAR)^2 lattice points per tile
+
+Default: K_SQ=40, COLLAR=7. For K_SQ=36, COLLAR=6.
 ```
+
+Example (K_SQ=40, COLLAR=7): halo = 271, kernel processes 271 x 271 = 73,441 lattice points (257 tile-proper + 14 collar).
 
 Tiles are axis-aligned squares of side `S = 256` lattice units, so tile proper
 contains `(S + 1) x (S + 1) = 257 x 257` lattice points with tile-relative
@@ -51,55 +54,18 @@ anchors range over tile-proper rows `0..256`. TileOp v2 resolves the lone
 L/R group byte to carry `h1`'s 9th bit. Yields
 ~6,300 primes per tile at origin density, far fewer (~1,500) at 850M radius.
 
-**Why collar=7:** two Gaussian primes connect iff their squared Euclidean
-distance <= k=40. For primes on the same face (separated only along the face
-axis), the maximum connecting offset is floor(sqrt(40))=6. The collar must
+**Why COLLAR=ceil(sqrt(K_SQ)):** two Gaussian primes connect iff their squared Euclidean
+distance <= K_SQ. For primes on the same face (separated only along the face
+axis), the maximum connecting offset is floor(sqrt(K_SQ)). The collar must
 reach deep enough that every prime within connection range of the face is
-included: collar = ceil(sqrt(k)) = ceil(6.32) = 7.
+included: COLLAR = ceil(sqrt(K_SQ)). Example: K_SQ=40, floor(sqrt(40))=6, COLLAR=ceil(6.32)=7.
 
-### 2.1 Grid Descriptor
+### 2.1 Grid Layout
 
-Tiles are addressed by array index. Position is derived from the index and a
-per-band grid descriptor:
-
-```rust
-struct GridDesc {
-    base_x: i64,    // lattice x of tile (0,0)'s origin corner (min-x, min-y)
-    base_y: i64,    // lattice y of tile (0,0)'s origin corner
-    width:  u32,    // tiles in x direction
-    height: u32,    // tiles in y direction (32 for 8192-unit radial depth)
-}
-```
+Grid layout is defined in `grid_spec.md`. The grid uses variable-height towers (32-46 tiles) anchored on the inner arc. See `grid_spec.md` for tower construction, tile addressing, and inter-tower geometry.
 
 **Origin corner convention:** each tile's origin is its (min-x, min-y) corner.
 h1 offsets are measured from this corner along the face axis.
-
-```
-tile_x = grid.base_x + (idx % grid.width) as i64 * 256
-tile_y = grid.base_y + (idx / grid.width) as i64 * 256
-right_neighbor  = idx + 1           (if same row)
-top_neighbor    = idx + grid.width
-```
-
-**Face convention:** the grid y-axis is radial (row 0 = innermost ring of
-band). Logical faces map to geometric edges as follows:
-
-| Face | Edge | Shared with neighbor |
-|------|------|----------------------|
-| I (Inner) | bottom edge (y = tile_y) | `bottom_neighbor = idx - grid.width` |
-| O (Outer) | top edge (y = tile_y + S) | `top_neighbor = idx + grid.width` |
-| L (Left) | left edge (x = tile_x) | `left_neighbor = idx - 1` |
-| R (Right) | right edge (x = tile_x + S) | `right_neighbor = idx + 1` |
-
-Face O of tile i and Face I of its top neighbor extract from the same shared
-boundary row `y = tile_y + S`. Face R of tile i and Face L of its right
-neighbor extract from the same shared boundary column `x = tile_x + S`.
-(updated 2026-04-09: 257x257 shared boundary convention)
-
-One GridDesc per search band. Passed to both the CUDA kernel (block -> lattice
-region) and the Rust compositor (index -> adjacency). Tiles outside the annular
-band exist in the array but are dead (all-zero TileOp — no ports on any
-face, detected via S4.3 dead-tile check).
 
 ## 3. Port Definition
 
@@ -108,7 +74,7 @@ where two consecutive face primes (ordered by along-face position) belong to
 the same port iff their squared Euclidean distance <= k (including both
 along-face and depth coordinates). (Resolved 2026-04-09: the 1D approximation
 "along-face separation <= 6" is superseded by the full distance^2 <= k rule,
-consistent with tile_operations.md S7.2. Face primes span up to collar=7
+consistent with tile_operations.md S7.2. Face primes span up to collar=COLLAR
 depth, so the perpendicular component matters.) Ports are determined by face
 geometry alone (independent of tile interior).
 
@@ -285,7 +251,7 @@ bytes are live.
 
 | Byte 0 | Condition | Meaning | Action |
 |---|---|---|---|
-| `0xFF` | — | Overflow (CUDA filled all 128 bytes with 0xFF) | Conservative bridge (S4.6) |
+| `0xFF` | — | Overflow (CUDA filled all 128 bytes with 0xFF) | Reprocess via C++ into TileOp_wide (S4.7) |
 | `3` | `bytes[1] == 3 && bytes[2] == 3 && bytes[3] == 0` | Dead tile (no ports on any face) | Skip |
 | other valid offset | — | Normal alive tile | Process |
 
@@ -363,54 +329,20 @@ When a tile exceeds the TileOp v2 packed-data budget after pruning, the CUDA
 kernel:
 
 1. Writes 0xFF to all 128 bytes of the TileOp
-2. The compositor detects overflow by checking `bytes[0] == 0xFF` —
+2. Overflow is detected by checking `bytes[0] == 0xFF` —
    structurally impossible for valid tiles (see S4.3)
 
-The compositor treats the tile as a **conservative bridge**:
-all ports on all adjacent tile faces touching this tile are unioned into one
-equivalence class. No h1 matching, no group logic — everything connects
-through this tile.
-
-**Why this is safe for moat search:**
-
-Conservative bridging adds **false connectivity** -- groups that may not
-actually be connected get unioned. The only possible error is:
-
-- **False spanning:** the compositor reports "path exists" when no true path
-  does. This can cause a true moat to be overlooked (false negative for moat
-  detection), but can never cause a non-existent moat to be reported (no
-  false positives for moat detection).
-
-The moat search seeks the absence of spanning paths. Conservative bridging
-can mask a moat but cannot fabricate one. Correctness is preserved in the
-direction that matters: every reported moat is real.
+Overflow tiles do NOT reach the compositor. They are reprocessed by the C++
+host path into 256-byte extended TileOps (TileOp_wide, see S4.7 Tier 2) and
+re-injected before composition begins.
 
 **Expected occurrence:** TileOp v2 is expected to absorb 99.5%+ of operating-
-point tiles. The remaining poisoned tiles are handled safely by conservative
-bridging and, if needed, Tier 2 reprocessing.
+point tiles. The remaining overflow tiles are reprocessed via Tier 2.
 
 ### 4.7 Compositor Escalation
 
-If overflow tiles accumulate enough to degrade search sensitivity, the
-compositor escalates from conservative bridging to on-demand recalculation.
-
-**Tier 0 — Normal**
-```
-Overflow count: 0
-Action: standard composition
-```
-
-**Tier 1 — Isolated poison**
-```
-Overflow count: 1 to ESCALATION_THRESHOLD   // default threshold: 100 tiles/band
-Action: conservative bridging for poisoned tiles, log indices
-Correctness: intact (safe direction — false connectivity only)
-Optional: if spanning verdict AND path passes through a poisoned tile
-          -> flag for re-verification with Tier 2
-```
-
-Tier 1 is the expected operating mode for the rare v2 poison tiles at
-`R >= 830M`.
+All overflow tiles are reprocessed by the C++ host into TileOp_wide before
+the compositor runs. The compositor never sees 0xFF-poisoned tiles.
 
 **Tier 2 — Escalation**
 ```
@@ -465,7 +397,7 @@ on the same Gaussian prime:
 match(A_port, B_port) := A.h1 == B.h1 + delta_h
 ```
 
-**Correctness:** both tiles include all primes within collar=7 lattice units
+**Correctness:** both tiles include all primes within collar=COLLAR lattice units
 of the shared face. Any prime on the face is visible to both tiles. Both
 tiles use deterministic integer arithmetic to compute h1 as the offset of
 the port's minimum-position prime from their respective origins. If A.h1 and
@@ -620,25 +552,9 @@ for sa in 0..a_groups.len() {
 }
 ```
 
-**Conservative bridge (overflow sentinel, S4.6):**
-
-```rust
-if tile_ops[tile_idx].bytes[0] == 0xFF {
-    // Poison tile: union ALL adjacent ports through it (S4.3 overflow check)
-    let mut first = None;
-    for (neighbor_idx, shared_face) in adjacent_tiles(tile_idx) {
-        let opp = opposite(shared_face);
-        for slot in 0..tile_ops[neighbor_idx].face_groups(opp).len() {
-            let gid = global_id(neighbor_idx, opp, slot);
-            match first {
-                None    => first = Some(gid),
-                Some(f) => uf.union(f, gid),
-            }
-        }
-    }
-    continue; // skip normal composition for this tile
-}
-```
+**Overflow tiles:** the compositor never sees 0xFF-poisoned tiles. They are
+reprocessed by C++ into 256-byte TileOp_wide before composition (see S4.7).
+The compositor processes all tiles uniformly — no conservative bridge path.
 
 ### 6.3 Phase 3: Check Spanning
 
@@ -672,7 +588,7 @@ One block per tile, 256 threads, 8-phase pipeline:
 2. **Miller-Rabin** — confirm that norm(a + bi) = a^2 + b^2 is a rational prime
 3. **Compact** — collect confirmed primes into shared memory
 4. **UF init** — initialize union-find over tile primes
-5. **Neighbor union** — connect primes whose squared Euclidean distance <= k=40
+5. **Neighbor union** — connect primes whose squared Euclidean distance <= K_SQ
 6. **Flatten** — path compression on UF
    (see S7.1 for synchronization details on phases 4-6)
 7. **Classify** — identify face ports, assign group labels, prune dead-ends

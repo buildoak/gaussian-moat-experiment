@@ -10,7 +10,7 @@ This spec defines the **tile kernel** — the function that processes a single t
 and emits one TileOp. It is the inner loop of the entire Gaussian moat search:
 73M tiles, each producing 128 bytes that the compositor wires together.
 
-**Input:** tile coordinates `(a_lo, b_lo)` and parameters `S=256, collar=7, k=40`.
+**Input:** tile coordinates `(a_lo, b_lo)` and parameters `S=256, K_SQ (step distance squared), COLLAR = ceil(sqrt(K_SQ))`.
 
 **Output:** one `TileOp` (128 bytes) encoding how boundary primes connect through
 the tile interior.
@@ -81,13 +81,17 @@ For inert primes (`p = 3 mod 4`): `p | (a^2 + b^2)` requires both `p | a` and
 
 ```
 Parameters:
-  S       = 256     tile side length (lattice units, 256 segments = 257 points)
-  collar  = 7       halo depth for neighbor connectivity (sqrt(40) < 7)
-  k       = 40      connectivity threshold (distance^2)
-  side_exp = (S + 1) + 2*collar = 271  expanded side (sieve domain per axis)
+  S       = 256                         tile side length (lattice units, 256 segments = 257 points)
+  K_SQ    = step distance squared       connectivity threshold (two primes connect iff dist^2 <= K_SQ)
+  COLLAR  = ceil(sqrt(K_SQ))           halo depth for neighbor connectivity
+  side_exp = (S + 1) + 2*COLLAR        expanded side (sieve domain per axis)
 
-Sieve domain: [a_lo - collar, a_lo + S + collar] x [b_lo - collar, b_lo + S + collar]
-            = 271 x 271 = 73,441 lattice points (0-indexed: rows 0..270, cols 0..270)
+  Default: K_SQ=40, COLLAR=7. For K_SQ=36, COLLAR=6.
+
+Example (K_SQ=40, COLLAR=7):
+  side_exp = 257 + 14 = 271
+  Sieve domain: [a_lo - 7, a_lo + S + 7] x [b_lo - 7, b_lo + S + 7]
+              = 271 x 271 = 73,441 lattice points (0-indexed: rows 0..270, cols 0..270)
 ```
 
 Tile proper is the closed box `[a_lo, a_lo + S] x [b_lo, b_lo + S]`, so it
@@ -222,6 +226,8 @@ Witness selection (deterministic, Jim Sinclair bounds):
 At our operating point: **12 witnesses, deterministic over the intended norm
 range.**
 
+> **Note:** The CUDA kernel uses FJ64_262k 2-round MR (deterministic for n < 2^64), which replaces the multi-witness approach. The 12-witness table remains the C++ reference path.
+
 Per-witness cost: `powmod64(a, d, n)` with ~60 iterations of
 square-and-multiply. Each iteration uses one `u64 x u64 -> __int128` multiply
 followed by modular reduction. Total per MR test: ~720 multiply-mod operations
@@ -230,7 +236,7 @@ for the 12-witness operating-point path.
 Pre-filter: trial division by 25 primes (3 through 97) eliminates ~76% of
 composites before any modular exponentiation.
 
-### 4.5 Montgomery Multiplication (added 2026-04-09, commit 9a4d5ce)
+### 4.4 Montgomery Multiplication (added 2026-04-09, commit 9a4d5ce)
 
 The original `mulmod64` implementation used `__int128` to compute `(a * b) % m`:
 a 64x64 -> 128-bit multiply followed by 128-bit modular reduction. On ARM64,
@@ -306,7 +312,7 @@ loop for the Miller-Rabin witness test.
 ```
 
 
-### 4.4 Sieve Statistics
+### 4.5 Sieve Statistics
 
 Per tile at representative operating radii (`R ~ 850,000,000`, expanded-domain
 norms up to `~7.22 x 10^17`):
@@ -380,16 +386,16 @@ coordinates: `row = pos / side_exp`, `col = pos % side_exp`.
 
 ### 6.1 Neighbor Offsets
 
-Two primes are connected iff their Euclidean distance squared is `<= k = 40`.
-The backward offset table contains all `(dr, dc)` with `dr^2 + dc^2 <= 40` and
+Two primes are connected iff their Euclidean distance squared is `<= K_SQ`.
+The backward offset table contains all `(dr, dc)` with `dr^2 + dc^2 <= K_SQ` and
 `(dr < 0) or (dr == 0 and dc < 0)`. Each pair is processed once (the forward
 direction is handled symmetrically by the other prime's backward scan).
 
 ```
-Offset set: all (dr, dc) where dr^2 + dc^2 <= 40, dr < 0 or (dr == 0, dc < 0)
-Count: ~63 offsets
+Offset set: all (dr, dc) where dr^2 + dc^2 <= K_SQ, dr < 0 or (dr == 0, dc < 0)
+Count: 64 offsets (for K_SQ=40)
 
-Maximum reach: dr in [-6, 0], dc in [-6, 6] (since 7^2 = 49 > 40, 6^2 = 36 <= 40)
+Maximum reach (K_SQ=40): dr in [-6, 0], dc in [-6, 6] (since 7^2 = 49 > 40, 6^2 = 36 <= 40)
 ```
 
 These offsets are precomputed once and stored as a constant table.
@@ -492,9 +498,9 @@ Face L/R: h = tile_row       (along the column, 0..256)
 ```
 
 Port clustering: two adjacent face primes (sorted by h) are in the same port iff
-their squared distance `<= k`. Since face primes span at most `collar = 7` depth,
-the maximum perpendicular distance is 7. For same-h primes, distance = depth
-difference. For adjacent-h primes, `dist^2 = dh^2 + dd^2 <= k = 40`.
+their squared distance `<= K_SQ`. Since face primes span at most `COLLAR` depth,
+the maximum perpendicular distance is COLLAR. For same-h primes, distance = depth
+difference. For adjacent-h primes, `dist^2 = dh^2 + dd^2 <= K_SQ`.
 
 ### 7.3 Group Assignment
 
@@ -620,10 +626,11 @@ fails after dead-end pruning, or if total groups per tile exceed 127, the
 entire 128-byte TileOp is filled with `0xFF` — all bytes, not just
 one field. The whole TileOp is poisoned.
 
-The compositor detects overflow via `tileop[0] == 0xFF` (structurally
-impossible for valid tiles — see tile_spec.md S4.3) and treats this tile as a conservative
-bridge: all ports on all adjacent tile faces touching this tile are unioned into
-one equivalence class. Both conditions are astronomically rare at the operating
+Overflow tiles are detected by `tileop[0] == 0xFF` (structurally
+impossible for valid tiles -- see tile_spec.md S4.3). Overflow tiles do NOT
+reach the compositor. They are reprocessed by the C++ host path into 256-byte
+extended TileOps (TileOp_wide, see tile_spec.md S4.7 Tier 2) and re-injected
+before composition. Both conditions are astronomically rare at the operating
 point.
 
 ### 8.3 Encoding Pseudocode
@@ -660,13 +667,6 @@ for port in O.ports_after_pruning:
 for port in I.ports_after_pruning:
     tileop[cursor] = port.group
     cursor++
-for port in L.ports_after_pruning:
-    tileop[cursor] = port.group
-    cursor++
-for port in R.ports_after_pruning:
-    tileop[cursor] = port.group
-    cursor++
-
 for port in L.ports_after_pruning:
     tileop[cursor] = ((port.h1 >> 8) << 7) | (port.group & 0x7F)
     cursor++
