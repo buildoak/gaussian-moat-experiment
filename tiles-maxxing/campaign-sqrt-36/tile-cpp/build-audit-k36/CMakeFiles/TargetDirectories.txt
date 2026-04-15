@@ -1,0 +1,11 @@
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/tile.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/test_e2e.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/run_tile.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/test_sieve.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/test_compact_uf.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/test_face_encode.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/bench_tiles.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/census_tiles.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/dump_tileops.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/edit_cache.dir
+/Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tile-cpp/build-audit-k36/CMakeFiles/rebuild_cache.dir
