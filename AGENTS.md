@@ -187,6 +187,39 @@ _claim by claim
 lemma by lemma
 move towards the paper_
 
+## Methodology Alignment (2026-04-15)
+
+The formal methodology (`methodology/lemmas/tile-operator-definition.md`) was rewritten on 2026-04-15 with three changes that require code alignment:
+
+1. **Collar width: C = ⌊√K⌋ (was ⌈√K⌉).** For K=40, C drops from 7 to 6. The tight collar is sufficient for edge completeness and structurally guarantees h₁ uniqueness within an h-column. Affects: tile geometry constants in tile-cpp, CUDA kernels, compositor.
+
+2. **No dead-end pruning.** Single-face single-port groups must be retained — removing them breaks port set agreement between adjacent tiles, corrupting positional matching on I/O faces. Remove `prune_dead_ends()` from `tile-cpp/src/prune.cpp` and any equivalent CUDA path. Ports that were pruned should remain in the TileOp encoding with their assigned group labels.
+
+3. **I/O port count equality assertion.** With pruning removed, both tiles on a shared I/O boundary produce identical port sets (port set agreement). The compositor's `min(o_cnt, i_cnt)` tolerance in `match_io_within_tower` should be replaced with an equality assertion — count mismatch is now a bug, not an expected condition.
+
+**Scope:** tile-cpp encoder, CUDA K5 FaceEncode kernel, compositor I/O matching path. L/R h₁-based matching is unaffected.
+
+## Snapped Grid Pivot (2026-04-16)
+
+**Decision:** Replace arbitrary-offset tower layout with globally S-aligned ("snapped") grid. All tile boundaries fall on a global lattice of spacing S=256. Adjacent towers have delta = k·S for integer k. ALL faces are face-to-face aligned — zero fractional offset.
+
+**Information-theoretic rationale:** For shifted faces (arbitrary delta), lossless port encoding requires each tile to export a mapping from ~80 boundary primes to ~9 group labels — valid for any possible offset, since the tile doesn't know its neighbor's position at processing time. This is a universal coding problem with information content O(N·log G) ≈ 256 bits ≈ 32 bytes per face. The 128-byte TileOp budget allows ~25 bytes per face — barely fits, and any 1D compression (h₁, bitmaps indexed by row) is inherently lossy when two groups share a face-axis coordinate in the 13-wide collar strip. No encoding scheme can close this gap — it's fundamental, not an artifact of our format.
+
+For aligned faces: both tiles see the same face, compute identical port structures. Only per-port group labels are needed: O(P·log G) ≈ 44 bits per face. A 10× reduction in information content. The gap is structural, not fixable by clever encoding.
+
+**Coverage verification:** Simulated all 2.29M towers across the first octant at R=830M. Snap error ≤ S/2 = 128 lattice units per tower. Result: zero coverage gaps, +1.22% extra tiles (1.02M out of 84.7M). 55.5% of towers need +0 extra tiles, 44.5% need +1, none need +2.
+
+**Pre-existing bug found during verification:** Tower height formula `ceil(W / (S·cos(θ)))` underestimates by 1 tile near 45° due to inner-arc curvature across the tile width. Actual geometric span at 45° is 11,841 vs formula's 11,776. Fix: use actual geometric span `[y_inner(x+S), y_outer(x)]`, not the secant approximation.
+
+**Methodology impact:**
+- Face-graph port definition replaces atomic h₁-based ports (§12 in tile-operator-definition.md)
+- Mode 1 (h₁ matching) eliminated entirely. All stitching is positional (Mode 2).
+- TileOp encoding: 1 byte/port `[4-bit group | 4-bit ordinal]` for ALL faces. Budget: ~44 bytes + header.
+- Compositor: remove all L/R h₁ encoding/decoding, delta arithmetic, dual-neighbor matching, R-face zero-padding guard.
+- Soundness/completeness verified independently by Opus 4.6 and Codex gpt-5.4: closure decomposition theorem applies, edge completeness preserved, port fidelity holds for aligned faces.
+
+**Scope:** grid_spec.md, tile_spec.md, tile_operations.md, compositor_spec.md, all methodology lemmas, tile-cpp encoder, CUDA K5 FaceEncode, compositor L/R matching path.
+
 ## Current State (2026-04-14)
 
 - **K_SQ=40 pipeline:** Verified at scale. Full R-sweep complete — 68 runs, 55 unique R values, zero overflows. Deployed code pinned to `c73085f`.
