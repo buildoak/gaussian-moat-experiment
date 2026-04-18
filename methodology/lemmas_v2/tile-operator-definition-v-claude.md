@@ -195,6 +195,12 @@ u~v over the G_tile is equivalent (both ways) to ufs_local(port_u) = ufs_local(p
 
 (port_u could be equal to port_v - then it's true by the port definition)
 
+Proof: by step 3 of the Tile Operator Creation Process, for any port_p on any face f the label face_f_groups[p] equals ufs_local(w; G_tile) for every w ∈ port_p — well-defined because port_p is a single G_facestrip_f-component and G_facestrip_f ⊆ G_tile. In particular, ufs_local(port_u; G_tile) = ufs_local(u; G_tile) since u ∈ port_u, and ufs_local(port_v; G_tile) = ufs_local(v; G_tile) since v ∈ port_v.
+
+(⇐) Assume ufs_local(port_u; G_tile) = ufs_local(port_v; G_tile). Then ufs_local(u; G_tile) = ufs_local(v; G_tile) by the identifications above, so u and v lie in the same connected component of G_tile — hence u ~ v over G_tile.
+
+(⇒) Assume u ~ v over G_tile. Then ufs_local(u; G_tile) = ufs_local(v; G_tile), and the identifications above give ufs_local(port_u; G_tile) = ufs_local(port_v; G_tile). ∎
+
 
 ### Stitching operator
 
