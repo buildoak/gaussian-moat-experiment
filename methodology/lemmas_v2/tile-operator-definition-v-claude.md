@@ -1,4 +1,4 @@
-# Gaussian Primes COnnectivity Transfer Operator
+# Gaussian Primes Connectivity Transfer Operator
 
 *Tile Operator* (TileOp) for short.
 
@@ -8,7 +8,7 @@
 
 The Gaussian primes graph at radius R contains O(R²/ln R) vertices. Even for an annular ring of width W at radius R — the actual computational target — the scale is formidable: at R = 10⁹, W = 8192, the ring contains ~10¹² Gaussian primes. No single UF pass can hold this graph.
 
-The Tile Operator decomposes this problem. It partitions the region into bounded tiles placed on a _snapepd grid_ (aligned), runs independent local UF on each, compresses each result to its boundary connectivity; Then Tile Operator Connectivity Pipeline composes the compressed results into verdict about connectivity. 
+The Tile Operator decomposes this problem. It partitions the region into bounded tiles placed on a _snapped grid_ (aligned), runs independent local UF on each, compresses each result to its boundary connectivity; Then Tile Operator Connectivity Pipeline composes the compressed results into verdict about connectivity. 
 
 The composition yields the same connectivity verdict as global UF - which we will prove in this document
 
@@ -24,7 +24,7 @@ The operator enables this probe to run in parallel across thousands of GPU threa
 - **V** = Gaussian primes in the region. A point a + bi ∈ Z[i] is a Gaussian prime iff its norm a² + b² is a rational prime (for non-zero real and imaginary parts), or it is an associate of a rational prime p ≡ 3 (mod 4).
 - **E** = {{p, q} : p, q ∈ V, ‖p − q‖² ≤ K} for fixed squared step bound K.
 
-**{I}** **{O}** are two sets of gaussian primes between which we want to prove the absense of connectivity, further noted as **I** and **O**
+**{I}** **{O}** are two sets of gaussian primes between which we want to prove the absence of connectivity, further noted as **I** and **O**
 
 each element of **I** is gaussian prime in **G_full**; same for **O**
 
@@ -36,30 +36,39 @@ We additionally expand the **~** notation for **I** and **O**
 
 **I!~O** means that for all u from I and v from O u!~v
 
-we additionally define the UF partition over G_full as {G_1, G_2, ...., G_k} - set subgraphs where each subgraph is a single connected component. For every u and v that are connected exists G_i where they both belong. For each u and v taht are disconencted - single G_i containing them does not exist.
+**UF partition of G_full.** G_full decomposes into its connected components {G_1, ..., G_k} — disjoint subgraphs such that u ~ v over G_full iff u and v lie in the same G_i.
 
-we additionaly define the ufs_global operation (Union Find Search over G_full) that is defined for vertices and for subgraphs S_single of G_full that are single connected element; ufs_global(v) returns connected component index as per the UF partition over G_full. ufs_global(S_single) returns connected component index as well - single index because S_single is defined as the single connectivity component of G_full (not necessarily equal to any of G_i though --> rather exists such G_i that sontains P at a whole)
+**ufs_global on vertices.** For v ∈ V(G_full), ufs_global(v) := the index of the unique G_i containing v. Equivalently:
 
-ufs_global definition can be expanded to set of gaussian primes - ufs_global(I) returns set of scalars - where each scalar coresponds to the connected component index as per the UF partition over G_full
+    u ~ v over G_full  ⟺  ufs_global(u) = ufs_global(v).
 
-we additionally define ufs_local (Union Find Search over G_local - arbitrary graph that belongs to G_full) operation that takes vertices v belonging to G_local and returns connected component index as per the UF partition over G_local.
+**ufs_local on vertices.** For any subgraph G_local ⊆ G_full — meaning V(G_local) ⊆ V(G_full) and E(G_local) ⊆ E(G_full) — and any v ∈ V(G_local), ufs_local(v; G_local) := the index of the G_local-connected-component containing v.
 
-For an arbitrary graph G_random that is a subgraph of G_full — i.e., V(G_random) ⊆ V(G_full) and E(G_random) ⊆ E(G_full) — we call the set S := V(G_random) a **single local connectivity group** (with respect to G_random) iff every u ∈ S shares the same ufs_local(·; G_random) value. Equivalently, V(G_random) is a single connected component of G_random.
+**Single local connectivity group.** A set S ⊆ V(G_full) is a *single local connectivity group with respect to G_local* iff S is **exactly** the vertex set of a single connected component of G_local. (Necessary but not sufficient: every `u ∈ S` shares the same `ufs_local(·; G_local)` value — sufficiency additionally requires S to contain *every* vertex of that component, not merely a subset in agreement.)
 
-**Fact — `ufs_global` is single-valued on single local connectivity groups.** For any subgraph G_local ⊆ G_full and any S = V(G_local) that is a single local connectivity group with respect to G_local, all elements of S share one `ufs_global` value.
+Note: such an S need not itself be a full G_full-component. It sits inside some G_i (by the Fact below), but may be a strict subset of it — because G_local drops some edges of G_full, a single G_full-component can split into several G_local-components.
+
+**Fact — `ufs_global` is single-valued on single local connectivity groups.** For any subgraph G_local ⊆ G_full and any S that is a single local connectivity group with respect to G_local, all elements of S share one `ufs_global` value.
 
 Proof: if u, v ∈ S, then u and v lie in the same connected component of G_local, so a path from u to v exists in G_local. Since E(G_local) ⊆ E(G_full), the same sequence of edges is a path in G_full, so u and v lie in the same G_full-component — hence ufs_global(u) = ufs_global(v). ∎
 
-Consequently we extend `ufs_global` to single local connectivity groups: ufs_global(S) := the common ufs_global value of any element of S. For a collection {P_1, ..., P_n} of single local connectivity groups, ufs_global({P_1, ..., P_n}) := { ufs_global(P_1), ..., ufs_global(P_n) } — a set of scalars.
+**Extension of `ufs_global`.** By the Fact, we extend ufs_global consistently:
+
+- To a single local connectivity group S:
+    ufs_global(S) := the common ufs_global value of any element of S   (a scalar).
+- To a finite set of vertices I ⊆ V(G_full):
+    ufs_global(I) := { ufs_global(u) : u ∈ I }   (a set of scalars).
+- To a finite collection {P_1, ..., P_n} of single local connectivity groups:
+    ufs_global({P_1, ..., P_n}) := { ufs_global(P_1), ..., ufs_global(P_n) }   (a set of scalars).
 
 We then define **Process P** - P(I) and P(O) for sets I and O as P(I) = {P^I_1, P^I_2, ..., P^I_a} and P(O) = {P^O_1, P^O_2, ...., P^O_b} 
 0) each element of P(I) is a non empty set of gaussian primes
 1) no gaussian primes are lost - each of the element from I belongs to at least one element of the P(I).
-2) set of all verticies of all elements of P(I) is equal to I - there are no additional gaussian primes
-3) Each element of the P(I) is single local connectivity group - for each u belonging to P^I_J ufs_local (for G_local such as V(G_local) = P^I_j) returns the same scalar value - which allows ufs_global to be defined over the elements of P(I)
-4*) Note: there is no struct requirement for a single gaussian prime to be in a single element of P(I) - there could be several elements of P(I) containing one gaussian prime
-5*) Note: there is no strict rule for preserving all edges of the G_I - graph over the elevemts of set I - some of the edges could be lost.
-_thesises 1 to 5 apply to both P(I) and P(O)_
+2) set of all vertices of all elements of P(I) is equal to I - there are no additional gaussian primes
+3) Each element `P^I_j` of P(I) is a *single local connectivity group* per the strengthened definition above: with `G_local` taken to satisfy `V(G_local) = P^I_j`, the set `P^I_j` is exactly the vertex set of one connected component of `G_local` (equivalently, `G_local` is connected). By the Fact, this allows `ufs_global(P^I_j)` to be well-defined as a single scalar.
+4*) Note: there is no strict requirement for a single gaussian prime to be in a single element of P(I) - there could be several elements of P(I) containing one gaussian prime
+5*) Note: there is no strict rule for preserving all edges of the G_I - graph over the elements of set I - some of the edges could be lost.
+_Points 1 to 5 apply to both P(I) and P(O)_
 
 
 **Lemma 1** 
@@ -101,11 +110,13 @@ A tile T is defined by origin (tₓ, tᵧ) ∈ Z² and three parameters:
 | Collar | C = ⌊√K⌋ | Extension beyond tile proper on all four sides |
 | Halo | — | Full processing domain: tile proper + collar = (S + 1 + 2C)² lattice points |
 
+**Boundary sharing (by design).** Tile proper regions are CLOSED intervals [tₓ, tₓ + S] × [tᵧ, tᵧ + S], so two face-adjacent tiles share a full row (or column) of S+1 lattice points along their common boundary line; at a shared corner, up to four tiles share one lattice point. A prime sitting exactly on this shared boundary is a lattice point of *every* adjacent tile's proper region and is counted in all of them — this is intentional. Lemma 6 (Tile coverage) only asserts each prime lies in *some* active tile's proper; all downstream lemmas are likewise agnostic to which tile "owns" a boundary prime.
+
 **Collar sufficiency.** C = ⌊√K⌋ is the tight collar width. For any edge {p, q} ∈ E, the per-axis offset satisfies |Δ| ≤ C: if |Δ| ≥ C + 1, then Δ² ≥ (⌊√K⌋ + 1)² > K, contradicting ‖p − q‖² ≤ K. 
 
 **Edge completeness.** If p lies in any tile's proper region, every neighbor q (with ‖p − q‖² ≤ K) lies within that tile's halo. Both endpoints of every edge survive in at least one tile's local graph.
 
-**Face-to-face connections** - under the snapped grid constraint - two tiles can be conected only via sharing full face with each other.
+**Face-to-face connections** - under the snapped grid constraint - two tiles can be connected only via sharing full face with each other.
 
 
 Each tile has four faces at the edges of its proper region — the interfaces through which tiles communicate.
@@ -119,9 +130,9 @@ Each tile has four faces at the edges of its proper region — the interfaces th
 | **face_L** (left) | col = 0 | h = row | col ∈ [−C, C] |
 | **face_R** (right) | col = S | h = row | col ∈ [S−C, S+C] |
 
-A **face prime** is a Gaussian prime within perpendicular distance C of a face boundary line. Face primes have no along-face restriction — a prime in a corner of the halo (outside the proper region in both axes) is a face prime of both adjacent faces. This unrestricted extent is necessary: for offset tiles (adjacent towers with different base_y), restricting face primes to the proper region's row or column range would split port sets at the overlap boundary between towers.
+A **face prime** of tile T on face f is a Gaussian prime p ∈ V(G_full) ∩ halo(T) within perpendicular distance C of f's boundary line. Face primes have no along-face restriction beyond the halo — a prime in a corner of the halo (outside T's proper region in both axes) is a face prime of both adjacent faces of T simultaneously.
 
-The **set of face primes** of a face f is the set of face primes of f — the full strip within perpendicular distance C on both sides of f's boundary line. We will note set of primes as face_I_primes, face_O_primes, etc. 
+The **set of face primes** of a face f is denoted face_f_primes — the full perpendicular-C strip of face f, clipped to V(G_full) ∩ halo(T). We write face_I_primes, face_O_primes, face_L_primes, face_R_primes for the four faces of T. Equivalently: face_f_primes = { p ∈ V(G_full) ∩ halo(T) : p is within perpendicular distance C of f's boundary line }.
 
 
 **Ports.** For each face f ∈ {I, O, L, R} of tile T:
@@ -141,39 +152,37 @@ Ports(face_f_primes) = [port_1, port_2, ..., port_{N_f}] — enumerated set.
 
 G_facestrip_f and the enumeration rule depend only on the physical face-prime strip and the edges of G_full among those primes — not on which tile T we are inside. This is the property Lemma 4 rests on.
 
-**Lemma 3.** For each face f of tile T, Ports(face_f_primes) is a valid Process P decomposition of face_f_primes (taking face_f_primes in the role of I in the Process P definition).
+**Lemma 3.** For each face f of tile T, Ports(face_f_primes) is a valid Process P decomposition of face_f_primes (taking face_f_primes in the role of I).
 
-Proof: verify conditions 0–5 directly against the Ports construction above.
+Proof: Ports are the ufs_local(·; G_facestrip_f) equivalence classes on face_f_primes — non-empty by definition, partitioning face_f_primes by construction (conditions 0–2), each a single local connectivity group of G_facestrip_f ⊆ G_full (condition 3). Ports on a single face are disjoint (stronger than 4* requires), and G_facestrip_f drops G_full edges with one endpoint outside face_f_primes (permitted by 5*). ∎
 
-0) Each port is non-empty — ports are ufs_local(·; G_facestrip_f) equivalence classes on face_f_primes, which are non-empty by definition.
 
-1) Every prime in face_f_primes belongs to some port — step 2 assigns a ufs_local scalar to every prime of face_f_primes; step 3 groups all primes by this scalar, so every prime lies in exactly one port.
-
-2) The union of port prime sets equals face_f_primes — by (1) no prime is dropped and no extra primes are introduced.
-
-3) Each port is a single local connectivity group — ports are ufs_local(·; G_facestrip_f) equivalence classes by construction, so every prime in a port shares the port's common ufs_local value. Taking G_random as the induced subgraph of G_facestrip_f on the port's vertices yields a connected G_random with V(G_random) = port, witnessing the property.
-
-4*) Within a single face, ports are in fact disjoint — stronger than Process P condition 4* requires, hence compatible with the condition.
-
-5*) Not all edges of G_full over face_f_primes are preserved — G_facestrip_f drops edges of G_full with one endpoint outside face_f_primes. Process P condition 5* allows this. ∎
-
+[NOTE] - claim about being connected over G_full seems like too broad here - inspect how exactly this one is used - maybe there is a beautoful edge of simplification
 **Corollary (Lemma 3 + Lemma 2) — port-level face connectivity.** For any single tile T and any two faces A, B of T (possibly A = B):
 
     face_A_primes ~ face_B_primes over G_full  ⟺  ufs_global(Ports(face_A_primes)) ∩ ufs_global(Ports(face_B_primes)) ≠ ∅.
 
 Proof: by Lemma 3, `Ports(face_A_primes)` and `Ports(face_B_primes)` are valid Process P decompositions of `face_A_primes` and `face_B_primes`. Apply Lemma 2 with `I := face_A_primes`, `P(I) := Ports(face_A_primes)`, and similarly for B. ∎
 
-This is the single-tile port-level analogue of Lemma 1; Theorem 10 below extends it to the N-tile port graph.
+This is the single-tile port-level analogue of Lemma 1; Theorem 9 below extends it to the N-tile port graph.
 
-**Lemma 4.** Let Tile A and Tile B share a full face — Tile A's face_R coincides with Tile B's face_L. Then
+**Lemma 4.**
+
+*Prerequisite (shared-grid alignment).* Tile A and Tile B share a full face **and** lie on a common grid with uniform origin offset, so that the along-face base coordinate matches between them:
+- vertical shared face (A's face_R = B's face_L): tᵧ_A = tᵧ_B,
+- horizontal shared face (A's face_O = B's face_I): tₓ_A = tₓ_B.
+
+This holds automatically under the snapped grid of §Tower tiling (all tiles use the same offset (o_x, o_y)). Lemma 4 is stated and used only under this prerequisite.
+
+*Claim.* Under the prerequisite, with Tile A's face_R coinciding with Tile B's face_L,
     Ports(Tile_A_face_R_primes) = Ports(Tile_B_face_L_primes)
-as ordered sets. (Horizontal face-sharing — e.g., face_O of A coincident with face_I of B — is symmetric.)
+as ordered sets. (Horizontal face-sharing — face_O of A coincident with face_I of B — is symmetric and uses the tₓ_A = tₓ_B clause.)
 
-Proof: the two face-prime sets are identical — both consist of the Gaussian primes within perpendicular distance C of the shared face boundary line x = (i_A + 1)·S. Consequently:
+Proof: the two face-prime sets are identical — both consist of the Gaussian primes in V(G_full) within perpendicular distance C of the shared face boundary line x = tₓ_A + S, clipped to the common halo strip. Consequently:
 
 - V(G_facestrip_{A,R}) = V(G_facestrip_{B,L}) — the shared strip's primes.
 - E(G_facestrip_{A,R}) = E(G_facestrip_{B,L}) — edges of G_full with both endpoints in the shared strip, tile-independent.
-- The canonical enumeration reads each prime's (h, p⊥) coordinates in the tile-local frame. For the shared vertical face: h (= row) coincides exactly between A and B (both tiles have tᵧ = j_A·S), and p⊥ (= col) differs by a constant shift of S (A-col = x − i_A·S vs. B-col = x − (i_A + 1)·S). Lexicographic ordering under (h, p⊥) is invariant under constant translation of either coordinate, so both tiles produce the same permutation of primes — hence the same ordinal assignment.
+- The canonical enumeration reads each prime's (h, p⊥) coordinates in the tile-local frame. For the shared vertical face: h (= row) coincides exactly between A and B **by the prerequisite** (tᵧ_A = tᵧ_B forces identical row-values), and p⊥ (= col) differs by a constant shift of S (A-col = x − tₓ_A vs. B-col = x − tₓ_A − S). Lexicographic ordering under (h, p⊥) is invariant under constant translation of either coordinate, so both tiles produce the same permutation of primes — hence the same ordinal assignment.
 
 Identical input graph plus identical prime ordering yield identical ordered ports. ∎
 
@@ -203,11 +212,7 @@ u~v over the G_tile is equivalent (both ways) to ufs_local(port_u) = ufs_local(p
 
 (port_u could be equal to port_v - then it's true by the port definition)
 
-Proof: by step 3 of the Tile Operator Creation Process, for any port_p on any face f the label face_f_groups[p] equals ufs_local(w; G_tile) for every w ∈ port_p — well-defined because port_p is a single G_facestrip_f-component and G_facestrip_f ⊆ G_tile. In particular, ufs_local(port_u; G_tile) = ufs_local(u; G_tile) since u ∈ port_u, and ufs_local(port_v; G_tile) = ufs_local(v; G_tile) since v ∈ port_v.
-
-(⇐) Assume ufs_local(port_u; G_tile) = ufs_local(port_v; G_tile). Then ufs_local(u; G_tile) = ufs_local(v; G_tile) by the identifications above, so u and v lie in the same connected component of G_tile — hence u ~ v over G_tile.
-
-(⇒) Assume u ~ v over G_tile. Then ufs_local(u; G_tile) = ufs_local(v; G_tile), and the identifications above give ufs_local(port_u; G_tile) = ufs_local(port_v; G_tile). ∎
+Proof: by step 3 of the Tile Operator Creation Process, ufs_local(port_p; G_tile) = ufs_local(w; G_tile) for every w ∈ port_p — well-defined because port_p is a single G_facestrip_f-component and G_facestrip_f ⊆ G_tile. Hence ufs_local(port_u; G_tile) = ufs_local(u; G_tile) and ufs_local(port_v; G_tile) = ufs_local(v; G_tile). The claim follows: u ~ v over G_tile iff ufs_local(u; G_tile) = ufs_local(v; G_tile) iff ufs_local(port_u; G_tile) = ufs_local(port_v; G_tile). ∎
 
 
 ### Stitching operator
@@ -280,37 +285,6 @@ Two ports receive the same stitched label iff they are connected in G_ports_AB �
 TileOp_AS and TileOp_BS are the result of applying stitching to initial TileOp_A and TileOp_B.
 
 
-**Lemma 6 — 2-tile port/prime equivalence**
-
-Tile A and Tile B share a full face — face_R of Tile A coincides with face_L of Tile B. Let u and v be two arbitrary Gaussian primes, each sitting in some port of Tile A or Tile B; let port_u and port_v be their respective ports (tile-tagged: (A, f, p) or (B, f, p) depending on which tile the port belongs to).
-
-u ~ v over G_AB is equivalent (both ways) to port_u and port_v being in the same connected component of G_ports_AB.
-
-Proof:
-
-1) (same-component => u ~ v over G_AB) Given a walk in G_ports_AB from port_u to port_v, every edge of the walk is one of three kinds:
-  1a) within-tile A-edge — two A-ports joined by same group number in TileOp_A. By Lemma 5, any prime in one port is connected over G_A to any prime in the other (both ports are single local connectivity groups of the same G_A-group).
-  1b) within-tile B-edge — analogous, connectivity over G_B.
-  1c) bridge edge — (A, R, k) paired with (B, L, k); by Lemma 4 these two ports refer to the same set of Gaussian primes, so we pick a single representative prime w that belongs to both simultaneously.
-
-Chain representative primes along the walk. Within-port connectivity from u to its chosen representative in port_u (and from a chosen representative in port_v to v) follows from Lemma 5 applied within each port. Every intermediate step is connectivity over G_A or over G_B, both of which are subgraphs of G_AB. Concatenation gives u ~ v over G_AB.
-
-2) (u ~ v over G_AB => same-component) Sub-claim: every edge of G_AB lies in E(G_A) or in E(G_B).
-
-Proof of sub-claim: for edge {p, q} with ‖p − q‖² ≤ K, per-axis offset satisfies |Δ| ≤ C (collar sufficiency). Suppose for contradiction that p ∈ V(G_A) \ V(G_B) and q ∈ V(G_B) \ V(G_A). Under snapped grid with face_R of A = face_L of B at column x = tAx + S, halo(A) has x-range [tAx − C, tAx + S + C] and halo(B) has x-range [tAx + S − C, tAx + 2S + C]. Then p.x ≤ tAx + S − C − 1 and q.x ≥ tAx + S + C + 1, so |p.x − q.x| ≥ 2C + 2 > C — contradiction. Hence both endpoints share at least one halo, and the edge is in E(G_A) or E(G_B). (Symmetric argument for vertical face-sharing.)
-
-Given a path u = x_0, x_1, ..., x_n = v in G_AB, decompose it into maximal segments whose edges all lie in one tile's graph. Boundary vertices between consecutive segments belong to both V(G_A) and V(G_B) — i.e., they sit in the shared strip of width 2C+1 around the shared face, hence they are face primes of both tiles on the shared face (face_R of A and face_L of B simultaneously). By Lemma 4, any such vertex belongs to a port (A, R, k) and to the identical port (B, L, k), which are linked by a bridge edge in G_ports_AB.
-
-Build a walk in G_ports_AB mirroring the path:
-- Within an A-segment from x_a to x_b: both x_a and x_b are face primes of A (path endpoints are port primes by assumption on u, v; transition vertices are face primes of both tiles by the argument above). By Lemma 5, the ports of A containing x_a and x_b lie in the same connected component of G_ports_A, which embeds as a subgraph into G_ports_AB.
-- Within a B-segment: analogous.
-- At each segment transition: traverse the bridge edge between (A, R, k) and (B, L, k) for the boundary vertex.
-
-The walk starts at some port containing u and ends at some port containing v. By the Corollary of Lemma 5, any port containing u lies in the same connected component of G_ports_AB as port_u (and analogously for v), so port_u and port_v are in the same connected component of G_ports_AB.
-
-∎
-
-
 ---
 
 ## Tiling and Moat Verdict
@@ -330,20 +304,71 @@ From this point on, G_full is the Gaussian-prime graph of §Definitions restrict
 
 In words: p ∈ geo_I iff p's closed √K-disk extends into the open inner disk; p ∈ geo_O iff p's √K-disk extends past the outer arc. The witness q is a **lattice point**, not required to be a Gaussian prime — it serves purely as a geometric probe confirming that the outside-of-R region is within edge-reach of p. The moat problem is geometric: "near the inner boundary" means "positioned near R_inner," independent of the prime distribution outside R.
 
-Equivalent characterizations:
+**Canonical definition (norm form).** From this point forward we take:
 
-1) geo_I = { p ∈ V(G_full) : ‖p‖ ≤ R_inner + √K }.
-2) geo_O = { p ∈ V(G_full) : ‖p‖ ≥ R_outer − √K }.
-3) geo_I primes are exactly the primes that could form the first step of a √K-path coming from outside R on the inner side; symmetric for geo_O.
+    geo_I := { p ∈ V(G_full) : ‖p‖² ≤ (R_inner + √K)² },
+    geo_O := { p ∈ V(G_full) : ‖p‖² ≥ (R_outer − √K)² }.
 
-The continuous-norm characterization (1–2) and the lattice-witness characterization (top) coincide at project-scale parameters, where lattice density relative to √K is high. The lattice-witness form is computationally cleaner — integer arithmetic only, bounded scan over the √K-disk offsets, exact.
+Semantically: geo_I / geo_O primes are exactly those that could form the first / last step of a √K-path crossing in from outside R (inner side) or exiting R (outer side). The width √K is matched to the maximum edge length of G_full, which makes this the natural translation of "no √K-moat exists iff no √K-path crosses R."
+
+**Integer-arithmetic test.** For `p ∈ V(G_full)`, membership reduces to pure integer comparisons:
+
+    p ∈ geo_I   ⟺   (‖p‖² − R_inner² − K)² ≤ 4 · R_inner² · K,
+    p ∈ geo_O   ⟺   (R_outer² − ‖p‖² + K)² ≤ 4 · R_outer² · K.
+
+*Derivation (geo_I).* Let `ε := ‖p‖² − R_inner² − K`. Rearrange `‖p‖² ≤ (R_inner + √K)² = R_inner² + 2 R_inner √K + K` to `ε ≤ 2 R_inner √K`. Two branches:
+- **Branch `ε ≥ 0`.** `ε ≤ 2 R_inner √K` with both sides non-negative is equivalent to `ε² ≤ 4 R_inner² K`.
+- **Branch `ε < 0`.** For `p ∈ V(G_full)` we have `‖p‖² ≥ R_inner²`, so `ε ≥ −K` and `ε² ≤ K²`. Under `K ≤ 4 R_inner²` (trivial at any deployment with `R_inner ≥ √K / 2`), `ε² ≤ K² ≤ 4 R_inner² K` holds vacuously.
+
+In both branches `ε² ≤ 4 R_inner² K`, i.e., `(‖p‖² − R_inner² − K)² ≤ 4 R_inner² K`. Symmetric derivation for geo_O. All quantities `‖p‖²`, `R_inner²`, `R_outer²`, `K` are integers — O(1) per prime, no irrationals.
+
+**Relation to the lattice-witness form.** Let `geo_I_w`, `geo_O_w` denote the witness-based sets defined at the top of this section. Triangle inequality gives one-directional inclusion:
+
+    p ∈ geo_I_w  ⟹  ‖p‖ ≤ R_inner + √K  ⟹  p ∈ geo_I      (analogous for O).
+
+The reverse **does not hold in general**. Counterexample: `R_inner = 2, K = 1, p = (0, 3)`. Norm form: `‖p‖ = 3 = R_inner + √K` → `p ∈ geo_I`. Witness form: the lattice points within distance 1 of `p` are `{(0, 2), (0, 3), (0, 4), (±1, 3)}` with `q² ∈ {4, 9, 16, 10, 10}`; none satisfies `q² < R_inner² = 4`, so `p ∉ geo_I_w`.
+
+**Per-deployment reconciliation.** `geo_I_w = geo_I` holds iff no Gaussian prime has `‖p‖²` in the "bad zone"
+
+    BZ_I := ( (√(R_inner² − 1) + √K)²,  (R_inner + √K)² ].
+
+The interval's width in `‖p‖²`-space evaluates to `1 + 2√K / (R_inner + √(R_inner² − 1))`, exceeding 1 by an `O(√K / R_inner)` term. A width-`1+ε` interval can a priori hold 1 or 2 integers; the count must be confirmed by explicit endpoint computation, not inferred from width. The symmetric outer-boundary zone is
+
+    BZ_O := [(R_outer − √K)²,  (√(R_outer² + 1) − √K)² ).
+
+For each deployment, a one-shot check lists the integers in `BZ_I` and `BZ_O` and confirms none is a Gaussian-prime norm.
+
+**Project deployment `(R_inner = 80 · 10⁶, R_outer = 80 008 192, K = 6)`** (computed in 50-digit arbitrary precision):
+
+*BZ_I.* Endpoints:
+    lower = 6 400 000 391 918 363.845 308 465 092 943 667 163 …
+    upper = 6 400 000 391 918 364.845 308 495 711 565 451 953 …
+Unique integer in `(lower, upper]`: `m²_I = 6 400 000 391 918 364`. Factorization: `m²_I = 2² · 3³ · 7 · 11 · 769 600 816 729` (the last factor is prime, ≡ 1 mod 4). Gaussian-prime norms are `2`, odd primes `p ≡ 1 (mod 4)`, or `p²` for odd primes `p ≡ 3 (mod 4)`. `m²_I` is even and strictly greater than `2`, so it is neither `2` nor an odd prime; the factorization above shows it is composite, so not a prime; and it is not a perfect square, since `80 000 002² = 6 400 000 320 000 004 < m²_I < 6 400 000 480 000 009 = 80 000 003²`. Hence `m²_I` is not a Gaussian-prime norm; no prime sits in `BZ_I`.
+
+*BZ_O.* Endpoints:
+    lower = 6 401 310 395 150 378.714 745 744 698 473 683 744 …
+    upper = 6 401 310 395 150 379.714 745 714 082 986 924 799 …
+Unique integer in `[lower, upper)`: `m²_O = 6 401 310 395 150 379`. Factorization: `m²_O = 3 · 59 · 163 · 221 874 818 729` (the last factor is prime, ≡ 1 mod 4; the three small factors are all ≡ 3 mod 4). `m²_O` has four distinct prime factors, so it is composite (not a prime, hence not an odd prime `≡ 1 mod 4`); it is odd (≠ 2); and it is not a perfect square, since `80 008 189² = 6 401 310 307 059 721 < m²_O < 6 401 310 467 076 100 = 80 008 190²`. Hence `m²_O` is not a Gaussian-prime norm; no prime sits in `BZ_O`.
+
+Both `BZ_I` and `BZ_O` are prime-free for the project deployment, so `geo_I_w = geo_I` and `geo_O_w = geo_O`.
+
+**Implementation.** The O(1) integer norm test above is strictly cheaper than the O(K) witness scan. Downstream proofs use only the forward implication `p ∈ geo_I ⟹ ‖p‖ ≤ R_inner + √K` (Theorem 11 Case A.2), which holds unconditionally. Either implementation is sound at project scale once the factorization check is recorded at repo init.
 
 **Annulus thickness assumption.** R_outer − R_inner > S√2 + 2√K. This bound serves two purposes:
 
 - geo_I ∩ geo_O = ∅ (requires R_outer − R_inner > 2√K alone).
-- No single tile's proper region can host both a geo_I prime and a geo_O prime simultaneously — used by Theorem 12's degenerate-case argument (requires R_outer − R_inner > S√2 + 2√K, tighter).
+- No single tile's proper region can host both a geo_I prime and a geo_O prime simultaneously — used by Theorem 11's degenerate-case argument (requires R_outer − R_inner > S√2 + 2√K, tighter).
 
 For project parameters (R_outer − R_inner ~ 8192, S = 256, √K ≤ 7), the threshold is ≈ S√2 + 2√K ≈ 362 + 14 = 376, abundantly satisfied.
+
+**Tower-closing margin corollary (of annulus thickness).** In the tower-closing regime — columns `i` with `tower_height(i) ≤ 1`, which the Cross-section Lemma places at `x ≥ R_outer/√2 − S/2` — every lattice point of every active tile in column `i` that satisfies the octant constraint (`y ≥ x`) has norm² `≥ R_inner²`.
+
+Proof. Tower height `≤ 1` in column `i` means `y_upper(x) − y_lower(x) ≤ S` for all `x ∈ [iS + o_x, (i+1)S + o_x]`. Beyond the inner arc's reach (`x ≥ R_inner/√2`, which holds throughout the closing regime since `R_outer/√2 − S/2 ≥ R_inner/√2` under annulus thickness), `y_lower = x` and `y_upper = √(R_outer² − x²)`. Solving `√(R_outer² − x²) − x ≤ S` yields `x ≥ R_outer/√2 − S` (first-order; the exact bound `x ≥ (−S + √(2R_outer² − S²))/2` is at least this, for `R_outer ≥ 2S`).
+
+Let `T` be any tile in column `i` (active or not) and let `q = (q_x, q_y)` be a lattice point of `proper(T)` with `q_y ≥ q_x`. Then `q_x ≥ iS + o_x ≥ R_outer/√2 − S` (tower-closing), so
+    `‖q‖² = q_x² + q_y² ≥ 2 q_x² ≥ 2(R_outer/√2 − S)² = R_outer² − 2 R_outer · S√2 + 2 S²`.
+
+Under the annulus thickness assumption `R_outer − R_inner > S√2 + 2√K`, we have `(R_outer − R_inner)(R_outer + R_inner) > S√2 · (R_outer + R_inner) ≥ 2 R_outer · S√2`, so `R_outer² − R_inner² > 2 R_outer · S√2`, hence `‖q‖² > R_inner² + 2 S² ≥ R_inner²`. ∎
 
 **Grid parameters.** Fix:
 - S — tile side length, positive integer.
@@ -365,9 +390,9 @@ and its halo is
 
 2) **Diagonally-adjacent**: |i − i'| = |j − j'| = 1. The two tiles share exactly one corner lattice point of their proper regions. Their halos overlap in a (2C+1)² corner square around that point. They do **not** share a full face.
 
-3) **Distant**: max(|i − i'|, |j − j'|) ≥ 2. The two tiles share no proper-region points. Their halos are disjoint provided C < S/2 (project params: C = 6, S = 256).
+3) **Distant**: max(|i − i'|, |j − j'|) ≥ 2. The two tiles share no proper-region points. Their halos are disjoint under axiom (I0) below (C < S/2).
 
-**Only face-adjacent pairs (case 1) share full faces**, and full-face sharing is the sole mechanism by which tiles "connect" in the pipeline — bridge edges in G_ports_AB and G_ports_grid run exclusively between face-adjacent tiles. Diagonal adjacency is handled separately via corner-closure (Lemma 9); distant tile pairs play no role in the compositional structure. **No other tile-pair geometries are admissible under the snapped grid.**
+**Only face-adjacent pairs (case 1) share full faces**, and full-face sharing is the sole mechanism by which tiles "connect" in the pipeline — bridge edges in G_ports_AB and G_ports_grid run exclusively between face-adjacent tiles. Diagonal adjacency is handled separately via corner-closure (Lemma 8); distant tile pairs play no role in the compositional structure. **No other tile-pair geometries are admissible under the snapped grid.**
 
 **Active tile.** T_{i,j} is **active** iff its proper region contains at least one lattice point of R.
 
@@ -410,6 +435,9 @@ Proof: at fixed x ≥ 0, R's constraints on y are (a) y ≥ x from the octant cu
 
 **Project-parameter axioms.** The grid parameters (S, C, o, R_inner, R_outer) are required to satisfy:
 
+**(I0) Collar-side inequality.** C < S/2.
+(Forces distant-tile halos disjoint — used throughout the halo-overlap classification and, load-bearing, in Theorem 9's run-boundary case analysis, which relies on halo(T) ∩ halo(T') ≠ ∅ ⟹ T, T' equal / face-adjacent / diagonally-adjacent. Project params: C = 6, S = 256, abundantly satisfied.)
+
 **(I1) Tower contiguity.** For every non-empty Tower_i:
     Tower_i = { j ∈ Z : j_low(i) ≤ j ≤ j_high(i) }.
 (No gaps inside a tower.)
@@ -418,9 +446,11 @@ Proof: at fixed x ≥ 0, R's constraints on y are (a) y ≥ x from the octant cu
     |j_low(i+1) − j_low(i)| ≤ 1    and    |j_high(i+1) − j_high(i)| ≤ 1.
 (Tower endpoints move by at most one tile per column.)
 
-**(I3) Tower-overlap.** For every pair of adjacent non-empty towers:
+**(I3) Tower-overlap — bulk regime only.** For every pair of adjacent non-empty towers in the **bulk regime** (tower heights ≥ 2):
     [j_low(i), j_high(i)] ∩ [j_low(i+1), j_high(i+1)] ≠ ∅.
-(Adjacent towers always share at least one j-position.)
+(Adjacent towers share at least one j-position in the bulk.) The **tower-closing regime** — adjacent columns with tower heights 0 or 1, concentrated near x = R_outer/√2 — may violate this; it is excluded from the tile-level moat verdict here and recovered via reflection closure (Theorem 12). I3 is used only for the descriptive "Two-tower interface structure" Corollary below; the main proof chain does not depend on I3 and goes through I4 instead.
+
+**(I4) Grid face-connectivity — no diagonal orphans.** For every pair of diagonally-adjacent active tiles (T_{i,j}, T_{i+1, j±1}), at least one of the two face-neighbor tiles common to both is also active.
 
 **Proof sketch (valid for project parameters R ~ 10⁹, S = 256, annulus width ~ 8192):**
 
@@ -434,6 +464,45 @@ Per column of width S, any boundary y-coordinate changes by at most S — hence 
 For (I1): the Cross-section Lemma shows R's slice at fixed x is a single y-interval; as x varies continuously, the interval shifts continuously, making strip_i (= R ∩ column-strip) a connected 2D region. Each row-strip [o_y + jS, o_y + (j+1)S] with j_low(i) ≤ j ≤ j_high(i) intersects strip_i in a 2D region of positive area — containing at least one lattice point of R for S moderately large (S = 256 abundantly sufficient).
 
 For (I3): given (I1) + (I2), the intervals [j_low(i), j_high(i)] and [j_low(i+1), j_high(i+1)] overlap whenever at least one has height ≥ 2. Project-parameter tower heights are ~32 across the bulk of columns, so (I3) holds everywhere except the degenerate **tower-closing regime** near x = R_outer/√2, where tower heights drop to 1 or 0. The closing regime is excluded from the moat verdict and handled by the reflection-closure argument (see §Cross-octant symmetry closure below).
+
+For (I4): two regimes.
+
+*Bulk regime* (tower heights ≥ 2, so I3 holds). Take a diagonally-adjacent active pair. Up-right case: P = T_{i,j}, Q = T_{i+1, j+1} both active. Common face-neighbor candidates: T_{i+1, j} and T_{i, j+1}. Suppose both were inactive — then j ∉ Tower_{i+1} and j+1 ∉ Tower_i. Combined with j+1 ∈ Tower_{i+1} and j ∈ Tower_i, I1 (tower contiguity) forces j_low(i+1) = j+1 and j_high(i) = j. Hence Tower_i ⊆ [j_low(i), j] and Tower_{i+1} ⊆ [j+1, j_high(i+1)] — disjoint intervals, contradicting I3. So at least one candidate is active. Down-right case (Q = T_{i+1, j−1}) is symmetric: if T_{i+1, j} and T_{i, j−1} both inactive, j_high(i+1) = j−1 and j_low(i) = j, again disjoint intervals.
+
+*Tower-closing regime* (I3 may fail — tower heights 0 or 1 near `x = R_outer/√2`). Here `x² + y² ≈ R_outer² ≫ R_inner²`, so the inner bound is trivially satisfied and "active" reduces to: the tile's proper region contains a lattice point `(x, y)` with `y ≥ x` and `x² + y² ≤ R_outer²`. Tile `T_{i,j}`'s proper is `[o_x + iS, o_x + (i+1)S] × [o_y + jS, o_y + (j+1)S]` (offsets included).
+
+**Up-right diagonal pair.** `P = T_{i,j}`, `Q = T_{i+1, j+1}` both active. Pick `q_Q ∈ proper(Q)` witnessing `Q`'s activity (`q_Q_y ≥ q_Q_x`, `R_inner² ≤ ‖q_Q‖² ≤ R_outer²`). Define `r := (q_Q_x − S, q_Q_y)`, integer-valued since `S ∈ ℤ`.
+
+- `r ∈ proper(T_{i, j+1})`: `r_x = q_Q_x − S ∈ [o_x + iS, o_x + (i+1)S]` (the x-range shifts left by `S` under a `−S` translation of the x-coordinate); `r_y = q_Q_y ∈ [o_y + (j+1)S, o_y + (j+2)S]`. ✓
+- `r` in octant: `r_y − r_x = q_Q_y − q_Q_x + S ≥ S > 0`. ✓
+- `‖r‖² = ‖q_Q‖² − 2 · q_Q_x · S + S² ≤ ‖q_Q‖² − S² < ‖q_Q‖² ≤ R_outer²`, using `q_Q_x ≥ o_x + (i+1)S ≥ S` (requires `i ≥ 0, o_x ≥ 0`). ✓
+- `‖r‖² ≥ R_inner²`: trivial in the closing regime.
+
+So `r` is a lattice point of R in `proper(T_{i, j+1})`, making `T_{i, j+1}` active — an active common face-neighbor of `P` and `Q`. ✓
+
+**Down-right diagonal pair.** `P = T_{i,j}`, `Q = T_{i+1, j−1}` both active. Direct translation (as used for the up-right case) fails — translating either witness by `±S` along a single axis can push the shifted point out of the `R_outer`-disk or out of the octant. Case analysis on the `(i, j)` relationship closes the proof structurally.
+
+**Scope of the case analysis.** This argument handles the tower-closing regime — diagonally-adjacent active pairs `(P, Q) = (T_{i,j}, T_{i+1, j−1})` where at least one of `Tower_i`, `Tower_{i+1}` has height `≤ 1`. Outside this regime (i.e., both towers have height `≥ 2`), I3 holds and the bulk-regime argument above already establishes I4. In the tower-closing regime, the Tower-closing margin corollary (§Tower tiling) guarantees that every octant-satisfying lattice point of proper-regions in columns `i` and `i+1` has norm² `≥ R_inner²`. "Active" for a tile therefore reduces to: the tile contains an octant lattice point with `x² + y² ≤ R_outer²`, with the lower bound `R_inner² ≤ x² + y²` secured structurally by the margin corollary.
+
+*Notation.* For `T_{α, β}`, write `c(α, β) := (o_x + αS, o_y + βS)` for its bottom-left lattice corner.
+
+**Case A: `j ≥ i+2`.** Consider `T_{i, j−1}`'s bottom-left `c(i, j−1) = (o_x + iS, o_y + (j−1)S)`:
+- Octant: `c(i, j−1)_y − c(i, j−1)_x = (j − 1 − i) S + (o_y − o_x) ≥ S + (o_y − o_x) ≥ 1 > 0`, since `j − 1 − i ≥ 1` and `|o_y − o_x| < S`.
+- Norm comparison with `c(i, j) = (o_x + iS, o_y + jS)`:
+      `‖c(i, j)‖² − ‖c(i, j−1)‖² = (o_y + jS)² − (o_y + (j−1)S)² = S · [2 o_y + (2j − 1) S] > 0`.
+- `P = T_{i, j}` active ⟹ `T_{i, j}` contains at least one octant lattice point with `x² + y² ≤ R_outer²`. For `j ≥ i+2` the bottom-left `c(i, j)` is octant-satisfying (by the same computation as above with `j−i ≥ 2`), and since `x² + y²` is minimized over octant lattice points of `T_{i, j}` at `c(i, j)`, we have `‖c(i, j)‖² ≤ R_outer²`. Hence `‖c(i, j−1)‖² < R_outer²`; combined with the Tower-closing margin corollary (`‖c(i, j−1)‖² ≥ R_inner²` since `c(i, j−1)` is octant-satisfying), `c(i, j−1) ∈ R`, so `T_{i, j−1}` is active.
+
+**Case B: `j = i+1`.** `T_{i, j−1} = T_{i, i}`. The lattice point `(o_x + iS, o_y + (i+1)S)` sits on `T_{i, i}`'s top edge (closed-interval proper-region convention, §Tile boundary sharing) and coincides with `T_{i, i+1}`'s bottom-left corner `c(i, i+1)`. Octant: `(o_y + (i+1)S) − (o_x + iS) = S + (o_y − o_x) ≥ 1 > 0`. `P = T_{i, i+1}` active ⟹ `‖c(i, i+1)‖² ≤ R_outer²` (it is the octant-min of `T_{i, i+1}`). Since the same octant-satisfying lattice point lies in `T_{i, i}` (top-edge incidence), and the Tower-closing margin corollary gives its norm² `≥ R_inner²` while `P = T_{i, i+1}` active gives norm² `≤ R_outer²`, the point is in `R`; `T_{i, i}` is active.
+
+**Case C: `j = i`.** `Q = T_{i+1, i−1}` has `x ∈ [o_x + (i+1)S, o_x + (i+2)S]`, `y ∈ [o_y + (i−1)S, o_y + iS]`. Then `max y − min x = (o_y + iS) − (o_x + (i+1)S) = (o_y − o_x) − S < 0` (since `o_y − o_x < S`). Every lattice point has `y < x`; no octant points; `T_{i+1, i−1}` inactive. Contradicts Q active. Case excluded.
+
+**Case D: `j ≤ i−1`.** Either `P = T_{i, j}` has `max y ≤ (j+1)S + o_y ≤ iS + o_y < (i+1)S + o_x ≤ min x` (for `j ≤ i−2`), no octant points, P inactive; or `j = i−1` and `Q = T_{i+1, i−2}` has the analogous cutoff and is inactive. Either branch contradicts the active-pair hypothesis. Case excluded.
+
+**Conclusion.** In cases A and B, `T_{i, j−1}` is an active common face-neighbor of `(P, Q)`. Cases C and D are impossible given P and Q active. Hence I4 holds structurally for all admissible down-right diagonal pairs in the tower-closing regime, for any offset `(o_x, o_y) ∈ Z² ∩ [0, S)²`.
+
+The two regimes together (bulk via I3, tower-closing via the case analyses above) cover every diagonal pair. **I4 is structurally proven — no runtime gate required for soundness.**
+
+**Implementation-level sanity check (optional, defense-in-depth).** A one-pass scan over active-tile diagonal pairs can be retained in the pipeline as a cheap empirical verification of I4, but the proof above establishes the invariant unconditionally.
 
 ---
 
@@ -458,77 +527,50 @@ This is the operational form of (I1)+(I2)+(I3): walking the grid column-by-colum
 - face_L (left): T_{i-1, j}
 - face_R (right): T_{i+1, j}
 
-**Classification of exposed faces:**
-- **outer-exposed** — exposed face whose outside direction points toward higher R² (the outer arc side). Includes face_O of tower-top tiles, and face_R of tiles in column i at rows j > j_high(i+1) (left-tower top-overhangs where column i's top extends above column i+1's).
-- **inner-exposed** — exposed face whose outside points toward lower R² (the inner arc side). Includes face_I of tower-bottom tiles, and face_L of tiles in column i+1 at rows j < j_low(i) (right-tower bottom-overhangs where column i+1's bottom extends below column i's, applicable in the y=x regime).
-- **side-exposed** — face_L of column-i_min tiles (outside crosses x = 0 into the second octant) and face_R of column-i_max tiles whose outside crosses y = x into σ_diag(R).
+**Classification of exposed faces (formal criterion).** Let f be an exposed face of active tile T_{i,j}, with outward unit normal n_f pointing from T's proper into the inactive neighbor's side:
+
+    face_I: n_f = (0, −1).    face_O: n_f = (0, +1).
+    face_L: n_f = (−1, 0).    face_R: n_f = (+1, 0).
+
+Let m_f be the face's midpoint in R². The R²-gradient test:
+
+    s(f) := sign( n_f · ∇(x² + y²)|_{m_f} ) = sign( 2 · n_f · m_f ).
+
+Classification (side-exposed takes precedence):
+- **side-exposed** — f is face_L of a column-i_min tile (outside crosses x = 0 into the second octant) *or* face_R of a column-i_max tile (outside crosses y = x into σ_diag(R)). *Determined by tile position, not gradient; handled by reflection closure (Theorem 12).*
+- **outer-exposed** — f is not side-exposed and s(f) > 0: moving in the n_f direction increases x² + y², so the outside points toward the outer arc. Typical cases: face_O of tower-top tiles; face_R of tiles at rows j > j_high(i+1) (left-tower top-overhangs).
+- **inner-exposed** — f is not side-exposed and s(f) < 0: outside points toward the inner arc. Typical cases: face_I of tower-bottom tiles; face_L of tiles at rows j < j_low(i) (right-tower bottom-overhangs).
+
+Under the octant interior, m_x > 0 and m_y > 0 for every active-tile face midpoint away from the x = 0 and y = x axes, so s(f) ≠ 0; every non-side-exposed face admits a definite outer/inner verdict. Boundary cases at x = 0 or y = x coincide with side-exposed status and are handled by reflection closure.
 
 Side-exposed faces are excluded from the moat verdict — handled by the reflection-closure argument in §Cross-octant symmetry closure below.
 
 
-**Lemma 7 — Tile coverage.**
+**Lemma 6 — Tile coverage.**
 
 Every Gaussian prime p ∈ V(G_full) lies in the proper region of at least one active tile.
 
-Proof: let p = (a, b). p ∈ V(G_full) ⇒ p ∈ R. Let T = T_{⌊a/S⌋, ⌊b/S⌋}. Its proper region [⌊a/S⌋·S, (⌊a/S⌋+1)·S] × [⌊b/S⌋·S, (⌊b/S⌋+1)·S] contains (a, b). Hence (a, b) is a lattice point of R in T's proper, so T is active. ∎
+Proof: let p = (a, b). p ∈ V(G_full) ⇒ p ∈ R. Let i := ⌊(a − o_x)/S⌋ and j := ⌊(b − o_y)/S⌋, and take T = T_{i,j}. By construction of the floor function, o_x + iS ≤ a ≤ o_x + (i+1)S and o_y + jS ≤ b ≤ o_y + (j+1)S, so (a, b) lies in T's proper region. Hence (a, b) is a lattice point of R in T's proper, so T is active. ∎ (For the canonical convention o_x = o_y = 0 used throughout §Tower tiling, this reduces to T_{⌊a/S⌋, ⌊b/S⌋}.)
+
+**Corollary of Lemma 6 — Band-prime coverage.** geo_I ∪ geo_O ⊆ ⋃_{T active} proper(T). Every band prime — whether near the inner arc (geo_I) or near the outer arc (geo_O) — sits inside the proper region of some active tile.
+
+Proof: geo_I ∪ geo_O ⊆ V(G_full) by definition (both are defined as subsets of V(G_full) with an additional lattice-witness condition). Apply Lemma 6 to each such prime. ∎
 
 
-**Lemma 8 — Edge coverage.**
+**Lemma 7 — Edge coverage.**
 
 Every edge {p, q} ∈ E(G_full) lies in the halo of at least one active tile — i.e., there exists an active tile T with both endpoints in V(G_T), hence {p, q} ∈ E(G_T).
 
-Proof: by Lemma 7, p lies in the proper of some active tile T. By edge completeness (stated in the Tile section): for any p in T's proper and any q with ‖p − q‖² ≤ K, q lies in T's halo. Hence both endpoints of {p, q} lie in V(G_T), so {p, q} ∈ E(G_T). ∎
+Proof: by Lemma 6, p lies in the proper of some active tile T. By edge completeness (stated in the Tile section): for any p in T's proper and any q with ‖p − q‖² ≤ K, q lies in T's halo. Hence both endpoints of {p, q} lie in V(G_T), so {p, q} ∈ E(G_T). ∎
 
 
-**Lemma 9 — Corner-closure of the tower tiling.**
-
-*Grid condition — face-to-face connectivity only, no diagonal orphans.* Lemma 9 encodes the grid-level guarantee that active tiles in the tower tiling are connected to their neighbors **through shared faces only** — no active tile is orphaned into a diagonal-only connection. The Tile Operator pipeline bridges tiles exclusively across shared faces (see §Stitching operator and G_ports_grid below); a diagonally-adjacent pair with no active face-neighbor bridge would sit outside that bridge structure, leaving primes in the shared corner square unreachable from the port graph. Lemma 9 rules out this failure mode — for every diagonally-adjacent active pair, at least one face-neighbor tile of both is itself active, routing any corner-crossing connectivity through an active intermediate whose halo covers the corner square.
+**Lemma 8 — Corner-closure of the tower tiling.**
 
 Two active tiles P and Q are **diagonally adjacent** if their proper regions share exactly one corner lattice point — i.e., P = T_{i,j} and Q = T_{i+1, j+1} (upward-right) or Q = T_{i+1, j-1} (downward-right).
 
-For any diagonally-adjacent pair of active tiles P, Q, at least one face-neighbor tile R of both P and Q is also active. Moreover halo(R) ⊇ halo(P) ∩ halo(Q) — the (2C+1) × (2C+1) corner square around the shared corner point.
+For any diagonally-adjacent pair of active tiles P, Q, at least one face-neighbor tile R of both P and Q is active, and halo(R) ⊇ halo(P) ∩ halo(Q) — the (2C+1) × (2C+1) corner square around the shared corner point.
 
-Proof:
-
-Case (a): P = T_{i,j}, Q = T_{i+1, j+1}. Routing candidates:
-
-    R_1 = T_{i+1, j}    face-adjacent to P via P's face_R, to Q via Q's face_I
-    R_2 = T_{i, j+1}    face-adjacent to P via P's face_O, to Q via Q's face_L
-
-Suppose for contradiction that both R_1 and R_2 are inactive:
-- R_1 inactive with j+1 ∈ Tower_{i+1} (since Q active) forces j ∉ Tower_{i+1} with j+1 being the boundary: j = j_low(i+1) − 1, i.e., j_low(i+1) = j + 1.
-- R_2 inactive with j ∈ Tower_i (since P active) forces j+1 ∉ Tower_i with j being the upper boundary: j = j_high(i), i.e., j_high(i) = j.
-
-Combining: j_high(i) = j < j + 1 = j_low(i+1), so [j_low(i), j_high(i)] ∩ [j_low(i+1), j_high(i+1)] = ∅ — contradicting the tower-overlap property.
-
-Case (b): P = T_{i,j}, Q = T_{i+1, j-1}. Symmetric argument with routing candidates:
-
-    R_1 = T_{i+1, j}    face-adjacent to P via P's face_R, to Q via Q's face_O
-    R_2 = T_{i, j-1}    face-adjacent to P via P's face_I, to Q via Q's face_L
-
-If both inactive: j_high(i+1) = j − 1 < j = j_low(i), so j_high(i+1) < j_low(i) — again no overlap, contradiction.
-
-Hence at least one routing candidate is active in each case.
-
-**Direct verification at the outer tower-closing regime (min-norm sandwich).** The case analysis above routes through the tower-overlap invariant I3, whose proof sketch admits degeneracy near x ≈ R_outer/√2 where tower heights shrink to 1. Lemma 9's conclusion is nevertheless direct there, via a min-norm comparison on lattice corners that bypasses I3 entirely.
-
-At the outer tip, the inner-arc constraint is slack — all tiles with x² + y² close to R_outer² have norm² well above R_inner². Two facts follow:
-
-(i) The octant cut y = x is the binding lower bound for every active column. Hence y_lower(iS) = iS, and j_low(i) = i whenever Tower_i is non-empty: the lattice point (iS, iS) sits on y = x with norm² = 2i²S² ∈ [R_inner², R_outer²] at the tip, so (iS, iS) ∈ R and T_{i,i} is active.
-
-(ii) For any tile T_{a, b} with a, b ≥ 0, its lower-left corner (aS, bS) realizes the minimum norm over all lattice points of its proper region, because both |x|² and |y|² are minimized at the lower-left corner. Combined with the slack inner-arc and the octant-forced j_low, "T_{a, b} is active" reduces to "(aS, bS) ∈ R" — the corner test is both necessary and sufficient in the tip regime.
-
-Given a diagonal pair (P, Q) both active in the tip regime, at least one bridge tile has its lower-left corner at a norm² strictly below the larger of the two pair-member corner norms, and satisfies y ≥ x at that corner. By (ii) such a bridge is active:
-
-- **Case (a) with j ≥ i + 1:** bridge T_{i+1, j} has corner norm² = ((i+1)² + j²)S², strictly below Q = T_{i+1, j+1}'s corner ((i+1)² + (j+1)²)S². y = jS ≥ (i+1)S = x since j ≥ i + 1. Bridge active.
-
-- **Case (a) with j = i (diagonal-aligned pair):** bridge T_{i+1, i} = T_{i+1, j} sits below the octant (y < x throughout its proper), so use the other bridge T_{i, i+1} = T_{i, j+1}. Its corner norm² = (2i² + 2i + 1)S² is strictly sandwiched between the pair's corner norms: 2i²S² < (2i² + 2i + 1)S² < 2(i+1)²S² = Q's corner norm² ≤ R_outer². y = (i+1)S > iS = x. Bridge active.
-
-- **Case (b):** bridge T_{i, j-1} has corner norm² = (i² + (j-1)²)S², strictly below both P = T_{i,j}'s (i² + j²)S² and Q = T_{i+1, j-1}'s ((i+1)² + (j-1)²)S². y = (j-1)S ≥ iS = x since Q active requires j - 1 ≥ i + 1. Bridge active.
-
-In every tip configuration an active bridge exists by direct corner comparison, independently of I3. Together with the I3-based bulk argument, this closes Lemma 9's conclusion for all diagonal pairs across the entire tiling — the grid-level face-to-face-only condition holds without exception.
-
-Halo containment: halo(P) ∩ halo(Q) is a (2C+1) × (2C+1) square centered on the shared corner point. Any active R from Case (a), Case (b), or the min-norm sandwich is face-adjacent to both P and Q; halo(R) extends C beyond its proper in every direction, so it covers the corner square shared between halo(P) and halo(Q). ∎
+Proof: existence of R is (I4). Halo containment: R is face-adjacent to both P and Q, so R's proper region shares a full face with each; R's halo extends C beyond its proper in every direction, so it covers the corner square shared between halo(P) and halo(Q). ∎
 
 
 ### Grid port graph and N-tile equivalence
@@ -547,7 +589,7 @@ where each E_bridge^{T, T', f} is the set of N_f bridge edges { { (T, f, k), (T'
 **G_grid.** By Lemmas 7 and 8, ⋃_{T active} V(G_T) = V(G_full) and ⋃_{T active} E(G_T) = E(G_full). So the union of tile graphs equals G_full; we write G_grid := G_full interchangeably.
 
 
-**Theorem 10 — N-tile port/prime equivalence.**
+**Theorem 9 — N-tile port/prime equivalence.**
 
 Let u, v be two Gaussian primes in V(G_full), each a port prime of some active tile — i.e., each sits in a port of some active tile. Let port_u, port_v be their respective ports (tile-tagged: (T, f, p)).
 
@@ -561,7 +603,19 @@ Proof:
 
 Chain representative primes across the walk. By Corollary of Lemma 5, any port containing u lies in the same G_ports_T-component as port_u (analogously for v), so extending the walk to start at the chosen representative-port for u and end at the representative-port for v is free. Concatenation yields u ~ v over G_full.
 
-(⇒) Suppose u ~ v over G_full. Then there is a path u = x_0, x_1, ..., x_n = v with every edge {x_k, x_{k+1}} ∈ E(G_full). By Lemma 8, every such edge lies in E(G_T) for at least one active T; assign each edge a home tile T_k.
+(⇒) Suppose u ~ v over G_full.
+
+**Trivial case `u = v`.** `port_u` and `port_v` both contain the same prime `u`. If they reside on the same tile (`T_u = T_v`), Corollary of Lemma 5 applied reflexively to `u = u` places them in the same `G_ports_{T_u}`-component — hence the same G_ports_grid-component. If `T_u ≠ T_v`, then `u ∈ halo(T_u) ∩ halo(T_v)`, so by (I0) the pair is face-adjacent or diagonally-adjacent. In the face-adjacent sub-case, `port_u` and `port_v` are joined by:
+
+  (a) a within-`G_ports_{T_u}` walk from `port_u` to the `T_u`-port `(T_u, f^*_u, k)` on `T_u`'s shared face with `T_v` containing `u` — exists by Corollary of Lemma 5 since both ports contain `u`;
+  (b) a bridge edge from `(T_u, f^*_u, k)` to `(T_v, f^*_v, k)`, the corresponding port of `T_v` on the shared face containing `u` — by Lemma 4;
+  (c) a within-`G_ports_{T_v}` walk from `(T_v, f^*_v, k)` to `port_v` — again by Corollary of Lemma 5.
+
+Any of (a), (c)'s within-tile walks may be trivial (zero hops) if the relevant ports coincide. In the diagonally-adjacent sub-case, the same structure applies with an intermediate active common face-neighbor `R'` supplied by Lemma 8: entry within-tile walk on `T_u`, bridge `T_u → R'`, within-`G_ports_{R'}` walk between `R'`'s two faces shared with `T_u` and `T_v` (both ports containing `u`, again Corollary of Lemma 5), bridge `R' → T_v`, exit within-tile walk on `T_v`. In both sub-cases, `port_u` and `port_v` share a G_ports_grid-component.
+
+We henceforth assume `u ≠ v`, so `n ≥ 1`.
+
+Then there is a path u = x_0, x_1, ..., x_n = v with every edge {x_k, x_{k+1}} ∈ E(G_full). By Lemma 7, every such edge lies in E(G_T) for at least one active T; assign each edge a home tile T_k.
 
 Decompose the path into maximal runs of consecutive edges sharing a home tile. At each run boundary, the boundary vertex x_m lies in V(G_T) ∩ V(G_{T'}) for adjacent home tiles T and T'. Under the snapped grid, halo(T) ∩ halo(T') is non-empty only when T and T' are equal, face-adjacent, or diagonally-adjacent.
 
@@ -573,7 +627,7 @@ At each run boundary, three sub-cases for the boundary vertex x_m:
 
   (ii) T, T' face-adjacent — x_m lies in the shared strip of width 2C+1 around the shared face of T and T', hence is a face prime of both T and T' on that shared face. By Lemma 4, x_m belongs to corresponding ports (T, f_T, k) and (T', f_{T'}, k) joined by a bridge edge in G_ports_grid. Traverse that bridge edge.
 
-  (iii) T, T' diagonally-adjacent — x_m lies in the (2C+1) × (2C+1) corner square around their shared corner. By Lemma 9 (corner-closure), an active face-neighbor R of both T and T' exists, with halo(R) ⊇ corner square. Hence x_m ∈ V(G_R); moreover, x_m is within perpendicular distance C of two of R's faces — the face R shares with T and the face R shares with T' — so x_m is a face prime of R on both of those faces. x_m therefore belongs to ports of R on two distinct R-faces; by Corollary of Lemma 5, these two R-ports lie in the same connected component of G_ports_R.
+  (iii) T, T' diagonally-adjacent — x_m lies in the (2C+1) × (2C+1) corner square around their shared corner. By Lemma 8 (corner-closure), an active face-neighbor R of both T and T' exists, with halo(R) ⊇ corner square. Hence x_m ∈ V(G_R); moreover, x_m is within perpendicular distance C of two of R's faces — the face R shares with T and the face R shares with T' — so x_m is a face prime of R on both of those faces. x_m therefore belongs to ports of R on two distinct R-faces; by Corollary of Lemma 5, these two R-ports lie in the same connected component of G_ports_R.
 
   The original path edges adjacent to x_m remain assigned to T and T' respectively; we do not reassign them. Instead, route the transition through R's port structure in three hops:
 
@@ -583,7 +637,12 @@ At each run boundary, three sub-cases for the boundary vertex x_m:
 
   This handles the diagonal transition without reassigning any original edges.
 
-Concatenating all runs (within-tile walks) and boundary transitions (case (ii) single bridges or case (iii) three-hop routes) yields a walk in G_ports_grid starting at some port containing u and ending at some port containing v. By Corollary of Lemma 5, port_u and port_v are in the same connected component of G_ports_grid. ∎
+**Entry and exit hops (at u and v).** The run-based walk constructed above starts at some T_0-port containing u (where T_0 is the first run's home tile) and ends at some T_{n-1}-port containing v. The given port_u sits on T_u, which may differ from T_0; symmetrically port_v sits on T_v ≠ T_{n-1} in general. These tile mismatches are resolved by the same case analysis used at run boundaries, applied at the path endpoints:
+
+  - At u: since u ∈ V(G_{T_u}) (as a port prime) and u ∈ V(G_{T_0}) (as an endpoint of the first edge, which lies in E(G_{T_0})), u ∈ halo(T_u) ∩ halo(T_0). If T_u = T_0 the walk begins at port_u directly. If T_u and T_0 are face-adjacent, a single bridge edge (case (ii)) joins port_u to the T_0-port containing u. If diagonally-adjacent, a three-hop route through an active common face-neighbor R' (case (iii), invoking Lemma 8 on the pair (T_u, T_0)) joins port_u to the T_0-port containing u. Prepend this entry hop.
+  - At v: symmetrically append an exit hop joining the terminal T_{n-1}-port containing v to port_v, using the (T_{n-1}, T_v) halo-intersection case.
+
+Concatenating the entry hop, all run within-tile walks and boundary transitions (case (ii) single bridges or case (iii) three-hop routes), and the exit hop yields a walk in G_ports_grid from port_u to port_v. Hence port_u and port_v are in the same connected component of G_ports_grid. ∎
 
 
 ### Boundary port sets
@@ -605,7 +664,10 @@ The extended TileOp:
 
     TileOp_T = { face_I_groups, face_O_groups, face_L_groups, face_R_groups, inner_flags, outer_flags }.
 
-**Computation.** Per active tile T: iterate w ∈ V(G_tile); for each w run the ∃-q lattice scan (bounded by the ~πK lattice offsets in the √K-disk) to test geo_I and geo_O membership; mark the G_tile UF group ufs_local(w; G_tile) with the corresponding flag if positive. Per-tile cost: O(K · |V(G_tile)|). Fully data-parallel across tiles; no cross-tile communication.
+**Computation.** Per active tile T: iterate `w ∈ V(G_tile)`; for each `w` compute `‖w‖²` (one integer multiply-add) and test `geo_I` / `geo_O` membership via the integer-arithmetic test from §Tower tiling:
+    `w ∈ geo_I  ⟺  (‖w‖² − R_inner² − K)² ≤ 4 · R_inner² · K`,
+    `w ∈ geo_O  ⟺  (R_outer² − ‖w‖² + K)² ≤ 4 · R_outer² · K`.
+Mark the G_tile UF group `ufs_local(w; G_tile)` with the corresponding flag if positive. Per-tile cost: O(|V(G_tile)|), one O(1) test per prime; no lattice scan needed. Fully data-parallel across tiles; no cross-tile communication. (Per-deployment BZ reconciliation at repo init guarantees the norm-form test coincides with the geometric lattice-witness definition — see §Tower tiling's Per-deployment reconciliation block.)
 
 **Inner port set.** I_ports := { (T, f, p) : T active, inner_flag_T(face_f_groups[p]) = true }.
 
@@ -617,20 +679,20 @@ This is the structural fix for the geometric-vs-tile mismatch: inclusion in I_po
 
 ---
 
-**Lemma 11 — Exit lemma.**
+**Lemma 10 — Exit lemma.**
 
 Let u ∈ V(G_T) for some active tile T. If the connected component of G_full containing u contains any vertex outside V(G_T), then this component contains a face prime w of T with w in the same G_T UF group as u.
 
-Proof: let v be a vertex of the component with v ∉ V(G_T), and fix a path u = x_0, x_1, ..., x_n = v in G_full. Let m be the largest index with x_m ∈ V(G_T). Then x_m ∈ V(G_T), x_{m+1} ∉ V(G_T), and {x_m, x_{m+1}} ∈ E(G_full) with ‖x_m − x_{m+1}‖² ≤ K, so per-axis offset |Δ| ≤ C (collar sufficiency). Since x_{m+1} lies outside halo(T) and |Δ| ≤ C, x_m must lie within perpendicular distance C of whichever face boundary x_{m+1} crossed — so x_m is a face prime of T.
+Proof: let v be a vertex of the component with v ∉ V(G_T), and fix a path u = x_0, x_1, ..., x_n = v in G_full. Let m be the **smallest** index in {0, ..., n−1} with x_{m+1} ∉ V(G_T) — the first exit of the path from V(G_T). (Well-defined: x_0 = u ∈ V(G_T) and x_n = v ∉ V(G_T), so at least one such index exists.) Then x_m ∈ V(G_T), x_{m+1} ∉ V(G_T), and {x_m, x_{m+1}} ∈ E(G_full) with ‖x_m − x_{m+1}‖² ≤ K, so per-axis offset |Δ| ≤ C (collar sufficiency). Since x_{m+1} lies outside halo(T) and |Δ| ≤ C, x_m must lie within perpendicular distance C of whichever face boundary x_{m+1} crossed — so x_m is a face prime of T.
 
-Moreover, the sub-path x_0, x_1, ..., x_m stays entirely in V(G_T) by choice of m. Every edge {x_k, x_{k+1}} for 0 ≤ k ≤ m−1 has both endpoints in V(G_T), hence lies in E(G_T). So u = x_0 ~ x_m in G_T — they share a G_T UF group. Take w := x_m. ∎
+Moreover, by minimality of m the sub-path x_0, x_1, ..., x_m stays entirely in V(G_T). Every edge {x_k, x_{k+1}} for 0 ≤ k ≤ m−1 has both endpoints in V(G_T), hence lies in E(G_T). So u = x_0 ~ x_m in G_T — they share a G_T UF group. Take w := x_m. ∎
 
 
 ### Moat verdict
 
-**Remark — Theorem 12 as a Process-P lift.** Lemma 1 reduces the moat verdict to label-disjointness: `geo_I !~ geo_O over G_full ⟺ ufs_global(geo_I) ∩ ufs_global(geo_O) = ∅`. Theorem 10 lifts G_full connectivity of face primes to G_ports_grid connectivity of their ports. The inner_flag/outer_flag machinery extends each port's G_tile UF group with membership verdicts for geo_I and geo_O. Theorem 12 below chains these three ingredients — Lemma 1 framing, Theorem 10 lift, Lemma 11 for interior-prime cases — into a single soundness/completeness statement for the tile-operator pipeline.
+**Remark — Theorem 11 as a Process-P lift.** Lemma 1 reduces the moat verdict to label-disjointness: `geo_I !~ geo_O over G_full ⟺ ufs_global(geo_I) ∩ ufs_global(geo_O) = ∅`. Theorem 9 lifts G_full connectivity of face primes to G_ports_grid connectivity of their ports. The inner_flag/outer_flag machinery extends each port's G_tile UF group with membership verdicts for geo_I and geo_O. Theorem 11 below chains these three ingredients — Lemma 1 framing, Theorem 9 lift, Lemma 10 for interior-prime cases — into a single soundness/completeness statement for the tile-operator pipeline.
 
-**Theorem 12 — Moat verdict.**
+**Theorem 11 — Moat verdict.**
 
 The following are equivalent:
 
@@ -642,38 +704,38 @@ When (1) and (2) hold, we say a **Gaussian moat of width √K exists within the 
 
 Proof. By Lemma 1, (1) is equivalent to `ufs_global(geo_I) ∩ ufs_global(geo_O) = ∅`. We prove (1) ⟺ (2) via contrapositive: a common G_full component label in `ufs_global(geo_I) ∩ ufs_global(geo_O)` exists iff a G_ports_grid component contains both an I_ports vertex and an O_ports vertex.
 
-**(⇐)** Suppose a G_ports_grid component contains `(T_I, f_I, p_I) ∈ I_ports` and `(T_O, f_O, p_O) ∈ O_ports`. Since `(T_I, f_I, p_I) ∈ I_ports`, `inner_flag_{T_I}(face_{f_I}_groups_{T_I}[p_I]) = true`, so some `u ∈ geo_I` satisfies `ufs_local(u; G_{T_I}) = face_{f_I}_groups_{T_I}[p_I]`. For any face prime `w_I` in port `(T_I, f_I, p_I)`, step 3 of the Tile Operator Creation Process gives `ufs_local(w_I; G_{T_I}) = face_{f_I}_groups_{T_I}[p_I]`, so `u ~ w_I` over `G_{T_I} ⊆ G_full`. Symmetrically, some `u' ∈ geo_O` and face prime `w_O` in port `(T_O, f_O, p_O)` satisfy `u' ~ w_O` over `G_{T_O} ⊆ G_full`. By Theorem 10, `w_I ~ w_O` over G_full. Chaining: `u ~ w_I ~ w_O ~ u'` over G_full, so `ufs_global(u) = ufs_global(u')` — a common label in `ufs_global(geo_I) ∩ ufs_global(geo_O)`.
+**(⇐)** Suppose a G_ports_grid component contains `(T_I, f_I, p_I) ∈ I_ports` and `(T_O, f_O, p_O) ∈ O_ports`. Since `(T_I, f_I, p_I) ∈ I_ports`, `inner_flag_{T_I}(face_{f_I}_groups_{T_I}[p_I]) = true`, so some `u ∈ geo_I` satisfies `ufs_local(u; G_{T_I}) = face_{f_I}_groups_{T_I}[p_I]`. For any face prime `w_I` in port `(T_I, f_I, p_I)`, step 3 of the Tile Operator Creation Process gives `ufs_local(w_I; G_{T_I}) = face_{f_I}_groups_{T_I}[p_I]`, so `u ~ w_I` over `G_{T_I} ⊆ G_full`. Symmetrically, some `u' ∈ geo_O` and face prime `w_O` in port `(T_O, f_O, p_O)` satisfy `u' ~ w_O` over `G_{T_O} ⊆ G_full`. By Theorem 9, `w_I ~ w_O` over G_full. Chaining: `u ~ w_I ~ w_O ~ u'` over G_full, so `ufs_global(u) = ufs_global(u')` — a common label in `ufs_global(geo_I) ∩ ufs_global(geo_O)`.
 
-**(⇒)** Suppose `ℓ ∈ ufs_global(geo_I) ∩ ufs_global(geo_O)`. Let D be the G_full component with label ℓ; D contains some `u ∈ geo_I` and some `u' ∈ geo_O`. By Lemma 7, u lies in the proper region of some active tile; choose any such tile `T_u`. Then `u ∈ proper(T_u) ⊂ halo(T_u) = V(G_{T_u})`, and `g_u := ufs_local(u; G_{T_u})` is defined. Since `u ∈ geo_I`, `inner_flag_{T_u}(g_u) = true`.
+**(⇒)** Suppose `ℓ ∈ ufs_global(geo_I) ∩ ufs_global(geo_O)`. Let D be the G_full component with label ℓ; D contains some `u ∈ geo_I` and some `u' ∈ geo_O`. By Lemma 6, u lies in the proper region of some active tile; choose any such tile `T_u`. Then `u ∈ proper(T_u) ⊂ halo(T_u) = V(G_{T_u})`, and `g_u := ufs_local(u; G_{T_u})` is defined. Since `u ∈ geo_I`, `inner_flag_{T_u}(g_u) = true`.
 
-**Case A.** Some port on `T_u` carries face_f_groups value `g_u`. Let `port_I := (T_u, f_I, p_I)` be any such port; `port_I ∈ I_ports`. Apply the symmetric analysis at u' with host tile `T_{u'}` (chosen via Lemma 7) and group `g_{u'} := ufs_local(u'; G_{T_{u'}})`.
+**Case A.** Some port on `T_u` carries face_f_groups value `g_u`. Let `port_I := (T_u, f_I, p_I)` be any such port; `port_I ∈ I_ports`. Apply the symmetric analysis at u' with host tile `T_{u'}` (chosen via Lemma 6) and group `g_{u'} := ufs_local(u'; G_{T_{u'}})`.
 
-* **A.1:** some port on `T_{u'}` carries value `g_{u'}`. Let `port_O` be any such port; `port_O ∈ O_ports`. Pick face primes `w_I ∈ port_I` and `w_O ∈ port_O`. By step 3, `w_I` is in u's G_{T_u} UF group and `w_O` is in u's G_{T_{u'}} UF group, so `u ~ w_I` over `G_{T_u} ⊆ G_full` and `u' ~ w_O` over `G_{T_{u'}} ⊆ G_full`. Hence `w_I, w_O ∈ D`. By Theorem 10, `port_I` and `port_O` lie in the same G_ports_grid component.
+* **A.1:** some port on `T_{u'}` carries value `g_{u'}`. Let `port_O` be any such port; `port_O ∈ O_ports`. Pick face primes `w_I ∈ port_I` and `w_O ∈ port_O`. By step 3, `w_I` is in `u`'s `G_{T_u}` UF group and `w_O` is in `u'`'s `G_{T_{u'}}` UF group, so `u ~ w_I` over `G_{T_u} ⊆ G_full` and `u' ~ w_O` over `G_{T_{u'}} ⊆ G_full`. Hence `w_I, w_O ∈ D`. By Theorem 9, `port_I` and `port_O` lie in the same G_ports_grid component.
 
-* **A.2:** no port on `T_{u'}` carries value `g_{u'}` — the G_{T_{u'}} UF component containing u' has no face primes. By Lemma 11 (contrapositive) applied at u' in `T_{u'}`: if D extended outside `V(G_{T_{u'}})`, D would contain a face prime of `T_{u'}` in u's G_{T_{u'}} UF group, contradicting the no-face-primes assumption. Hence `D ⊆ V(G_{T_{u'}})`, so `u ∈ V(G_{T_{u'}})` and `u ~ u'` over `G_{T_{u'}}` (every edge of the G_full path stays in `E(G_{T_{u'}})`). Thus u and u' share the G_{T_{u'}} UF group `g_{u'}`, whose G_{T_{u'}} component has no face primes — so all its members lie in `T_{u'}`'s proper-region interior, giving `‖u − u'‖ ≤ S√2`. But `u ∈ geo_I` yields a lattice witness `q_I` with `q_I² < R_inner²` and `‖u − q_I‖² ≤ K`, so `‖u‖ ≤ ‖q_I‖ + ‖u − q_I‖ < R_inner + √K`; symmetrically `‖u'‖ > R_outer − √K`. Hence `‖u − u'‖ ≥ |‖u'‖ − ‖u‖| > R_outer − R_inner − 2√K > S√2` by the annulus thickness assumption — contradicting `‖u − u'‖ ≤ S√2`. Sub-case A.2 is impossible.
+* **A.2:** no port on `T_{u'}` carries value `g_{u'}` — the G_{T_{u'}} UF component containing u' has no face primes. By Lemma 10 (contrapositive) applied at u' in `T_{u'}`: if D extended outside `V(G_{T_{u'}})`, D would contain a face prime of `T_{u'}` in `u'`'s `G_{T_{u'}}` UF group, contradicting the no-face-primes assumption. Hence `D ⊆ V(G_{T_{u'}})`, so `u ∈ V(G_{T_{u'}})` and `u ~ u'` over `G_{T_{u'}}` (every edge of the G_full path stays in `E(G_{T_{u'}})`). Thus u and u' share the G_{T_{u'}} UF group `g_{u'}`, whose G_{T_{u'}} component has no face primes — so all its members lie in `T_{u'}`'s proper-region interior, giving `‖u − u'‖ ≤ S√2`. But `u ∈ geo_I` (canonical norm form) gives `‖u‖ ≤ R_inner + √K` directly; symmetrically `u' ∈ geo_O` gives `‖u'‖ ≥ R_outer − √K`. Hence `‖u − u'‖ ≥ ‖u'‖ − ‖u‖ ≥ R_outer − R_inner − 2√K > S√2` by the annulus thickness assumption — contradicting `‖u − u'‖ ≤ S√2`. Sub-case A.2 is impossible.
 
-**Case B.** No port on `T_u` carries value `g_u`. The argument of A.2 with roles swapped: Lemma 11 forces `D ⊆ V(G_{T_u})`; `u ~ u'` over `G_{T_u}` in group `g_u`, which has no face primes; all members in `T_u`'s proper interior; `‖u − u'‖ ≤ S√2`; contradiction via the same lattice-witness norm gap. Case B is impossible.
+**Case B.** No port on `T_u` carries value `g_u`. The argument of A.2 with roles swapped: Lemma 10 forces `D ⊆ V(G_{T_u})`; `u ~ u'` over `G_{T_u}` in group `g_u`, which has no face primes; all members in `T_u`'s proper interior; `‖u − u'‖ ≤ S√2`; contradiction via the same lattice-witness norm gap. Case B is impossible.
 
 In every viable case, we have `port_I ∈ I_ports` and `port_O ∈ O_ports` in the same G_ports_grid component. ∎
 
-**Soundness and completeness.** Theorem 12 pins the pipeline's port-graph verdict exactly to the geometric moat verdict on the octant R. No false positives: if the pipeline reports "moat exists," then no geo_I prime connects to any geo_O prime in G_full|_R. No false negatives: if the pipeline reports "no moat" via some shared G_ports_grid component, that component's underlying UF groups carry witnesses u ∈ geo_I and u' ∈ geo_O with a concrete G_full path between them. The tile staircase approximates R's boundaries at cost S, but the UF-flag machinery bridges the gap — geo_I primes in tile interiors are represented through the ports of their UF components (Exit lemma); geo_I primes in isolated-interior components have no path to geo_O and are correctly invisible to the verdict.
+**Soundness and completeness.** Theorem 11 pins the pipeline's port-graph verdict exactly to the geometric moat verdict on the octant R. No false positives: if the pipeline reports "moat exists," then no geo_I prime connects to any geo_O prime in G_full|_R. No false negatives: if the pipeline reports "no moat" via some shared G_ports_grid component, that component's underlying UF groups carry witnesses u ∈ geo_I and u' ∈ geo_O with a concrete G_full path between them. The tile staircase approximates R's boundaries at cost S, but the UF-flag machinery bridges the gap — geo_I primes in tile interiors are represented through the ports of their UF components (Exit lemma); geo_I primes in isolated-interior components have no path to geo_O and are correctly invisible to the verdict.
 
 
 ### Cross-octant symmetry closure (full-annulus extension)
 
-Theorem 12's verdict is stated on the octant R, using the boundary sets geo_I and geo_O defined in §Tower tiling. The pipeline's actual target is the **full annulus**
+Theorem 11's verdict is stated on the octant R, using the boundary sets geo_I and geo_O defined in §Tower tiling. The pipeline's actual target is the **full annulus**
 
     A := { (x, y) ∈ Z² : R_inner² ≤ x² + y² ≤ R_outer² }.
 
 Extend the boundary definitions to A:
 
-    I_A := { p ∈ V(G_full|_A) : ∃ q ∈ Z² with q² < R_inner² and ‖p − q‖² ≤ K },   (full-annulus geo_I)
-    O_A := { p ∈ V(G_full|_A) : ∃ q ∈ Z² with q² > R_outer² and ‖p − q‖² ≤ K },   (full-annulus geo_O)
+    I_A := { p ∈ V(G_full|_A) : ‖p‖² ≤ (R_inner + √K)² },    (full-annulus geo_I, norm form)
+    O_A := { p ∈ V(G_full|_A) : ‖p‖² ≥ (R_outer − √K)² },    (full-annulus geo_O, norm form)
     I_R := I_A ∩ R = geo_I,    O_R := O_A ∩ R = geo_O.
 
-(The R-restricted versions I_R, O_R coincide with the geo_I, geo_O of §Tower tiling by construction — same lattice-witness condition, same underlying prime set restricted to the octant.)
+(The R-restricted versions I_R, O_R coincide with the canonical norm-form geo_I, geo_O of §Tower tiling by construction. Witness-form counterparts `I_A_w`, `O_A_w` — defined by `∃ q ∈ Z² with ‖q‖² < R_inner²` / `‖q‖² > R_outer²` and `‖p − q‖² ≤ K` — reconcile with `I_A` / `O_A` under the same BZ check recorded in §Tower tiling; the check is stated for the octant but applies verbatim to the full annulus via D₄ invariance of the norms.)
 
-We show that the octant verdict (I_R !~ O_R over G_full|_R) is equivalent to the full-annulus verdict (I_A !~ O_A over G_full|_A) via the D_4 symmetry of the Gaussian-prime structure. This closes the side-exposed faces of R legitimately and extends Theorem 12 to A.
+We show that the octant verdict (I_R !~ O_R over G_full|_R) is equivalent to the full-annulus verdict (I_A !~ O_A over G_full|_A) via the D_4 symmetry of the Gaussian-prime structure. This closes the side-exposed faces of R legitimately and extends Theorem 11 to A.
 
 ---
 
@@ -689,7 +751,7 @@ Hence G_full|_A is D_4-equivariant: for any u, v ∈ A and g ∈ D_4, u ~ v over
 - R and σ_diag(R) share the line y = x.
 - R and σ_y(R) share the line x = 0 (where σ_y(x, y) := (−x, y)).
 
-I_A and O_A are D_4-invariant: g(I_A) = I_A and g(O_A) = O_A for all g ∈ D_4. Reason: D_4 preserves norm, so ‖g(p)‖ = ‖p‖ — and the norm-form characterizations I_A = { p : ‖p‖ ≤ R_inner + √K } and O_A = { p : ‖p‖ ≥ R_outer − √K } depend only on ‖p‖. Equivalently, the lattice-witness condition (∃ q with q² < R_inner² and ‖p − q‖² ≤ K) is preserved under any isometry of Z² sending q to g(q).
+I_A and O_A are D_4-invariant: g(I_A) = I_A and g(O_A) = O_A for all g ∈ D_4. Reason: D₄ preserves norms (‖g(p)‖ = ‖p‖ for all g ∈ D₄), so the norm-form membership conditions `‖p‖² ≤ (R_inner + √K)²` and `‖p‖² ≥ (R_outer − √K)²` are invariant under D₄. The witness-form counterparts `I_A_w`, `O_A_w` are D₄-invariant by the same isometry argument: if q witnesses p ∈ I_A_w, then g(q) witnesses g(p) ∈ I_A_w, since D₄ preserves both ‖q‖ and ‖p − q‖. Per-deployment BZ reconciliation ties the two forms together.
 
 ---
 
@@ -726,7 +788,7 @@ since a ≥ 0 and c ≤ 0. ∎
 
 ---
 
-**Theorem 13 — Reflection closure.** Assume R_inner > √(2K). Then
+**Theorem 12 — Reflection closure.** Assume R_inner > √(2K). Then
     I_R !~ O_R over G_full|_R    iff    I_A !~ O_A over G_full|_A.
 
 Proof:
@@ -761,13 +823,13 @@ Hence (x_0, ..., x_n) is a path in G_full|_R from I_R to O_R — witnessing I_R 
 
 ---
 
-**Corollary — Full-annulus moat verdict.** For project parameters (R_inner ≫ √K), Theorem 12's octant-verdict on R is equivalent to the full-annulus moat verdict on A:
+**Corollary — Full-annulus moat verdict.** For project parameters (R_inner ≫ √K), Theorem 11's octant-verdict on R is equivalent to the full-annulus moat verdict on A:
 
     (moat in R: I_R !~ O_R over G_full|_R)    iff    (moat in A: I_A !~ O_A over G_full|_A).
 
-Side-exposed faces of the tiling (face_L at column i_min across x = 0; face_R at column i_max across y = x) are legitimately excluded from the tile-based moat verdict: by Theorem 13, any A-path through adjacent octants folds back into an R-path, so paths exiting R via side-exposed faces cannot establish connectivity that isn't already expressible within G_full|_R.
+Side-exposed faces of the tiling (face_L at column i_min across x = 0; face_R at column i_max across y = x) are legitimately excluded from the tile-based moat verdict: by Theorem 12, any A-path through adjacent octants folds back into an R-path, so paths exiting R via side-exposed faces cannot establish connectivity that isn't already expressible within G_full|_R.
 
-The tower-closing regime near x = R_outer/√2 sits exactly where y = x exits the octant at x = y = R_outer/√2. Side-exposed face_R faces at column i_max are the interface the reflection closure handles — tile-closure and symmetry closure happen at the same axis, so no leftover edge cases remain.
+The tower-closing regime near `x = R_outer/√2` sits exactly where `y = x` exits the octant at `x = y = R_outer/√2`. Side-exposed `face_R` at column `i_max` is handled by reflection closure: G_full paths exiting R across `y = x` fold back into an R-path via Theorem 12. Port-graph I4 at the tip is a separate structural question, resolved in §Geometric invariants (down-right case analysis) without appealing to reflection closure — the two closures operate on different object types (G_full paths vs. G_ports_grid port-graph components) and do not interact.
 
 
 **Pipeline interpretation.** The CUDA pipeline computes G_ports_grid components (per-tile TileOps produced in parallel; cross-tile bridge edges resolved via a union-find pass). The verdict is then a disjointness check between components labeled by I_ports and components labeled by O_ports:
