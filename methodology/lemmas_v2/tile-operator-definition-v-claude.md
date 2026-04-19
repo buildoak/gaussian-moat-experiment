@@ -322,6 +322,8 @@ Semantically: geo_I / geo_O primes are exactly those that could form the first /
 
 In both branches `ε² ≤ 4 R_inner² K`, i.e., `(‖p‖² − R_inner² − K)² ≤ 4 R_inner² K`. Symmetric derivation for geo_O. All quantities `‖p‖²`, `R_inner²`, `R_outer²`, `K` are integers — O(1) per prime, no irrationals.
 
+*Arithmetic footprint.* Within the candidate band (primes within `√K` of either boundary), `|‖w‖² − R_inner² − K| ≤ 2 R_inner √K`, so the squared LHS is bounded by `4 R_inner² K`, matching the RHS scale (`≈ 1.5 · 10¹⁷` at project parameters — fits in signed int64 with margin). Outside the candidate band the LHS magnitude dominates the RHS by many orders and the test can be short-circuited via a cheap range pre-filter (`|‖w‖² − R_inner² − K| ≤ 2 R_inner √K + 1`) before squaring. At larger-scale deployments where `R_inner²` approaches `2⁶²`, use 128-bit arithmetic or the pre-filter unconditionally.
+
 **Relation to the lattice-witness form.** Let `geo_I_w`, `geo_O_w` denote the witness-based sets defined at the top of this section. Triangle inequality gives one-directional inclusion:
 
     p ∈ geo_I_w  ⟹  ‖p‖ ≤ R_inner + √K  ⟹  p ∈ geo_I      (analogous for O).
@@ -361,14 +363,13 @@ Both `BZ_I` and `BZ_O` are prime-free for the project deployment, so `geo_I_w = 
 
 For project parameters (R_outer − R_inner ~ 8192, S = 256, √K ≤ 7), the threshold is ≈ S√2 + 2√K ≈ 362 + 14 = 376, abundantly satisfied.
 
-**Tower-closing margin corollary (of annulus thickness).** In the tower-closing regime — columns `i` with `tower_height(i) ≤ 1`, which the Cross-section Lemma places at `x ≥ R_outer/√2 − S/2` — every lattice point of every active tile in column `i` that satisfies the octant constraint (`y ≥ x`) has norm² `≥ R_inner²`.
+**Tower-closing margin corollary (of annulus thickness).** In the tower-closing regime — columns `i` with `tower_height(i) ≤ 1`, which the Cross-section Lemma places at `x ≥ R_outer/√2 − S` — every lattice point of every tile in column `i` (active or not) that satisfies the octant constraint `y ≥ x` has norm² `> R_inner²`.
 
-Proof. Tower height `≤ 1` in column `i` means `y_upper(x) − y_lower(x) ≤ S` for all `x ∈ [iS + o_x, (i+1)S + o_x]`. Beyond the inner arc's reach (`x ≥ R_inner/√2`, which holds throughout the closing regime since `R_outer/√2 − S/2 ≥ R_inner/√2` under annulus thickness), `y_lower = x` and `y_upper = √(R_outer² − x²)`. Solving `√(R_outer² − x²) − x ≤ S` yields `x ≥ R_outer/√2 − S` (first-order; the exact bound `x ≥ (−S + √(2R_outer² − S²))/2` is at least this, for `R_outer ≥ 2S`).
+Proof. Tower height `≤ 1` in column `i` means `y_upper(x) − y_lower(x) ≤ S` for all `x ∈ [o_x + iS, o_x + (i+1)S]`. Beyond the inner arc's reach — `x ≥ R_inner/√2`, which holds throughout the closing regime since `R_outer/√2 − S ≥ R_inner/√2` is equivalent to `R_outer − R_inner ≥ S√2` and is given directly by annulus thickness `R_outer − R_inner > S√2 + 2√K` — we have `y_lower(x) = x` and `y_upper(x) = √(R_outer² − x²)`. Solving `√(R_outer² − x²) − x ≤ S` (valid squaring, since `x + S > 0`) yields `2x² + 2xS − (R_outer² − S²) ≥ 0`, hence `x ≥ (−S + √(2R_outer² − S²))/2 ≥ R_outer/√2 − S` (the weaker bound suffices; strict positivity `R_outer/√2 − S > 0` follows from `R_outer > 2S`, trivially satisfied at any deployment).
 
-Let `T` be any tile in column `i` (active or not) and let `q = (q_x, q_y)` be a lattice point of `proper(T)` with `q_y ≥ q_x`. Then `q_x ≥ iS + o_x ≥ R_outer/√2 − S` (tower-closing), so
-    `‖q‖² = q_x² + q_y² ≥ 2 q_x² ≥ 2(R_outer/√2 − S)² = R_outer² − 2 R_outer · S√2 + 2 S²`.
-
-Under the annulus thickness assumption `R_outer − R_inner > S√2 + 2√K`, we have `(R_outer − R_inner)(R_outer + R_inner) > S√2 · (R_outer + R_inner) ≥ 2 R_outer · S√2`, so `R_outer² − R_inner² > 2 R_outer · S√2`, hence `‖q‖² > R_inner² + 2 S² ≥ R_inner²`. ∎
+Let `T` be any tile in column `i` and `q = (q_x, q_y)` a lattice point of `proper(T)` with `q_y ≥ q_x`. Then `q_x ≥ o_x + iS ≥ R_outer/√2 − S > 0`, so
+    `‖q‖² = q_x² + q_y² ≥ 2 q_x² ≥ 2(R_outer/√2 − S)² = (R_outer − S√2)²`,
+using the identity `2(R_outer/√2 − S)² = R_outer² − 2 R_outer · S√2 + 2S² = (R_outer − S√2)²`. Under annulus thickness `R_outer − R_inner > S√2`, `R_outer − S√2 > R_inner > 0`, so `(R_outer − S√2)² > R_inner²`. Hence `‖q‖² > R_inner²`. ∎
 
 **Grid parameters.** Fix:
 - S — tile side length, positive integer.
@@ -471,14 +472,24 @@ For (I4): two regimes.
 
 *Tower-closing regime* (I3 may fail — tower heights 0 or 1 near `x = R_outer/√2`). Here `x² + y² ≈ R_outer² ≫ R_inner²`, so the inner bound is trivially satisfied and "active" reduces to: the tile's proper region contains a lattice point `(x, y)` with `y ≥ x` and `x² + y² ≤ R_outer²`. Tile `T_{i,j}`'s proper is `[o_x + iS, o_x + (i+1)S] × [o_y + jS, o_y + (j+1)S]` (offsets included).
 
-**Up-right diagonal pair.** `P = T_{i,j}`, `Q = T_{i+1, j+1}` both active. Pick `q_Q ∈ proper(Q)` witnessing `Q`'s activity (`q_Q_y ≥ q_Q_x`, `R_inner² ≤ ‖q_Q‖² ≤ R_outer²`). Define `r := (q_Q_x − S, q_Q_y)`, integer-valued since `S ∈ ℤ`.
+**Up-right diagonal pair.** `P = T_{i,j}`, `Q = T_{i+1, j+1}` both active. We further split by which tower is closing.
 
-- `r ∈ proper(T_{i, j+1})`: `r_x = q_Q_x − S ∈ [o_x + iS, o_x + (i+1)S]` (the x-range shifts left by `S` under a `−S` translation of the x-coordinate); `r_y = q_Q_y ∈ [o_y + (j+1)S, o_y + (j+2)S]`. ✓
-- `r` in octant: `r_y − r_x = q_Q_y − q_Q_x + S ≥ S > 0`. ✓
-- `‖r‖² = ‖q_Q‖² − 2 · q_Q_x · S + S² ≤ ‖q_Q‖² − S² < ‖q_Q‖² ≤ R_outer²`, using `q_Q_x ≥ o_x + (i+1)S ≥ S` (requires `i ≥ 0, o_x ≥ 0`). ✓
-- `‖r‖² ≥ R_inner²`: trivial in the closing regime.
+*Sub-case U1 — Tower_i has height `≤ 1` (column i in corollary scope).* Pick `q_Q ∈ proper(Q) ∩ R` witnessing Q's activity (`q_{Q,y} ≥ q_{Q,x}`, `R_inner² ≤ ‖q_Q‖² ≤ R_outer²`). Define `r := (q_{Q,x} − S, q_{Q,y})`, integer-valued since `S ∈ ℤ`.
 
-So `r` is a lattice point of R in `proper(T_{i, j+1})`, making `T_{i, j+1}` active — an active common face-neighbor of `P` and `Q`. ✓
+- `r ∈ proper(T_{i, j+1})`: `r_x = q_{Q,x} − S ∈ [o_x + iS, o_x + (i+1)S]` (shifted from `Q`'s x-range); `r_y = q_{Q,y} ∈ [o_y + (j+1)S, o_y + (j+2)S]` (unchanged, matches `T_{i, j+1}`'s y-range). ✓
+- `r` in octant: `r_y − r_x = q_{Q,y} − q_{Q,x} + S ≥ S > 0`. ✓
+- `‖r‖² = ‖q_Q‖² − 2 q_{Q,x} · S + S² ≤ ‖q_Q‖² − S² < ‖q_Q‖² ≤ R_outer²`, using `q_{Q,x} ≥ o_x + (i+1)S ≥ S` (requires `i ≥ 0, o_x ≥ 0`). ✓
+- By the Tower-closing margin corollary applied to column `i` (closing by U1 hypothesis, `r` octant-satisfying in column `i`), `‖r‖² > R_inner²`.
+
+So `r ∈ R` and `r ∈ proper(T_{i, j+1})`, making `T_{i, j+1}` active — an active common face-neighbor of (P, Q).
+
+*Sub-case U2 — Only Tower_{i+1} has height `≤ 1` (Tower_i bulk, height `≥ 2`).* `j ∈ Tower_i` (P active). By I1, `Tower_i = [j_low(i), j_high(i)]`, contains `j`. We show `j + 1 ∈ Tower_i` by contradiction.
+
+Suppose `j + 1 ∉ Tower_i`. Then `j_high(i) = j`, so `Tower_i = [j_low(i), j]` with `j_low(i) ≤ j − 1` (height `≥ 2`). `Tower_{i+1}` has height `≤ 1` and contains `j + 1` (Q active), so `Tower_{i+1} = {j + 1}`, giving `j_low(i+1) = j + 1`.
+
+Then `j_low(i+1) − j_low(i) ≥ (j + 1) − (j − 1) = 2`, violating I2 (bounded boundary shift, `|Δj_low| ≤ 1`). Contradiction. Hence `j + 1 ∈ Tower_i`, and `T_{i, j+1}` is active directly.
+
+In both sub-cases, `T_{i, j+1}` is an active common face-neighbor.
 
 **Down-right diagonal pair.** `P = T_{i,j}`, `Q = T_{i+1, j−1}` both active. Direct translation (as used for the up-right case) fails — translating either witness by `±S` along a single axis can push the shifted point out of the `R_outer`-disk or out of the octant. Case analysis on the `(i, j)` relationship closes the proof structurally.
 
@@ -486,13 +497,35 @@ So `r` is a lattice point of R in `proper(T_{i, j+1})`, making `T_{i, j+1}` acti
 
 *Notation.* For `T_{α, β}`, write `c(α, β) := (o_x + αS, o_y + βS)` for its bottom-left lattice corner.
 
-**Case A: `j ≥ i+2`.** Consider `T_{i, j−1}`'s bottom-left `c(i, j−1) = (o_x + iS, o_y + (j−1)S)`:
-- Octant: `c(i, j−1)_y − c(i, j−1)_x = (j − 1 − i) S + (o_y − o_x) ≥ S + (o_y − o_x) ≥ 1 > 0`, since `j − 1 − i ≥ 1` and `|o_y − o_x| < S`.
-- Norm comparison with `c(i, j) = (o_x + iS, o_y + jS)`:
-      `‖c(i, j)‖² − ‖c(i, j−1)‖² = (o_y + jS)² − (o_y + (j−1)S)² = S · [2 o_y + (2j − 1) S] > 0`.
-- `P = T_{i, j}` active ⟹ `T_{i, j}` contains at least one octant lattice point with `x² + y² ≤ R_outer²`. For `j ≥ i+2` the bottom-left `c(i, j)` is octant-satisfying (by the same computation as above with `j−i ≥ 2`), and since `x² + y²` is minimized over octant lattice points of `T_{i, j}` at `c(i, j)`, we have `‖c(i, j)‖² ≤ R_outer²`. Hence `‖c(i, j−1)‖² < R_outer²`; combined with the Tower-closing margin corollary (`‖c(i, j−1)‖² ≥ R_inner²` since `c(i, j−1)` is octant-satisfying), `c(i, j−1) ∈ R`, so `T_{i, j−1}` is active.
+**Case A: `j ≥ i+2`.** We further split by which tower is closing (at least one must be, since the pair sits in the tower-closing regime).
 
-**Case B: `j = i+1`.** `T_{i, j−1} = T_{i, i}`. The lattice point `(o_x + iS, o_y + (i+1)S)` sits on `T_{i, i}`'s top edge (closed-interval proper-region convention, §Tile boundary sharing) and coincides with `T_{i, i+1}`'s bottom-left corner `c(i, i+1)`. Octant: `(o_y + (i+1)S) − (o_x + iS) = S + (o_y − o_x) ≥ 1 > 0`. `P = T_{i, i+1}` active ⟹ `‖c(i, i+1)‖² ≤ R_outer²` (it is the octant-min of `T_{i, i+1}`). Since the same octant-satisfying lattice point lies in `T_{i, i}` (top-edge incidence), and the Tower-closing margin corollary gives its norm² `≥ R_inner²` while `P = T_{i, i+1}` active gives norm² `≤ R_outer²`, the point is in `R`; `T_{i, i}` is active.
+*Sub-case A1 — Tower_i has height `≤ 1` (column i in corollary scope).* Consider `T_{i, j−1}`'s bottom-left lattice corner `c(i, j−1) = (o_x + iS, o_y + (j−1)S)`:
+- Octant: `c(i, j−1)_y − c(i, j−1)_x = (j − 1 − i) S + (o_y − o_x) ≥ S + (o_y − o_x) ≥ 1 > 0`, since `j − 1 − i ≥ 1` and `|o_y − o_x| < S`.
+- Norm-monotonicity vs `c(i, j) = (o_x + iS, o_y + jS)`:
+      `‖c(i, j)‖² − ‖c(i, j−1)‖² = (o_y + jS)² − (o_y + (j−1)S)² = S · [2 o_y + (2j − 1) S] > 0`.
+- `P = T_{i, j}` active ⟹ `T_{i, j}` has an octant lattice point with norm² `≤ R_outer²`; since `c(i, j)` is the octant-min of `T_{i, j}` (bottom-left corner, in octant for `j ≥ i+2`), `‖c(i, j)‖² ≤ R_outer²`.
+- Hence `‖c(i, j−1)‖² < R_outer²`. By the Tower-closing margin corollary applied to column `i` (closing by A1 hypothesis, `c(i, j−1)` octant-satisfying), `‖c(i, j−1)‖² > R_inner²`.
+- Therefore `c(i, j−1) ∈ R`, and `T_{i, j−1}` is active.
+
+*Sub-case A2 — Only Tower_{i+1} has height `≤ 1` (Tower_i bulk, height `≥ 2`).* By I1 (contiguity), `Tower_i = [j_low(i), j_high(i)]`. Since `j ∈ Tower_i` (P active), `j_low(i) ≤ j ≤ j_high(i)`. We show `j − 1 ∈ Tower_i` by contradiction.
+
+Suppose `j − 1 ∉ Tower_i`. Then `j_low(i) = j`, so `Tower_i = [j, j_high(i)]` with `j_high(i) ≥ j + 1` (height `≥ 2`). Meanwhile `Tower_{i+1}` has height `≤ 1` and contains `j − 1` (Q = T_{i+1, j−1} active), so `Tower_{i+1} = {j − 1}`, giving `j_high(i+1) = j − 1`.
+
+Then `j_high(i) − j_high(i+1) ≥ (j + 1) − (j − 1) = 2`, violating I2 (bounded boundary shift, `|Δj_high| ≤ 1`). Contradiction. Hence `j − 1 ∈ Tower_i`, so `T_{i, j−1}` is active directly.
+
+In both sub-cases, `T_{i, j−1}` is an active common face-neighbor of (P, Q).
+
+**Case B: `j = i+1`.** `T_{i, j−1} = T_{i, i}`. The lattice point `c_B := (o_x + iS, o_y + (i+1)S)` sits on `T_{i, i}`'s top edge (closed-interval proper-region convention, §Tile boundary sharing) and coincides with `T_{i, i+1}`'s bottom-left corner. Octant: `c_{B,y} − c_{B,x} = S + (o_y − o_x) ≥ 1 > 0`. Split by which tower is closing.
+
+*Sub-case B1 — Tower_i has height `≤ 1`.* `P = T_{i, i+1}` active ⟹ `‖c_B‖² ≤ R_outer²` (octant-min of `T_{i, i+1}`). By the Tower-closing margin corollary applied to column `i` (closing, `c_B` octant-satisfying), `‖c_B‖² > R_inner²`. Hence `c_B ∈ R`, and since `c_B ∈ proper(T_{i, i})` (top-edge incidence), `T_{i, i}` is active.
+
+*Sub-case B2 — Only Tower_{i+1} has height `≤ 1` (Tower_i bulk, height `≥ 2`).* `i + 1 ∈ Tower_i` (P active). By I1, `Tower_i = [j_low(i), j_high(i)]`, contains `i + 1`. We show `i ∈ Tower_i` by contradiction.
+
+Suppose `i ∉ Tower_i`. Then `j_low(i) = i + 1`, so `Tower_i = [i + 1, j_high(i)]` with `j_high(i) ≥ i + 2`. `Tower_{i+1}` has height `≤ 1` and contains `i` (Q = T_{i+1, i} active), so `Tower_{i+1} = {i}`, giving `j_high(i+1) = i`.
+
+Then `j_high(i) − j_high(i+1) ≥ (i + 2) − i = 2`, violating I2. Contradiction. Hence `i ∈ Tower_i`, and `T_{i, i}` is active directly.
+
+In both sub-cases, `T_{i, i}` is an active common face-neighbor.
 
 **Case C: `j = i`.** `Q = T_{i+1, i−1}` has `x ∈ [o_x + (i+1)S, o_x + (i+2)S]`, `y ∈ [o_y + (i−1)S, o_y + iS]`. Then `max y − min x = (o_y + iS) − (o_x + (i+1)S) = (o_y − o_x) − S < 0` (since `o_y − o_x < S`). Every lattice point has `y < x`; no octant points; `T_{i+1, i−1}` inactive. Contradicts Q active. Case excluded.
 
