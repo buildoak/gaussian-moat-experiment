@@ -56,7 +56,7 @@ class DSU {
   std::vector<std::int32_t> roots() const;
 
  private:
-  mutable std::vector<std::int32_t> parent_;
+  mutable std::vector<std::uint16_t> parent_;
 };
 
 }  // namespace campaign
