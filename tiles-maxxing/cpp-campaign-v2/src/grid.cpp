@@ -17,12 +17,12 @@
 // Strategy:
 //   1) Corner-based *necessary* conditions give a quick screen.
 //   2) For boundary tiles (near the annulus edges or the y=x diagonal),
-//      fall back to a deterministic lattice-point scan inside the tile
-//      box to confirm at least one valid (x, y). Tiles deep in the bulk
-//      need no scan — corner predicates suffice.
+//      scan tile columns and compute the admissible monotone y-range with
+//      i128 binary searches. Tiles deep in the bulk need no scan — corner
+//      predicates suffice.
 //
-// This implementation is O(boundary_tiles * S²) which is ~1 s at project
-// scale; in v2 Phase 1 we accept the simplicity. Phase 2 can tighten.
+// Boundary confirmation is O(boundary_tiles * S), with closed tile bounds
+// preserving the 257×257 lattice-point convention.
 
 #include "campaign/grid.h"
 
@@ -60,6 +60,40 @@ inline TileBox tile_box(std::int32_t i, std::int32_t j) noexcept {
   return b;
 }
 
+inline __int128 sq128(std::int64_t v) noexcept {
+  return static_cast<__int128>(v) * static_cast<__int128>(v);
+}
+
+// Largest y in [0, upper] such that y² <= n. Requires n >= 0.
+std::int64_t floor_isqrt_i128(__int128 n, std::int64_t upper) noexcept {
+  std::int64_t lo = 0;
+  std::int64_t hi = upper;
+  while (lo < hi) {
+    const std::int64_t mid = lo + (hi - lo + 1) / 2;
+    if (sq128(mid) <= n) {
+      lo = mid;
+    } else {
+      hi = mid - 1;
+    }
+  }
+  return lo;
+}
+
+// Smallest y in [0, upper] such that y² >= n. Requires 0 < n <= upper².
+std::int64_t ceil_isqrt_i128(__int128 n, std::int64_t upper) noexcept {
+  std::int64_t lo = 0;
+  std::int64_t hi = upper;
+  while (lo < hi) {
+    const std::int64_t mid = lo + (hi - lo) / 2;
+    if (sq128(mid) >= n) {
+      hi = mid;
+    } else {
+      lo = mid + 1;
+    }
+  }
+  return lo;
+}
+
 // Does tile (i, j) necessarily have no active lattice point?
 // Quick rejections based on corners. Returns true if *definitely inactive*.
 // False means "maybe active, need scan".
@@ -79,9 +113,7 @@ inline bool definitely_inactive(std::int32_t i, std::int32_t j,
   // x_lo floored to 0). If x_hi² + y_hi² < R_inner², inactive.
   const std::int64_t x_hi_pos = std::max<std::int64_t>(0, b.x_hi);
   const std::int64_t y_hi_pos = std::max<std::int64_t>(0, b.y_hi);
-  const __int128 max_norm_sq =
-      static_cast<__int128>(x_hi_pos) * static_cast<__int128>(x_hi_pos) +
-      static_cast<__int128>(y_hi_pos) * static_cast<__int128>(y_hi_pos);
+  const __int128 max_norm_sq = sq128(x_hi_pos) + sq128(y_hi_pos);
   if (max_norm_sq < static_cast<__int128>(g.R_inner_sq)) return true;
 
   // Outer radius: need some (x, y) with x² + y² <= R_outer². Min over
@@ -98,19 +130,16 @@ inline bool definitely_inactive(std::int32_t i, std::int32_t j,
   // The point (x_lo_pos, y_min_on_diag) is in the box iff y_min_on_diag
   // <= y_hi. If not, no y >= x point in the box; already caught above.
   if (y_min_on_diag <= b.y_hi) {
-    const __int128 min_norm_sq =
-        static_cast<__int128>(x_lo_pos) * static_cast<__int128>(x_lo_pos) +
-        static_cast<__int128>(y_min_on_diag) *
-            static_cast<__int128>(y_min_on_diag);
+    const __int128 min_norm_sq = sq128(x_lo_pos) + sq128(y_min_on_diag);
     if (min_norm_sq > static_cast<__int128>(g.R_outer_sq)) return true;
   }
 
   return false;  // plausibly active — needs confirmation
 }
 
-// Exhaustively confirm tile (i, j) has at least one lattice point
-// (x, y) satisfying the full octant-annulus predicate. O(S²) per call.
-bool active_by_scan(std::int32_t i, std::int32_t j, const Grid& g) {
+// Confirm tile (i, j) has at least one lattice point (x, y) satisfying the
+// full octant-annulus predicate. O(S) columns; all squared values use i128.
+bool active_by_y_range(std::int32_t i, std::int32_t j, const Grid& g) {
   const TileBox b = tile_box(i, j);
 
   const std::int64_t x_start = std::max<std::int64_t>(0, b.x_lo);
@@ -119,84 +148,25 @@ bool active_by_scan(std::int32_t i, std::int32_t j, const Grid& g) {
 
   const __int128 R_in_sq_128 = static_cast<__int128>(g.R_inner_sq);
   const __int128 R_out_sq_128 = static_cast<__int128>(g.R_outer_sq);
+  const std::int64_t R_inner_64 = static_cast<std::int64_t>(g.R_inner);
+  const std::int64_t R_outer_64 = static_cast<std::int64_t>(g.R_outer);
 
   for (std::int64_t x = x_start; x <= x_end; ++x) {
-    // Octant y >= x constrains y_low.
-    const std::int64_t y_low = std::max<std::int64_t>(b.y_lo, x);
-    const std::int64_t y_high = b.y_hi;
-    if (y_high < y_low) continue;
-
-    // For this x, the valid y range within the annulus is
-    //   R_inner² - x² <= y² <= R_outer² - x²
-    // combined with [y_low, y_high].
-    const __int128 x_sq_128 = static_cast<__int128>(x) * static_cast<__int128>(x);
-    // Upper y² bound.
+    const __int128 x_sq_128 = sq128(x);
     const __int128 y_sq_ub = R_out_sq_128 - x_sq_128;
     if (y_sq_ub < 0) continue;  // x alone already exceeds R_outer
 
-    // Lower y² bound (could be negative).
+    const std::int64_t y_hi_annulus =
+        floor_isqrt_i128(y_sq_ub, R_outer_64);
+
     const __int128 y_sq_lb = R_in_sq_128 - x_sq_128;
+    const std::int64_t y_lo_annulus =
+        (y_sq_lb <= 0) ? 0 : ceil_isqrt_i128(y_sq_lb, R_inner_64);
 
-    // For efficiency we check endpoints: either y_low or y_high (if in
-    // range) is a candidate; otherwise walk. Because the annulus is
-    // monotone in y for x fixed and y > 0, either y_low satisfies the
-    // outer bound and we can check if SOME y in [y_low, y_high]
-    // satisfies y² >= y_sq_lb.
-    //
-    // Since y_low >= 0 and y_high >= y_low, the extremes tell us:
-    //   y_low²  is the minimum  y² in range.
-    //   y_high² is the maximum  y² in range.
-
-    const __int128 y_low_128 = static_cast<__int128>(y_low);
-    const __int128 y_high_128 = static_cast<__int128>(y_high);
-    const __int128 y_low_sq = y_low_128 * y_low_128;
-    const __int128 y_high_sq = y_high_128 * y_high_128;
-
-    if (y_low_sq > y_sq_ub) continue;  // even smallest y overshoots R_outer
-    // Smallest y in range satisfies upper bound. For the lower bound we
-    // need some y in [y_low, y_high] with y² >= y_sq_lb.
-    // Since y increases continuously in y² in this range, the max y²
-    // achievable is y_high_sq. If that's still < y_sq_lb, no point here.
-    if (y_sq_lb > 0 && y_high_sq < y_sq_lb) continue;
-
-    // Now we know: y_low² <= y_sq_ub AND y_high² >= y_sq_lb (if y_sq_lb
-    // > 0) or y_sq_lb <= 0 (in which case every y satisfies lower).
-    // We still need at least ONE y with both bounds. If y_sq_lb <= 0
-    // then y = y_low works (since y_low² <= y_sq_ub already checked).
-    if (y_sq_lb <= 0) return true;
-
-    // Find min y in [y_low, y_high] with y² >= y_sq_lb and y² <= y_sq_ub.
-    // y² is monotonically increasing on [0, inf). Lower bound on y is
-    // ceil(sqrt(y_sq_lb)); cap at y_high.
-    // Upper bound on y is floor(sqrt(y_sq_ub)); cap at y_high.
-    // If low <= high, found.
-    std::int64_t y_min_lb = y_low;
-    if (y_low_sq < y_sq_lb) {
-      // Need y² >= y_sq_lb ⇒ y >= ceil(sqrt(y_sq_lb)).
-      // Integer search via floor_isqrt of y_sq_lb.
-      // Since y_sq_lb fits in u128 but floor_isqrt takes i64, and at
-      // project scale R_inner ~ 1e8 ⇒ R_inner² ~ 1e16 < 2^63, we cast.
-      if (y_sq_lb > static_cast<__int128>(std::numeric_limits<std::int64_t>::max())) {
-        // Out of range — shouldn't happen at project scale; defensive.
-        continue;
-      }
-      const std::int64_t y_sq_lb_i64 = static_cast<std::int64_t>(y_sq_lb);
-      std::int64_t f = floor_isqrt(y_sq_lb_i64);
-      if (f * f < y_sq_lb_i64) ++f;  // ceil
-      y_min_lb = std::max(y_low, f);
-    }
-
-    std::int64_t y_max_ub = y_high;
-    if (y_high_sq > y_sq_ub) {
-      if (y_sq_ub > static_cast<__int128>(std::numeric_limits<std::int64_t>::max())) {
-        continue;
-      }
-      const std::int64_t y_sq_ub_i64 = static_cast<std::int64_t>(y_sq_ub);
-      const std::int64_t f = floor_isqrt(y_sq_ub_i64);
-      y_max_ub = std::min(y_high, f);
-    }
-
-    if (y_min_lb <= y_max_ub) return true;
+    const std::int64_t y_lo =
+        std::max({b.y_lo, x, y_lo_annulus});
+    const std::int64_t y_hi = std::min(b.y_hi, y_hi_annulus);
+    if (y_lo <= y_hi) return true;
   }
 
   return false;
@@ -206,7 +176,7 @@ bool active_by_scan(std::int32_t i, std::int32_t j, const Grid& g) {
 // Fast path: corner reject. Slow path: O(S) scan.
 inline bool is_active_tile(std::int32_t i, std::int32_t j, const Grid& g) {
   if (definitely_inactive(i, j, g)) return false;
-  return active_by_scan(i, j, g);
+  return active_by_y_range(i, j, g);
 }
 
 // -----------------------------------------------------------------------------
@@ -235,11 +205,8 @@ std::int32_t find_i_min(const Grid& g) {
       // x_lo already exceeds R_outer — no more columns possible.
       return std::numeric_limits<std::int32_t>::min();
     }
-    const std::int64_t rem_i64 = static_cast<std::int64_t>(
-        std::min<__int128>(
-            rem,
-            static_cast<__int128>(std::numeric_limits<std::int64_t>::max())));
-    const std::int64_t y_max_for_x = floor_isqrt(rem_i64);
+    const std::int64_t y_max_for_x =
+        floor_isqrt_i128(rem, static_cast<std::int64_t>(g.R_outer));
     const std::int32_t j_upper = static_cast<std::int32_t>(
         (y_max_for_x - static_cast<std::int64_t>(OFFSET_Y)) /
         static_cast<std::int64_t>(S));
@@ -266,11 +233,8 @@ std::int32_t find_i_max(const Grid& g) {
                          static_cast<__int128>(x_lo_64) *
                              static_cast<__int128>(x_lo_64);
     if (rem < 0) continue;
-    const std::int64_t rem_i64 = static_cast<std::int64_t>(
-        std::min<__int128>(
-            rem,
-            static_cast<__int128>(std::numeric_limits<std::int64_t>::max())));
-    const std::int64_t y_max_for_x = floor_isqrt(rem_i64);
+    const std::int64_t y_max_for_x =
+        floor_isqrt_i128(rem, static_cast<std::int64_t>(g.R_outer));
     const std::int32_t j_upper = static_cast<std::int32_t>(
         (y_max_for_x - static_cast<std::int64_t>(OFFSET_Y)) /
         static_cast<std::int64_t>(S));
@@ -295,11 +259,8 @@ std::pair<std::int32_t, std::int32_t> find_tower(std::int32_t i,
 
   std::int32_t j_upper = 0;
   if (rem >= 0) {
-    const std::int64_t rem_i64 = static_cast<std::int64_t>(
-        std::min<__int128>(
-            rem,
-            static_cast<__int128>(std::numeric_limits<std::int64_t>::max())));
-    const std::int64_t y_max_for_x = floor_isqrt(rem_i64);
+    const std::int64_t y_max_for_x =
+        floor_isqrt_i128(rem, static_cast<std::int64_t>(g.R_outer));
     j_upper = static_cast<std::int32_t>(
         (y_max_for_x - static_cast<std::int64_t>(OFFSET_Y)) /
         static_cast<std::int64_t>(S));

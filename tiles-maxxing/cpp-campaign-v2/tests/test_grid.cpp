@@ -8,7 +8,10 @@
 // only by campaign_main pre-verdict) but they do exercise the grid
 // enumeration primitives end-to-end.
 
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
+#include <map>
 #include <set>
 #include <utility>
 #include <vector>
@@ -22,6 +25,48 @@ namespace {
 
 constexpr std::uint64_t kRinner = 10000;
 constexpr std::uint64_t kRouter = 10032;
+
+bool exhaustive_tile_active(std::int32_t i, std::int32_t j,
+                            std::uint64_t r_inner,
+                            std::uint64_t r_outer) {
+  const std::int64_t x_lo = campaign::OFFSET_X +
+                            static_cast<std::int64_t>(campaign::S) * i;
+  const std::int64_t x_hi = x_lo + campaign::S;
+  const std::int64_t y_lo = campaign::OFFSET_Y +
+                            static_cast<std::int64_t>(campaign::S) * j;
+  const std::int64_t y_hi = y_lo + campaign::S;
+  const __int128 r_inner_sq =
+      static_cast<__int128>(r_inner) * static_cast<__int128>(r_inner);
+  const __int128 r_outer_sq =
+      static_cast<__int128>(r_outer) * static_cast<__int128>(r_outer);
+
+  for (std::int64_t x = std::max<std::int64_t>(0, x_lo); x <= x_hi; ++x) {
+    for (std::int64_t y = std::max<std::int64_t>(y_lo, x); y <= y_hi; ++y) {
+      const __int128 norm_sq =
+          static_cast<__int128>(x) * static_cast<__int128>(x) +
+          static_cast<__int128>(y) * static_cast<__int128>(y);
+      if (norm_sq >= r_inner_sq && norm_sq <= r_outer_sq) return true;
+    }
+  }
+  return false;
+}
+
+std::vector<std::pair<std::int32_t, std::int32_t>>
+exhaustive_active_tiles(std::uint64_t r_inner, std::uint64_t r_outer) {
+  std::vector<std::pair<std::int32_t, std::int32_t>> out;
+  const std::int32_t i_upper = static_cast<std::int32_t>(
+      (r_outer - campaign::OFFSET_X) / campaign::S);
+  const std::int32_t j_upper = static_cast<std::int32_t>(
+      (r_outer - campaign::OFFSET_Y) / campaign::S);
+  for (std::int32_t i = 0; i <= i_upper; ++i) {
+    for (std::int32_t j = 0; j <= j_upper; ++j) {
+      if (exhaustive_tile_active(i, j, r_inner, r_outer)) {
+        out.emplace_back(i, j);
+      }
+    }
+  }
+  return out;
+}
 
 TEST(Grid, TinyRadiiBuildsNonEmpty) {
   auto g = campaign::Grid::build(kRinner, kRouter, campaign::k_sq_value);
@@ -98,6 +143,34 @@ TEST(Grid, RejectsBadRadii) {
                std::invalid_argument);
   EXPECT_THROW(campaign::Grid::build(100, 200, 0),
                std::invalid_argument);
+  EXPECT_THROW(
+      campaign::Grid::build(100, (std::uint64_t{1} << 32) + 1,
+                            campaign::k_sq_value),
+      std::invalid_argument);
+}
+
+TEST(Grid, TinyRadiiMatchExhaustiveReference) {
+  auto g = campaign::Grid::build(kRinner, kRouter, campaign::k_sq_value);
+  const auto tiles = g.enumerate_active_tiles();
+
+  std::vector<std::pair<std::int32_t, std::int32_t>> got;
+  got.reserve(tiles.size());
+  for (const auto& t : tiles) got.emplace_back(t.i, t.j);
+
+  const auto expected = exhaustive_active_tiles(kRinner, kRouter);
+  EXPECT_EQ(got, expected);
+}
+
+TEST(Grid, ScaleBuildCompletesUnder500ms) {
+  const auto start = std::chrono::steady_clock::now();
+  const auto g = campaign::Grid::build(1000000, 1001024,
+                                       campaign::k_sq_value);
+  const auto stop = std::chrono::steady_clock::now();
+  const auto elapsed_ms =
+      std::chrono::duration_cast<std::chrono::milliseconds>(stop - start);
+
+  EXPECT_GT(g.total_tiles, 0);
+  EXPECT_LT(elapsed_ms.count(), 500);
 }
 
 }  // namespace
