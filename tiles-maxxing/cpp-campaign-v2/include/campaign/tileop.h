@@ -92,6 +92,10 @@ static_assert(offsetof(TileOp, reserved) == 229, "reserved offset must be 229");
 //     determinism gate).
 //
 // STUB in Phase 1: writes an EMPTY_BIT TileOp and returns. Full impl in M4.
+TileOp process_tile(const TileCoord& coord,
+                    const CampaignConstants& constants,
+                    const Grid& grid);
+
 void process_tile(const TileCoord& coord,
                   const Grid& grid,
                   const CampaignConstants& constants,
