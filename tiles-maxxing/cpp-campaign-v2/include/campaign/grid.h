@@ -87,6 +87,10 @@ struct Grid {
   // Total active tile count across the octant.
   std::int64_t total_tiles = 0;
 
+  // Optional sparse override used by explicit tile-list regions. Empty means
+  // the canonical contiguous tower table is authoritative.
+  std::vector<TileCoord> explicit_tiles;
+
   // -------------------------------------------------------------------------
   // Construction
   // -------------------------------------------------------------------------
@@ -115,6 +119,8 @@ struct Grid {
   // Return true iff column i is within the octant's column range.
   bool has_column(std::int32_t i) const noexcept;
 
+  bool is_sparse() const noexcept { return !explicit_tiles.empty(); }
+
   // Inclusive [j_low, j_high] for column i. Precondition: has_column(i).
   // Returns (0, -1) sentinel if i is out of range.
   std::pair<std::int32_t, std::int32_t> column_bounds(std::int32_t i) const noexcept;
@@ -136,6 +142,11 @@ struct Grid {
   //
   // Output vector has exactly `total_tiles` entries.
   std::vector<TileCoord> enumerate_active_tiles() const;
+
+  // Emit active tiles in one column in canonical j order. For normal grids
+  // this expands the contiguous tower range; for sparse grids this returns
+  // only explicitly listed coordinates.
+  std::vector<TileCoord> enumerate_column_tiles(std::int32_t i) const;
 };
 
 }  // namespace campaign

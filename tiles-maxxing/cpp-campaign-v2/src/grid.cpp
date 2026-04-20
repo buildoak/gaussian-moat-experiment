@@ -368,6 +368,14 @@ std::pair<std::int32_t, std::int32_t> Grid::column_bounds(
 
 std::int64_t Grid::flat_index(std::int32_t i,
                               std::int32_t j) const noexcept {
+  if (is_sparse()) {
+    for (std::size_t k = 0; k < explicit_tiles.size(); ++k) {
+      if (explicit_tiles[k].i == i && explicit_tiles[k].j == j) {
+        return static_cast<std::int64_t>(k);
+      }
+    }
+    return -1;
+  }
   if (!has_column(i)) return -1;
   const std::size_t k = static_cast<std::size_t>(i - i_min);
   if (j < j_low[k] || j > j_high[k]) return -1;
@@ -375,6 +383,8 @@ std::int64_t Grid::flat_index(std::int32_t i,
 }
 
 std::vector<TileCoord> Grid::enumerate_active_tiles() const {
+  if (is_sparse()) return explicit_tiles;
+
   std::vector<TileCoord> out;
   out.reserve(static_cast<std::size_t>(total_tiles));
   for (std::int32_t i = i_min; i <= i_max; ++i) {
@@ -391,6 +401,33 @@ std::vector<TileCoord> Grid::enumerate_active_tiles() const {
                 static_cast<std::int64_t>(S) * j;
       out.push_back(tc);
     }
+  }
+  return out;
+}
+
+std::vector<TileCoord> Grid::enumerate_column_tiles(std::int32_t i) const {
+  std::vector<TileCoord> out;
+  if (!has_column(i)) return out;
+
+  if (is_sparse()) {
+    for (const TileCoord& coord : explicit_tiles) {
+      if (coord.i == i) out.push_back(coord);
+    }
+    return out;
+  }
+
+  const auto [jlo, jhi] = column_bounds(i);
+  if (jhi < jlo) return out;
+  out.reserve(static_cast<std::size_t>(jhi - jlo + 1));
+  for (std::int32_t j = jlo; j <= jhi; ++j) {
+    TileCoord tc{};
+    tc.i = i;
+    tc.j = j;
+    tc.a_lo = static_cast<std::int64_t>(OFFSET_X) +
+              static_cast<std::int64_t>(S) * i;
+    tc.b_lo = static_cast<std::int64_t>(OFFSET_Y) +
+              static_cast<std::int64_t>(S) * j;
+    out.push_back(tc);
   }
   return out;
 }

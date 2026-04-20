@@ -4,6 +4,7 @@
 
 #include <array>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
@@ -19,7 +20,22 @@
 namespace {
 
 std::filesystem::path manifest_path_for(const std::filesystem::path& path) {
-  return std::filesystem::path(path.string() + ".manifest.json");
+  const std::string filename = path.filename().string();
+  std::string stem;
+  static constexpr const char* kSnapshotBin = ".snapshot.bin";
+  static constexpr const char* kBin = ".bin";
+  if (filename.size() > std::strlen(kSnapshotBin) &&
+      filename.compare(filename.size() - std::strlen(kSnapshotBin),
+                       std::strlen(kSnapshotBin), kSnapshotBin) == 0) {
+    stem = filename.substr(0, filename.size() - std::strlen(kSnapshotBin));
+  } else if (filename.size() > std::strlen(kBin) &&
+             filename.compare(filename.size() - std::strlen(kBin),
+                              std::strlen(kBin), kBin) == 0) {
+    stem = filename.substr(0, filename.size() - std::strlen(kBin));
+  } else {
+    stem = path.stem().string();
+  }
+  return path.parent_path() / (stem + ".manifest.json");
 }
 
 std::string hash_hex(const std::uint8_t* data) {

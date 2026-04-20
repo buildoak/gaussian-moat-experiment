@@ -11,8 +11,8 @@
 //
 // Region shapes supported in v2:
 //   * Full canonical octant (all active tiles in the grid).
-//   * Tile-index box with per-column j-range (arbitrary sub-shape, needed
-//     for the 5-tile hand-golden and for partial-column M3 / M5 tests).
+//   * Tile-index box with per-column j-range.
+//   * Explicit tile list for sparse hand-golden regions.
 //
 // JSON grammar (parsed via nlohmann::json from `--region <file>`):
 //
@@ -28,10 +28,14 @@
 //       ]
 //     }
 //
-// Dependencies: constants.h. No grid.h (forward-declared) — avoids a
-// circular dependency: grid.h needs to call region_full_octant(grid) in
-// the driver, but region.h must stay grid.h-agnostic so grid can reference
-// Region::column_slice in its builder.
+//   OR
+//
+//     {
+//       "tiles": [
+//         { "i": 0, "j": 312500 },
+//         { "i": 1, "j": 312500 }
+//       ]
+//     }
 
 #pragma once
 
@@ -41,11 +45,12 @@
 #include <utility>
 #include <vector>
 
+#include <nlohmann/json_fwd.hpp>
+
 #include "campaign/constants.h"
+#include "campaign/grid.h"
 
 namespace campaign {
-
-struct Grid;  // forward declaration
 
 // Inclusive j-range [j_lo, j_hi] for a single column i.
 struct JRange {
@@ -58,7 +63,7 @@ struct JRange {
 
 // Region specification.
 //
-// Two populated forms:
+// Three populated forms:
 //
 //   1. `is_full_octant == true` — `column_ranges` is empty; caller resolves
 //      to the full grid via `Region::full_octant(grid)` before iterating.
@@ -68,12 +73,16 @@ struct JRange {
 //      of the requested box with the Grid's tower at that column (narrower
 //      than the tower, never wider).
 //
+//   3. `is_explicit_tile_list == true` — `explicit_tiles` has the exact
+//      requested tile coordinates in canonical lexicographic order.
+//
 // Invariants (asserted by factories in region.cpp):
 //   * i_lo <= i_hi
 //   * column_ranges.size() == (i_hi - i_lo + 1) when not full-octant
 //   * every JRange is either empty() or j_lo <= j_hi
 struct Region {
   bool is_full_octant = false;
+  bool is_explicit_tile_list = false;
 
   int i_lo = 0;
   int i_hi = -1;  // inclusive; -1 when unset
@@ -81,6 +90,7 @@ struct Region {
   // column_ranges[i - i_lo] gives the JRange for column i.
   // Empty for full-octant form (resolved lazily via full_octant()).
   std::vector<JRange> column_ranges;
+  std::vector<TileCoord> explicit_tiles;
 
   // Factory: resolve the full canonical octant against a built Grid.
   //
@@ -105,6 +115,14 @@ struct Region {
   static Region from_tile_box(int i_lo, int i_hi,
                               std::vector<JRange> j_ranges);
 
+  // Factory: build a Region from an explicit tile-list spec.
+  //
+  // Throws std::invalid_argument on an empty list or duplicate coordinates.
+  static Region from_tile_list(std::vector<TileCoord> tiles);
+
+  // Parse a JSON region object (see grammar above).
+  static Region from_json(const nlohmann::json& doc);
+
   // Parse a JSON region file (see grammar above).
   //
   // Preconditions:
@@ -128,6 +146,12 @@ struct Region {
   // Returns an empty JRange if column i has no tiles in the region
   // (never throws on in-range queries).
   JRange column_slice(int i) const;
+
+  // Exact per-column ranges. Tile-list regions can return multiple ranges
+  // for one column; tile-box regions return at most one.
+  std::vector<JRange> column_slices(int i) const;
+
+  const std::vector<TileCoord>& tiles() const noexcept { return explicit_tiles; }
 
   // Total active tile count across all columns. O(i_hi - i_lo + 1).
   std::int64_t tile_count() const noexcept;

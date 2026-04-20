@@ -80,6 +80,25 @@ std::filesystem::path temp_dir_for(const std::string& name) {
   return base;
 }
 
+std::filesystem::path manifest_path_for(const std::filesystem::path& path) {
+  const std::string filename = path.filename().string();
+  const std::string snapshot_suffix = ".snapshot.bin";
+  const std::string bin_suffix = ".bin";
+  std::string stem;
+  if (filename.size() > snapshot_suffix.size() &&
+      filename.compare(filename.size() - snapshot_suffix.size(),
+                       snapshot_suffix.size(), snapshot_suffix) == 0) {
+    stem = filename.substr(0, filename.size() - snapshot_suffix.size());
+  } else if (filename.size() > bin_suffix.size() &&
+             filename.compare(filename.size() - bin_suffix.size(),
+                              bin_suffix.size(), bin_suffix) == 0) {
+    stem = filename.substr(0, filename.size() - bin_suffix.size());
+  } else {
+    stem = path.stem().string();
+  }
+  return path.parent_path() / (stem + ".manifest.json");
+}
+
 campaign::Grid synthetic_grid() {
   campaign::Grid g{};
   g.R_inner = 10000;
@@ -172,7 +191,7 @@ TEST(Snapshot, RoundtripWritesHeaderManifestAndPayload) {
     EXPECT_EQ(tiles[i], tile_bytes(tileops[i]));
   }
 
-  std::ifstream manifest_in(path.string() + ".manifest.json");
+  std::ifstream manifest_in(manifest_path_for(path));
   nlohmann::json manifest;
   manifest_in >> manifest;
   EXPECT_EQ(manifest.at("schema_version"), 1);
@@ -182,6 +201,27 @@ TEST(Snapshot, RoundtripWritesHeaderManifestAndPayload) {
   EXPECT_EQ(manifest.at("r_inner"), constants.R_inner);
   EXPECT_EQ(manifest.at("r_outer"), constants.R_outer);
   EXPECT_TRUE(manifest.at("generated_at").get<std::string>().ends_with("Z"));
+}
+
+TEST(Snapshot, ManifestUsesStemConventionAndCompareFindsIt) {
+  const auto dir = temp_dir_for("stem_manifest");
+  const auto a = dir / "a.snapshot.bin";
+  const auto b = dir / "b.snapshot.bin";
+  const auto grid = synthetic_grid();
+  const auto constants = synthetic_constants();
+  std::vector<campaign::TileOp> tileops;
+  for (std::uint8_t i = 0; i < 5; ++i) tileops.push_back(make_tile(i));
+
+  campaign::write_snapshot(a, grid, tileops, constants);
+  campaign::write_snapshot(b, grid, tileops, constants);
+
+  EXPECT_TRUE(std::filesystem::exists(dir / "a.manifest.json"));
+  EXPECT_TRUE(std::filesystem::exists(dir / "b.manifest.json"));
+  EXPECT_FALSE(std::filesystem::exists(a.string() + ".manifest.json"));
+  EXPECT_FALSE(std::filesystem::exists(b.string() + ".manifest.json"));
+
+  const auto result = run_compare(a, b, dir);
+  EXPECT_EQ(result.exit_code, 0) << result.err;
 }
 
 TEST(Snapshot, HeaderOnlyDiffFailsFast) {

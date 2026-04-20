@@ -124,6 +124,53 @@ campaign::Grid clip_grid_to_region(const campaign::Grid& grid,
   clipped.o_x = grid.o_x;
   clipped.o_y = grid.o_y;
 
+  if (region.is_explicit_tile_list) {
+    std::vector<campaign::TileCoord> tiles;
+    for (const campaign::TileCoord& tile : region.tiles()) {
+      if (grid.flat_index(tile.i, tile.j) >= 0) {
+        tiles.push_back(tile);
+      }
+    }
+
+    if (tiles.empty()) {
+      clipped.i_min = 0;
+      clipped.i_max = -1;
+      clipped.total_tiles = 0;
+      clipped.tower_offset = {0};
+      return clipped;
+    }
+
+    clipped.i_min = tiles.front().i;
+    clipped.i_max = tiles.back().i;
+    const int n_cols = clipped.i_max - clipped.i_min + 1;
+    clipped.j_low.assign(static_cast<std::size_t>(n_cols), 0);
+    clipped.j_high.assign(static_cast<std::size_t>(n_cols), -1);
+    clipped.tower_offset.assign(static_cast<std::size_t>(n_cols + 1), 0);
+
+    std::int64_t running = 0;
+    for (int i = clipped.i_min; i <= clipped.i_max; ++i) {
+      const std::size_t k = static_cast<std::size_t>(i - clipped.i_min);
+      clipped.tower_offset[k] = running;
+      bool seen = false;
+      for (const campaign::TileCoord& tile : tiles) {
+        if (tile.i != i) continue;
+        if (!seen) {
+          clipped.j_low[k] = tile.j;
+          clipped.j_high[k] = tile.j;
+          seen = true;
+        } else {
+          clipped.j_low[k] = std::min(clipped.j_low[k], tile.j);
+          clipped.j_high[k] = std::max(clipped.j_high[k], tile.j);
+        }
+        ++running;
+      }
+    }
+    clipped.tower_offset[static_cast<std::size_t>(n_cols)] = running;
+    clipped.total_tiles = running;
+    clipped.explicit_tiles = std::move(tiles);
+    return clipped;
+  }
+
   int first_i = 0;
   int last_i = -1;
   const int i_lo = std::max(region.i_lo, grid.i_min);
@@ -370,9 +417,9 @@ int main(int argc, char** argv) {
   try {
     compositor.init(grid);
     for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
-      const auto [j_lo, j_hi] = grid.column_bounds(i);
-      if (j_hi < j_lo) continue;
-      const std::int64_t offset = grid.flat_index(i, j_lo);
+      const auto column_tiles = grid.enumerate_column_tiles(i);
+      if (column_tiles.empty()) continue;
+      const std::int64_t offset = grid.flat_index(i, column_tiles.front().j);
       if (offset < 0) {
         throw std::runtime_error("active column has no flat-index base");
       }

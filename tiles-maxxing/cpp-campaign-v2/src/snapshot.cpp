@@ -29,7 +29,22 @@ namespace {
 constexpr std::size_t kHashBytes = 32;
 
 std::filesystem::path manifest_path_for(const std::filesystem::path& path) {
-  return std::filesystem::path(path.string() + ".manifest.json");
+  const std::string filename = path.filename().string();
+  std::string stem;
+  static constexpr const char* kSnapshotBin = ".snapshot.bin";
+  static constexpr const char* kBin = ".bin";
+  if (filename.size() > std::strlen(kSnapshotBin) &&
+      filename.compare(filename.size() - std::strlen(kSnapshotBin),
+                       std::strlen(kSnapshotBin), kSnapshotBin) == 0) {
+    stem = filename.substr(0, filename.size() - std::strlen(kSnapshotBin));
+  } else if (filename.size() > std::strlen(kBin) &&
+             filename.compare(filename.size() - std::strlen(kBin),
+                              std::strlen(kBin), kBin) == 0) {
+    stem = filename.substr(0, filename.size() - std::strlen(kBin));
+  } else {
+    stem = path.stem().string();
+  }
+  return path.parent_path() / (stem + ".manifest.json");
 }
 
 void write_u32_le(std::ostream& out, std::uint32_t v) {
@@ -64,18 +79,22 @@ std::uint64_t read_u64_le(const std::array<std::uint8_t, kSnapshotHeaderSize>& b
 
 std::string grid_canonical_string(const Grid& grid) {
   std::ostringstream ss;
-  ss << "K=" << grid.K_SQ_value
-     << ";R_inner=" << grid.R_inner
+  ss << "R_inner=" << grid.R_inner
      << ";R_outer=" << grid.R_outer
-     << ";offset=" << grid.o_x << "," << grid.o_y
-     << ";collar=" << grid.C_value
+     << ";K=" << grid.K_SQ_value
      << ";S=" << grid.S_value
-     << ";i_min=" << grid.i_min
-     << ";i_max=" << grid.i_max
-     << ";total_tiles=" << grid.total_tiles;
-  for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
-    const auto [jlo, jhi] = grid.column_bounds(i);
-    ss << ";col=" << i << ":" << jlo << "," << jhi;
+     << ";C=" << grid.C_value
+     << ";offset=" << grid.o_x << "," << grid.o_y
+     << ";tile_count=" << grid.total_tiles
+     << ";tiles=";
+  auto coords = grid.enumerate_active_tiles();
+  std::sort(coords.begin(), coords.end(), [](const TileCoord& a, const TileCoord& b) {
+    if (a.i != b.i) return a.i < b.i;
+    return a.j < b.j;
+  });
+  for (std::size_t k = 0; k < coords.size(); ++k) {
+    if (k != 0) ss << "|";
+    ss << coords[k].i << "," << coords[k].j;
   }
   return ss.str();
 }

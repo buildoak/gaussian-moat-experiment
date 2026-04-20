@@ -238,16 +238,17 @@ void Compositor::ingest_column(std::int32_t i,
     throw std::invalid_argument("column is outside grid");
   }
 
-  const auto [j_low, j_high] = state_->grid.column_bounds(i);
-  for (std::int32_t j = j_low; j <= j_high; ++j) {
+  const auto column_tiles = state_->grid.enumerate_column_tiles(i);
+  for (std::size_t local = 0; local < column_tiles.size(); ++local) {
+    const TileCoord& coord = column_tiles[local];
+    const std::int32_t j = coord.j;
     const std::int64_t idx = state_->checked_tile_index(i, j);
-    const std::size_t local = static_cast<std::size_t>(j - j_low);
     const TileOp& op = column_tileops[local];
     state_->tileops[static_cast<std::size_t>(idx)] = op;
     state_->ingested[static_cast<std::size_t>(idx)] = 1;
     state_->mark_tile_ports(idx, op);
 
-    if (j > j_low) {
+    if (state_->grid.flat_index(i, j - 1) >= 0) {
       const std::int64_t below_idx = state_->checked_tile_index(i, j - 1);
       state_->match_io(below_idx, idx,
                        state_->tileops[static_cast<std::size_t>(below_idx)],
@@ -257,9 +258,9 @@ void Compositor::ingest_column(std::int32_t i,
 
   const std::int32_t left_i = i - 1;
   if (state_->grid.has_column(left_i)) {
-    const auto [left_low, left_high] = state_->grid.column_bounds(left_i);
-    for (std::int32_t j = j_low; j <= j_high; ++j) {
-      if (j < left_low || j > left_high) continue;
+    for (const TileCoord& current : column_tiles) {
+      const std::int32_t j = current.j;
+      if (state_->grid.flat_index(left_i, j) < 0) continue;
       const std::int64_t left_idx = state_->checked_tile_index(left_i, j);
       if (!state_->ingested[static_cast<std::size_t>(left_idx)]) continue;
       const std::int64_t idx = state_->checked_tile_index(i, j);

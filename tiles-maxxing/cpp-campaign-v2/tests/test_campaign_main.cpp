@@ -86,6 +86,25 @@ std::filesystem::path write_region3(const std::filesystem::path& dir) {
   return path;
 }
 
+std::filesystem::path manifest_path_for(const std::filesystem::path& path) {
+  const std::string filename = path.filename().string();
+  const std::string snapshot_suffix = ".snapshot.bin";
+  const std::string bin_suffix = ".bin";
+  std::string stem;
+  if (filename.size() > snapshot_suffix.size() &&
+      filename.compare(filename.size() - snapshot_suffix.size(),
+                       snapshot_suffix.size(), snapshot_suffix) == 0) {
+    stem = filename.substr(0, filename.size() - snapshot_suffix.size());
+  } else if (filename.size() > bin_suffix.size() &&
+             filename.compare(filename.size() - bin_suffix.size(),
+                              bin_suffix.size(), bin_suffix) == 0) {
+    stem = filename.substr(0, filename.size() - bin_suffix.size());
+  } else {
+    stem = path.stem().string();
+  }
+  return path.parent_path() / (stem + ".manifest.json");
+}
+
 std::string campaign_cmd(const std::filesystem::path& out,
                          const std::filesystem::path& region,
                          int threads) {
@@ -121,9 +140,9 @@ TEST(CampaignMain, TinyEndToEndWritesSnapshotManifestAndVerdict) {
   EXPECT_EQ(result.exit_code, 0) << result.err;
   EXPECT_NE(result.out.find("VERDICT: "), std::string::npos);
   EXPECT_TRUE(std::filesystem::exists(snapshot));
-  EXPECT_TRUE(std::filesystem::exists(snapshot.string() + ".manifest.json"));
+  EXPECT_TRUE(std::filesystem::exists(manifest_path_for(snapshot)));
 
-  std::ifstream manifest_in(snapshot.string() + ".manifest.json");
+  std::ifstream manifest_in(manifest_path_for(snapshot));
   nlohmann::json manifest;
   manifest_in >> manifest;
   EXPECT_EQ(manifest.at("schema_version"), 1);
@@ -181,7 +200,7 @@ TEST(CampaignMain, RegionSubsetWritesOnlyRequestedTiles) {
   const auto header = campaign::read_snapshot_header(snapshot);
   EXPECT_EQ(header.tile_count, 3u);
 
-  std::ifstream manifest_in(snapshot.string() + ".manifest.json");
+  std::ifstream manifest_in(manifest_path_for(snapshot));
   nlohmann::json manifest;
   manifest_in >> manifest;
   EXPECT_EQ(manifest.at("tile_count"), 3);
