@@ -30,6 +30,25 @@ Both are now baseline assumptions. The `campaign-sqrt-36/40` code did NOT yet co
 
 Legacy specs in `docs/` cover the pre-pivot design. Consult them for engineering conventions (CUDA kernel budgets, Montgomery, Miller–Rabin, shared-mem budgets) but **ignore their compositor / matching math** — it is superseded by the canonical math doc.
 
+### 1.1 Symbols
+
+- `K` / `K_SQ` — squared step bound compiled into the worker (`-DK_SQ=N`).
+- `S` — tile side length in lattice segments; project value `256`.
+- `C` / `HALO` / `COLLAR` — collar, halo extension, and kernel coordinate margin; all equal `⌊√K⌋` in v3.
+- `R_inner`, `R_outer` — annulus radii supplied at campaign init.
+- `BZ_I`, `BZ_O` — bad-zone norm intervals where witness-form and norm-form boundary sets can diverge.
+- `geo_I`, `geo_O` — canonical norm-form inner / outer boundary-prime sets.
+- `MAX_PRIMES_GPU` — per-tile compacted-prime capacity inherited from the CUDA worker.
+- `SIDE_EXP` — halo-expanded lattice side used to decode packed K3 positions; `S + 1 + 2*C` (`269` at project parameters).
+- `BITMAP_WORDS` — K2 bitmap word count for the `SIDE_EXP × SIDE_EXP` halo-expanded lattice.
+- `MAX_CANDIDATES_GPU` — K1 candidate-list capacity per tile.
+- `TileInput` — 24 B per-tile GPU input record (`a_lo`, `b_lo`, `i`, `j`).
+- `FACE_I/O/L/R` — face enum in TileOp order: bottom, top, left, right.
+- `REACH_INNER`, `REACH_OUTER` — compositor UF reachability bits propagated from TileOp group flags.
+- `OVERFLOW_BIT`, `EMPTY_BIT`, `TOWER_CLOSING_BIT` — TileOp `tile_flags` bits.
+
+See BACKLOG **B17** for the glossary trail.
+
 ---
 
 ## 2. Campaign parameters
@@ -127,7 +146,7 @@ All integer arithmetic. i128 for `R_outer²` at project scale. No `llround(√)`
 - **I2** (bounded shift): `|j_low(i+1) − j_low(i)| ≤ 1`, `|j_high(i+1) − j_high(i)| ≤ 1`.
 - **I4** (no diagonal orphans): for every diagonally-adjacent active pair, ≥ 1 face-neighbor common to both is active.
 
-**I4 is structurally proven** in the canonical doc (§Geometric invariants, lines 454–538) for both bulk and tower-closing regimes. No runtime gate required for soundness. **Optional defense-in-depth:** a one-pass scan over diagonally-adjacent active pairs at campaign init that verifies I4 empirically — O(|active tiles|), < 1 s at project scale, panics on violation.
+**I4 is structurally proven** in the canonical doc (§Geometric invariants, lines 454–538) for both bulk and tower-closing regimes. A one-pass scan over diagonally-adjacent active pairs at every campaign (re-)init MUST verify I4 empirically — O(|active tiles|), < 1 s at project scale. Campaign init fails if `tools/coverage/coverage_verifier.py` does not pass. Rationale: the tower-closing margin corollary currently asserts the discrete→continuous step without a full derivation (BACKLOG **B12**); the coverage scan is the runtime seatbelt until that proof is closed.
 
 **Empirical verifier.** `tools/coverage/coverage_verifier.py` passes at project parameters for both `K = 36` and `K = 40`: `220,994` towers, `8.18 M` active tiles. I1, I2, I4, and annulus-thickness assertions all hold at project and small scale. See `docs/supportive/2026-04-20-codex-coverage-verifier.md`.
 
@@ -286,13 +305,12 @@ const bool is_outer =
     (llabs(eps_o) <= c_campaign.prefilter_outer) &&
     (((__int128)eps_o * eps_o) <= load_i128(c_campaign.four_rout_sq_k_hi, c_campaign.four_rout_sq_k_lo));
 
-const uint16_t root = atomic_find_root(tile_parent, i);
-if (is_inner) atomicOr(&smem_flags_by_root[root >> 2], INNER_BIT << ((root & 3) * 2));
-if (is_outer) atomicOr(&smem_flags_by_root[root >> 2], OUTER_BIT << ((root & 3) * 2));
-tile_parent[i] = root;
+const uint16_t raw_root = atomic_find_root(tile_parent, i);
+tile_parent[i] = raw_root;
+prime_geo_bits[i] = (is_inner ? INNER_BIT : 0) | (is_outer ? OUTER_BIT : 0);
 ```
 
-`smem_flags_by_root` is a 4 KB shared-memory buffer keyed by UF root (2 bits / root × 128 roots / slice × up to MAX_PRIMES roots → compact into `uint8_t smem_flags_by_root[MAX_PRIMES_GPU / 4]`). At kernel end, the block coalesces `smem_flags_by_root` into the appropriate slice of `d_group_flags`.
+After path compression, K4 performs a root→label compaction pass that builds a per-tile table `dense_label[raw_root] ∈ [0, max_label)`. The final flag accumulator and the global flag write use dense labels, not raw roots: for each prime, read `dense = dense_label[raw_root]`, OR its staged `prime_geo_bits[i]` into `smem_flags_by_label[dense >> 2]`, then write `d_group_flags[tile_idx * 32 + (dense_label >> 2)]` with the two bits for `dense_label`. K5 consumes dense labels directly from the `face_*_groups` payload; it does not re-lookup raw roots. The implementation mechanism is deliberately open (SMEM hash table, warp-scan compaction, per-warp vote + prefix-sum, etc.); the contract is only that `d_group_flags[tile_idx * 32 + (dense_label >> 2)]` stores the two reach bits for dense label `dense_label`. Empirical cap: `max_label ≤ 80` across 600 sampled tiles, so the 128-slot budget leaves 37% headroom.
 
 **Performance impact.** Two int64 mul-adds + two i128 mul per prime. At ~500 primes/tile × 288 threads, ~500 additional ALU ops / thread. K4 is 27% of campaign time (sqrt-36 profile); the addition is est. `< 5%` K4 slowdown, `< 1.5%` campaign slowdown.
 
@@ -310,7 +328,7 @@ tile_parent[i] = root;
 
 **Added:**
 - **Per-face `G_facestrip_f` UF sub-pass.** For each face (4 of them), run a tiny UF over the face-strip primes using their G_full edges. Produces port assignments (ordinals `1..N_f` = face-strip components). Cost trivial (≤ 40 primes per face).
-- **Flag remap.** Read `d_group_flags[tile_idx * 32 + …]` bits per UF-label; pack into 16 B `inner_flags` + 16 B `outer_flags` bit arrays in the TileOp tail.
+- **Flag remap.** Decode dense labels from the `face_*_groups` payload; look up flags by dense label via `d_group_flags[tile_idx * 32 + (dense_label >> 2)]`, not by raw UF root; pack into 16 B `inner_flags` + 16 B `outer_flags` bit arrays in the TileOp tail.
 - **Sentinel emit.** If `sum(N_f) > 192` or `max_label > 128`: set `tile_flags |= OVERFLOW_BIT` and emit zeros in `face_groups` / flag arrays.
 
 **Shared-memory budget.** Existing K5 uses ~11 KB; adding face-strip UF scratch and flag staging brings it to ~13 KB, well under the 48 KB Jetson cap (AGENTS.md §"Build Flags").
@@ -373,7 +391,9 @@ void match_io(const TileOp& A, const TileOp& B, int A_idx, int B_idx) {
 }
 
 // Between-tower: T_{i,j}.face_R  <->  T_{i+1,j}.face_L
-void match_lr(const TileOp& A, const TileOp& B, int A_idx, int B_idx) {
+void match_lr(const Grid& grid, const TileCoord& A_coord, const TileCoord& B_coord,
+              const TileOp& A, const TileOp& B, int A_idx, int B_idx) {
+  assert(A_coord.i < grid.i_max && B_coord.i > grid.i_min);  // side-exposed faces close by Theorem 12, not stitching
   CHECK(A.n[FACE_R] == B.n[FACE_L]);  // Lemma 4
   for (int p = 0; p < A.n[FACE_R]; ++p) {
     uint8_t g_A = A.face_groups[face_off(A, FACE_R) + p];
@@ -384,6 +404,8 @@ void match_lr(const TileOp& A, const TileOp& B, int A_idx, int B_idx) {
 ```
 
 **No `h1`. No delta. No `q/f` decomposition.** Equivalent to deleting the coordinate-space bridging in legacy `match_lr_with_previous` (`compositor.cpp:393–493`, ~100 lines). Port-count mismatch = bug; panic in debug, log-and-treat-as-spanning in release.
+
+**Side-exposure invariant.** `face_L` of the tile at column `i_min` is never an input to `match_lr()`, and `face_R` of the tile at column `i_max` is never an input to `match_lr()`. Theorem 12 supplies the D₄ reflection closure at the verdict level; the compositor must not stitch across symmetry axes.
 
 ### 7.4 Verdict
 
@@ -450,14 +472,16 @@ Sync: `cudaDeviceSynchronize()` after K5; `cudaMemcpyAsync(device→host)` of `d
 
 ```cpp
 // After a burst completes and tileops land in host memory:
+const int64_t burst_base_offset = first_global_tile_index_in_burst;
 for (int i : columns_in_this_burst) {
-  const TileOp* column_ptr = host_tileops + tower_offset[i - i_min] * 256;
+  const int64_t column_global_offset = tower_offset[i - i_min];
+  const TileOp* column_ptr = host_tileops + (column_global_offset - burst_base_offset);
   compositor.ingest_column(i, column_ptr);
   if (compositor.has_spanning()) { abort_remaining_bursts(); break; }
 }
 ```
 
-One `ingest_column` per column. Synchronous. Single-threaded compositor.
+One `ingest_column` per column. `tower_offset[]` is a campaign-global prefix sum; `host_tileops` contains only the current burst, so `burst_base_offset` converts the global tile index to a burst-local `TileOp` subscript. Synchronous. Single-threaded compositor.
 
 ### 8.4 Double-buffered overlap
 
@@ -504,7 +528,7 @@ Compositor's response (`mark_tile_as_spanning_conservative`): treat as having al
 **Layer 1 — unit parity (local):**
 - `tile-cpp/tests/dump_tileops.cpp` — generate TileOps for fixed coord grid; byte-hash.
 - `compare_tileops.py` — CPU vs GPU parity on ~1K tiles at `R ≥ 800 M`, K ∈ {36, 40}.
-- `build/bz_check.py` — BZ reconciliation; build fails if BZ non-empty.
+- `build/bz_check.py` — BZ reconciliation; build fails if any Gaussian-prime norm is found in the BZ intervals.
 
 **Layer 2 — invariants (local):**
 - `tests/test_snapped_grid.cpp` — I1 contiguity, I2 bounded shift, I4 empirical diagonal scan.
@@ -554,7 +578,7 @@ Files changed, grouped by module. Each line ≈ one commit of work.
 ### 14.2 `tile_cuda_multi_kernel/` (CUDA worker)
 - `include/gpu_constants.cuh` — add `CampaignConstants`, `__constant__ c_campaign`, `TILEOP_SIZE = 256`.
 - `include/gpu_types.cuh` — new `TileOp` mirror of CPU layout.
-- `src/kernel_uf.cu` — per-prime geo test after path compression; accumulate `smem_flags_by_root`; emit to `d_group_flags`.
+- `src/kernel_uf.cu` — per-prime geo test after path compression; compact raw roots to dense labels; accumulate `smem_flags_by_label`; emit to `d_group_flags`.
 - `src/kernel_face_encode.cu` — replace 1-D clustering with face-strip UF; delete dead-end prune; add flag pack to 256 B encode.
 - `src/main.cu` — upload `CampaignConstants`; pass `d_inputs` + `d_group_flags` to K4 / K5; allocate new buffer.
 
