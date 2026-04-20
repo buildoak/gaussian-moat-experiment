@@ -21,4 +21,6 @@ campaign_add_test(test_geo_tests)
 campaign_add_test(test_tileop)
 campaign_add_test(test_compositor)
 campaign_add_test(test_snapshot)
+target_compile_definitions(test_snapshot PRIVATE
+  COMPARE_SNAPSHOTS_PATH="$<TARGET_FILE:compare_snapshots>")
 campaign_add_test(test_golden_5tile)
