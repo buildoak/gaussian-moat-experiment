@@ -24,3 +24,7 @@ campaign_add_test(test_snapshot)
 target_compile_definitions(test_snapshot PRIVATE
   COMPARE_SNAPSHOTS_PATH="$<TARGET_FILE:compare_snapshots>")
 campaign_add_test(test_golden_5tile)
+campaign_add_test(test_campaign_main)
+target_compile_definitions(test_campaign_main PRIVATE
+  CAMPAIGN_MAIN_PATH="$<TARGET_FILE:campaign_main>"
+  COMPARE_SNAPSHOTS_PATH="$<TARGET_FILE:compare_snapshots>")

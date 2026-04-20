@@ -145,7 +145,7 @@ endif()
 # Executables
 # ---------------------------------------------------------------------------
 add_executable(campaign_main apps/campaign_main.cpp)
-target_link_libraries(campaign_main PRIVATE campaign)
+target_link_libraries(campaign_main PRIVATE campaign OpenMP::OpenMP_CXX)
 
 add_executable(compare_snapshots apps/compare_snapshots.cpp)
 target_link_libraries(compare_snapshots PRIVATE campaign)

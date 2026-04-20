@@ -4,35 +4,40 @@
 //
 // Usage:
 //   campaign_main --help
-//   campaign_main --k-sq=N --r-inner=R1 --r-outer=R2 --region <spec> [--out <path>]
+//   campaign_main --k-sq=N --r-inner=R1 --r-outer=R2 --region <spec> --out <path>
 //
 // `--region full-octant` is a CLI shortcut for the JSON { "full_octant": true }.
 // Any other `--region <path>` argument is treated as a JSON file path and
 // parsed per `Region::from_json_file`.
 //
-// Phase 1 scope (per execution plan §9 punch-list + task brief):
-//   * --help works and exits 0.
-//   * When supplied with --k-sq / --r-inner / --r-outer / --region, builds
-//     the Grid and (for full-octant) resolves the Region and prints the
-//     active tile count.
-//   * `process_tile` and compositor are stubs, so no snapshot is written.
-//     --out is parsed but ignored in Phase 1.
-
+#include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <filesystem>
+#include <iomanip>
 #include <iostream>
 #include <optional>
+#include <sstream>
 #include <string>
+#include <vector>
+
+#include <omp.h>
 
 #include "campaign/campaign_constants.h"
+#include "campaign/compositor.h"
 #include "campaign/constants.h"
 #include "campaign/grid.h"
 #include "campaign/region.h"
+#include "campaign/snapshot.h"
+#include "campaign/tileop.h"
 
 namespace {
+
+using Clock = std::chrono::steady_clock;
 
 void print_help(const char* prog) {
   std::cout
@@ -44,7 +49,8 @@ void print_help(const char* prog) {
       << "  --r-inner=R            Inner radius of the annulus (positive integer)\n"
       << "  --r-outer=R            Outer radius of the annulus (> R_inner)\n"
       << "  --region <spec>        'full-octant' or a path to a region JSON file\n"
-      << "  --out <path>           (Phase 2) Output snapshot.bin path\n"
+      << "  --out <path>           Output snapshot.bin path\n"
+      << "  --threads=N            OpenMP worker count (ignored when OMP_NUM_THREADS is set)\n"
       << "\n"
       << "Compile-time constants (baked in at build):\n"
       << "  K_SQ           = " << campaign::k_sq_value << "\n"
@@ -54,8 +60,8 @@ void print_help(const char* prog) {
       << "  offset         = (" << campaign::OFFSET_X << ", "
       << campaign::OFFSET_Y << ")\n"
       << "\n"
-      << "Phase 1 status: grid enumeration + region parsing implemented.\n"
-      << "                sieve / UF / tileop / compositor / snapshot are stubs.\n";
+      << "Runs grid enumeration, per-tile TileOp processing, sequential compositor\n"
+      << "ingestion, verdict production, and snapshot emission.\n";
 }
 
 // Accept --k-sq=N, --k-sq N, --r-inner=N, etc. Returns (key, value) or empty.
@@ -76,15 +82,127 @@ bool parse_uint64(const std::string& s, std::uint64_t& out) {
   }
 }
 
+std::uint64_t annulus_thickness_rhs(std::uint32_t k_sq) {
+  const std::uint64_t s = static_cast<std::uint64_t>(campaign::S);
+  const std::uint64_t ceil_sqrt_k =
+      static_cast<std::uint64_t>(campaign::ceil_isqrt(k_sq));
+  return 2ULL * s * s + 4ULL * s * ceil_sqrt_k + 4ULL * k_sq;
+}
+
+bool annulus_thickness_ok(std::uint64_t r_inner,
+                          std::uint64_t r_outer,
+                          std::uint32_t k_sq) {
+  const std::uint64_t delta = r_outer - r_inner;
+  const unsigned __int128 lhs =
+      static_cast<unsigned __int128>(delta) * delta;
+  return lhs > static_cast<unsigned __int128>(annulus_thickness_rhs(k_sq));
+}
+
+campaign::Region resolve_region(const std::string& spec,
+                                 const campaign::Grid& grid) {
+  if (spec == "full-octant") {
+    return campaign::Region::full_octant(grid);
+  }
+
+  campaign::Region region = campaign::Region::from_json_file(spec);
+  if (region.is_full_octant) {
+    return campaign::Region::full_octant(grid);
+  }
+  return region;
+}
+
+campaign::Grid clip_grid_to_region(const campaign::Grid& grid,
+                                   const campaign::Region& region) {
+  campaign::Grid clipped{};
+  clipped.R_inner = grid.R_inner;
+  clipped.R_outer = grid.R_outer;
+  clipped.R_inner_sq = grid.R_inner_sq;
+  clipped.R_outer_sq = grid.R_outer_sq;
+  clipped.K_SQ_value = grid.K_SQ_value;
+  clipped.S_value = grid.S_value;
+  clipped.C_value = grid.C_value;
+  clipped.o_x = grid.o_x;
+  clipped.o_y = grid.o_y;
+
+  int first_i = 0;
+  int last_i = -1;
+  const int i_lo = std::max(region.i_lo, grid.i_min);
+  const int i_hi = std::min(region.i_hi, grid.i_max);
+  for (int i = i_lo; i <= i_hi; ++i) {
+    const campaign::JRange requested = region.column_slice(i);
+    const auto [grid_lo, grid_hi] = grid.column_bounds(i);
+    const int lo = std::max(requested.j_lo, grid_lo);
+    const int hi = std::min(requested.j_hi, grid_hi);
+    if (lo <= hi) {
+      if (last_i < first_i) first_i = i;
+      last_i = i;
+    }
+  }
+
+  if (last_i < first_i) {
+    clipped.i_min = 0;
+    clipped.i_max = -1;
+    clipped.total_tiles = 0;
+    clipped.tower_offset = {0};
+    return clipped;
+  }
+
+  clipped.i_min = first_i;
+  clipped.i_max = last_i;
+  const int n_cols = clipped.i_max - clipped.i_min + 1;
+  clipped.j_low.assign(static_cast<std::size_t>(n_cols), 0);
+  clipped.j_high.assign(static_cast<std::size_t>(n_cols), -1);
+  clipped.tower_offset.assign(static_cast<std::size_t>(n_cols + 1), 0);
+
+  std::int64_t running = 0;
+  for (int i = clipped.i_min; i <= clipped.i_max; ++i) {
+    const std::size_t k = static_cast<std::size_t>(i - clipped.i_min);
+    const campaign::JRange requested = region.column_slice(i);
+    const auto [grid_lo, grid_hi] = grid.column_bounds(i);
+    const int lo = std::max(requested.j_lo, grid_lo);
+    const int hi = std::min(requested.j_hi, grid_hi);
+    clipped.tower_offset[k] = running;
+    if (lo <= hi) {
+      clipped.j_low[k] = lo;
+      clipped.j_high[k] = hi;
+      running += static_cast<std::int64_t>(hi - lo + 1);
+    }
+  }
+  clipped.tower_offset[static_cast<std::size_t>(n_cols)] = running;
+  clipped.total_tiles = running;
+  return clipped;
+}
+
+const char* verdict_name(campaign::Verdict verdict) noexcept {
+  switch (verdict) {
+    case campaign::Verdict::kMoat:
+      return "MOAT";
+    case campaign::Verdict::kSpanning:
+      return "SPANNING";
+    case campaign::Verdict::kUnknown:
+      return "UNKNOWN";
+  }
+  return "UNKNOWN";
+}
+
+std::int64_t elapsed_ms(Clock::time_point start,
+                        Clock::time_point end) {
+  return std::chrono::duration_cast<std::chrono::milliseconds>(end - start)
+      .count();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
+  const auto total_start = Clock::now();
+
   // Defaults
   std::optional<std::uint64_t> k_sq;
   std::optional<std::uint64_t> r_inner;
   std::optional<std::uint64_t> r_outer;
   std::optional<std::string> region_spec;
   std::optional<std::string> out_path;
+  std::optional<std::uint64_t> threads;
 
   for (int i = 1; i < argc; ++i) {
     std::string a = argv[i];
@@ -136,6 +254,13 @@ int main(int argc, char** argv) {
       region_spec = val;
     } else if (take_val("--out", val)) {
       out_path = val;
+    } else if (take_val("--threads", val)) {
+      std::uint64_t v;
+      if (!parse_uint64(val, v) || v == 0) {
+        std::cerr << "Error: invalid --threads value: " << val << "\n";
+        return 2;
+      }
+      threads = v;
     } else {
       std::cerr << "Error: unknown argument: " << a << "\n";
       std::cerr << "Run " << argv[0] << " --help for usage.\n";
@@ -166,6 +291,10 @@ int main(int argc, char** argv) {
     std::cerr << "Error: --region is required\n";
     return 2;
   }
+  if (!out_path.has_value()) {
+    std::cerr << "Error: --out is required\n";
+    return 2;
+  }
 
   if (static_cast<std::uint32_t>(*k_sq) !=
       static_cast<std::uint32_t>(campaign::k_sq_value)) {
@@ -175,62 +304,117 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  if (threads.has_value() && std::getenv("OMP_NUM_THREADS") == nullptr) {
+    omp_set_num_threads(static_cast<int>(*threads));
+  }
+
+  const auto k_sq_u32 = static_cast<std::uint32_t>(*k_sq);
+  if (!annulus_thickness_ok(*r_inner, *r_outer, k_sq_u32)) {
+    const std::uint64_t delta = *r_outer - *r_inner;
+    const std::uint64_t bound =
+        static_cast<std::uint64_t>(campaign::floor_isqrt(
+            static_cast<std::int64_t>(annulus_thickness_rhs(k_sq_u32))));
+    std::cerr << "ERROR: annulus too thin. R_outer - R_inner = " << delta
+              << "; required > " << bound << ".\n"
+              << "       Pipeline soundness requires (R_outer - R_inner) > "
+              << "S*sqrt(2) + 2*sqrt(K).\n";
+    return 1;
+  }
+
   // Build constants + grid.
   campaign::CampaignConstants constants;
   try {
     constants = campaign::CampaignConstants::from_radii(
-        *r_inner, *r_outer, static_cast<std::uint32_t>(*k_sq));
+        *r_inner, *r_outer, k_sq_u32);
   } catch (const std::exception& e) {
     std::cerr << "Error building CampaignConstants: " << e.what() << "\n";
     return 3;
   }
 
-  std::cout << "canonical_hash: " << constants.canonical_hash() << "\n";
-  std::cout << "mr_witness_sha256: "
-            << campaign::CampaignConstants::mr_witness_set_sha256() << "\n";
-  std::cout << "annulus_thickness_ok: "
-            << (constants.verify_annulus_thickness() ? "yes" : "no") << "\n";
-
-  campaign::Grid grid;
+  campaign::Grid full_grid;
   try {
-    grid = campaign::Grid::build(*r_inner, *r_outer,
-                                 static_cast<std::uint32_t>(*k_sq));
+    full_grid = campaign::Grid::build(*r_inner, *r_outer, k_sq_u32);
   } catch (const std::exception& e) {
     std::cerr << "Error building Grid: " << e.what() << "\n";
     return 3;
   }
 
-  std::cout << "grid.i_min: " << grid.i_min << "\n";
-  std::cout << "grid.i_max: " << grid.i_max << "\n";
-  std::cout << "grid.total_tiles: " << grid.total_tiles << "\n";
-
-  // Resolve region.
   campaign::Region region;
-  if (*region_spec == "full-octant") {
-    region = campaign::Region::full_octant(grid);
-  } else {
-    try {
-      region = campaign::Region::from_json_file(*region_spec);
-    } catch (const std::exception& e) {
-      std::cerr << "Error parsing region: " << e.what() << "\n";
-      return 4;
-    }
-    if (region.is_full_octant) {
-      region = campaign::Region::full_octant(grid);
-    }
+  try {
+    region = resolve_region(*region_spec, full_grid);
+  } catch (const std::exception& e) {
+    std::cerr << "Error parsing region: " << e.what() << "\n";
+    return 4;
   }
 
-  const std::int64_t region_tiles = region.tile_count();
-  std::cout << "region.tile_count: " << region_tiles << "\n";
+  campaign::Grid grid = clip_grid_to_region(full_grid, region);
+  std::vector<campaign::TileCoord> active_tiles = grid.enumerate_active_tiles();
+  std::sort(active_tiles.begin(), active_tiles.end(),
+            [](const campaign::TileCoord& a, const campaign::TileCoord& b) {
+              if (a.i != b.i) return a.i < b.i;
+              return a.j < b.j;
+            });
 
-  // Phase 1 sanity: enumerate active tiles from the grid and report count.
-  const auto tiles = grid.enumerate_active_tiles();
-  std::cout << "grid.enumerate_active_tiles.size: " << tiles.size() << "\n";
-
-  if (out_path.has_value()) {
-    std::cout << "(Phase 2) Would write snapshot to: " << *out_path << "\n";
+  std::vector<campaign::TileOp> tileops(active_tiles.size());
+  const auto encode_start = Clock::now();
+#pragma omp parallel for schedule(dynamic, 64)
+  for (std::int64_t k = 0;
+       k < static_cast<std::int64_t>(active_tiles.size()); ++k) {
+    const std::size_t idx = static_cast<std::size_t>(k);
+    tileops[idx] = campaign::process_tile(active_tiles[idx], constants, grid);
   }
+  const auto encode_end = Clock::now();
 
-  std::cout << "Phase 1 enumeration complete.\n";
+  campaign::Compositor compositor;
+  const auto comp_start = Clock::now();
+  try {
+    compositor.init(grid);
+    for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+      const auto [j_lo, j_hi] = grid.column_bounds(i);
+      if (j_hi < j_lo) continue;
+      const std::int64_t offset = grid.flat_index(i, j_lo);
+      if (offset < 0) {
+        throw std::runtime_error("active column has no flat-index base");
+      }
+      compositor.ingest_column(
+          i, tileops.data() + static_cast<std::size_t>(offset));
+    }
+  } catch (const std::exception& e) {
+    std::cerr << "Error in compositor: " << e.what() << "\n";
+    return 5;
+  }
+  const campaign::Verdict verdict = compositor.finalize();
+  const auto comp_end = Clock::now();
+
+  const auto snapshot_start = Clock::now();
+  try {
+    campaign::write_snapshot(std::filesystem::path(*out_path), grid, tileops,
+                             constants);
+  } catch (const std::exception& e) {
+    std::cerr << "Error writing snapshot: " << e.what() << "\n";
+    return 6;
+  }
+  const auto snapshot_end = Clock::now();
+  const auto total_end = Clock::now();
+
+  std::cout << "cpp-campaign-v2 v1.0\n"
+            << "  K_SQ: " << *k_sq << "\n"
+            << "  R_inner: " << *r_inner << ", R_outer: " << *r_outer << "\n"
+            << "  offset: (" << campaign::OFFSET_X << ","
+            << campaign::OFFSET_Y << ")\n"
+            << "  active tiles: " << active_tiles.size() << "\n"
+            << "  threads: " << omp_get_max_threads() << "\n"
+            << "  constants_hash: " << constants.canonical_hash() << "\n"
+            << "  mr_witness_sha256: "
+            << campaign::CampaignConstants::mr_witness_set_sha256() << "\n"
+            << "  sieve+encode: " << std::setw(6)
+            << elapsed_ms(encode_start, encode_end) << " ms\n"
+            << "  compositor:    " << std::setw(6)
+            << elapsed_ms(comp_start, comp_end) << " ms\n"
+            << "  snapshot:      " << std::setw(6)
+            << elapsed_ms(snapshot_start, snapshot_end) << " ms\n"
+            << "  total:         " << std::setw(6)
+            << elapsed_ms(total_start, total_end) << " ms\n"
+            << "VERDICT: " << verdict_name(verdict) << "\n";
   return 0;
 }
