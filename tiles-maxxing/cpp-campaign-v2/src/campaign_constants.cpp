@@ -5,12 +5,12 @@
 
 #include "campaign/campaign_constants.h"
 
-#include <array>
 #include <cstdint>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 
+#include "campaign/fj64_table.h"
 #include "sha256.h"
 
 namespace campaign {
@@ -146,17 +146,8 @@ std::string CampaignConstants::canonical_hash() const {
 }
 
 std::string CampaignConstants::mr_witness_set_sha256() {
-  // Serialize the pinned witness set as little-endian 8-byte words
-  // concatenated. Byte-stable across compilers and architectures (we
-  // always encode LE regardless of host endianness).
-  std::array<std::uint8_t, kMillerRabinWitnesses.size() * 8> buf{};
-  for (std::size_t i = 0; i < kMillerRabinWitnesses.size(); ++i) {
-    const std::uint64_t w = kMillerRabinWitnesses[i];
-    for (int b = 0; b < 8; ++b) {
-      buf[i * 8 + b] = static_cast<std::uint8_t>((w >> (b * 8)) & 0xFFu);
-    }
-  }
-  return detail::sha256_hex(buf.data(), buf.size());
+  return detail::sha256_hex(reinterpret_cast<const std::uint8_t*>(kFj64Table),
+                            sizeof(kFj64Table));
 }
 
 }  // namespace campaign

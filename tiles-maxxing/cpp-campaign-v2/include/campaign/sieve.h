@@ -78,7 +78,8 @@ struct Prime {
 std::vector<Prime> sieve_tile(const TileCoord& coord,
                               const CampaignConstants& constants);
 
-// Miller-Rabin primality test for u64 using `kMillerRabinWitnesses`.
+// Miller-Rabin primality test for u64 using the pinned campaign primality
+// module.
 //
 // Deterministic across the full 64-bit range with the pinned witness set.
 // Used by `sieve_tile` and by the axis-prime y-axis path. Exposed for

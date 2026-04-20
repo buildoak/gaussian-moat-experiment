@@ -55,6 +55,7 @@ TEST(CampaignConstants, MrWitnessSetHashIsStable) {
   const auto h1 = campaign::CampaignConstants::mr_witness_set_sha256();
   const auto h2 = campaign::CampaignConstants::mr_witness_set_sha256();
   EXPECT_EQ(h1, h2);
+  EXPECT_EQ(h1, campaign::kFj64WitnessTableSha256);
   EXPECT_EQ(h1.size(), 64u);
 }
 

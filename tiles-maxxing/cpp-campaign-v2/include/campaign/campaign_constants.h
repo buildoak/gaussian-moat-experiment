@@ -10,42 +10,23 @@
 //
 // All derivations are integer (i64 or i128). No floating-point anywhere.
 //
-// Dependencies: constants.h, <array>, <cstdint>.
+// Dependencies: constants.h, <cstdint>.
 
 #pragma once
 
-#include <array>
 #include <cstdint>
 #include <string>
+#include <type_traits>
 
 #include "campaign/constants.h"
 
 namespace campaign {
 
-// Miller-Rabin witness set pinned for the v2 campaign.
-//
-// This is the Sinclair 7-base set — deterministic for all 64-bit integers
-// (see Jim Sinclair, 2011, confirmed by Forisek & Jancina 2015 and further
-// strengthened by Bradley 2024). Frozen here so:
-//   1) every is_prime() call uses the same witnesses,
-//   2) the SHA-256 of this set lands in the snapshot header so a future
-//      CUDA port cannot silently drift to a different witness table
-//      (blueprint §11, plan risk R10).
-//
-// Re-ordering or re-sizing this array invalidates every committed golden.
-// Touch only with user sign-off.
-inline constexpr std::array<std::uint64_t, 7> kMillerRabinWitnesses = {
-    2ULL,
-    325ULL,
-    9375ULL,
-    28178ULL,
-    450775ULL,
-    9780504ULL,
-    1795265022ULL,
-};
-
-static_assert(kMillerRabinWitnesses.size() == 7,
-              "MR witness set must be the pinned 7-base Sinclair set");
+// SHA-256 over the raw bytes of the pinned FJ64 262144-entry uint16_t witness
+// table. This lands in the snapshot header so the future CUDA port cannot
+// silently drift to a different primality table (blueprint §11, R10).
+inline constexpr const char* kFj64WitnessTableSha256 =
+    "92b8b0ea7ae8703a3fae4f7a1581dd0d04e041bde4eb1d23621a8f39846e909c";
 
 // ---------------------------------------------------------------------------
 // CampaignConstants struct
@@ -139,10 +120,9 @@ struct CampaignConstants {
   // this is what the snapshot header carries for CUDA-port parity.
   std::string canonical_hash() const;
 
-  // SHA-256 hex digest of `kMillerRabinWitnesses` serialized as
-  // little-endian 8-byte words concatenated. Embedded in the snapshot
-  // header (plan M5 brief). Matching this hash is a parity gate for the
-  // future CUDA port.
+  // SHA-256 hex digest of the raw bytes of the pinned FJ64 witness table.
+  // Embedded in the snapshot header (plan M5 brief). Matching this hash is
+  // a parity gate for the future CUDA port.
   static std::string mr_witness_set_sha256();
 
   // -------------------------------------------------------------------------

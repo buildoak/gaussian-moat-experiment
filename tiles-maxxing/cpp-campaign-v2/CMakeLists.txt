@@ -71,6 +71,7 @@ find_package(OpenMP REQUIRED)
 set(CAMPAIGN_SRC
   src/sha256.cpp
   src/campaign_constants.cpp
+  src/primality.cpp
   src/region.cpp
   src/grid.cpp
   src/sieve.cpp
