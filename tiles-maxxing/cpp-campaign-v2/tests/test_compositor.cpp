@@ -192,3 +192,17 @@ TEST(Compositor, DeterministicVerdictAcrossRuns) {
     EXPECT_EQ(run_campaign(grid, columns), campaign::Verdict::kSpanning);
   }
 }
+
+TEST(Compositor, ZeroGroupLabelInActivePortThrows) {
+  // Audit rec (2): the zero-sentinel discipline is enforced at the read
+  // site. A tile claiming one port on face I with group_label 0 must be
+  // rejected at runtime (release-mode, not just DEBUG).
+  const campaign::Grid grid = make_grid({{0, 0}});
+  campaign::TileOp bad{};
+  bad.n[static_cast<int>(campaign::Face::I)] = 1;
+  // face_groups[0] left at zero-init = 0; inner/outer flags clear.
+
+  campaign::Compositor compositor;
+  compositor.init(grid);
+  EXPECT_THROW(compositor.ingest_column(0, &bad), std::runtime_error);
+}

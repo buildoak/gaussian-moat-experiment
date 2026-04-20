@@ -386,6 +386,18 @@ int main(int argc, char** argv) {
     return 3;
   }
 
+  // Release-mode I1/I2/I4 seatbelt — compensates for the tower-closing
+  // [PROOF GAP] per blueprint §4.3. Always-on at campaign init so NDEBUG
+  // builds also catch grid-shape violations before any compositor work.
+  {
+    const std::string err = full_grid.verify_invariants();
+    if (!err.empty()) {
+      std::cerr << "ERROR: Grid invariants failed: " << err << "\n"
+                << "       Blueprint §4.3 mandatory check at campaign init.\n";
+      return 3;
+    }
+  }
+
   campaign::Region region;
   try {
     region = resolve_region(*region_spec, full_grid);

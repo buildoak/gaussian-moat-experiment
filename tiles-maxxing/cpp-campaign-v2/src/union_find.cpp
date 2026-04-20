@@ -8,21 +8,30 @@
 #include <cassert>
 #include <cstdint>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
+#include <string>
 #include <vector>
 
 namespace campaign {
 
-namespace {
-
-constexpr std::int32_t kMaxDsuSize =
-    static_cast<std::int32_t>(std::numeric_limits<std::uint16_t>::max()) + 1;
-
-}  // namespace
+static_assert(kMaxDsuSize ==
+                  static_cast<std::int32_t>(
+                      std::numeric_limits<std::uint16_t>::max()) +
+                      1,
+              "kMaxDsuSize must equal UINT16_MAX+1 — DSU parents are "
+              "stored as uint16_t; widening this cap is a deliberate "
+              "design change, not an accidental bump.");
 
 DSU::DSU(std::int32_t n) : parent_() {
   if (n < 0 || n >= kMaxDsuSize) {
-    throw std::invalid_argument("DSU size must be in [0, 65536)");
+    std::ostringstream msg;
+    msg << "DSU size " << n
+        << " outside [0, " << kMaxDsuSize
+        << "): DSU parents are stored as uint16_t so the hard cap is "
+        << kMaxDsuSize
+        << ". Widening requires changing parent_ to a wider integer.";
+    throw std::invalid_argument(msg.str());
   }
 
   parent_.resize(static_cast<std::size_t>(n));

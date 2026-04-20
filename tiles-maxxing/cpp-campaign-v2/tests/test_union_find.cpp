@@ -6,6 +6,8 @@
 #include <array>
 #include <cstdint>
 #include <random>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -132,4 +134,31 @@ TEST(UnionFind, FindOutOfRangeAbortsInDebugBuilds) {
 #else
   GTEST_SKIP() << "asserts are disabled under NDEBUG";
 #endif
+}
+
+TEST(UnionFind, NamedMaxDsuSizeMatchesUint16Cap) {
+  // Explicit cap — kMaxDsuSize is the named constant the error message
+  // cites. Guards against accidental widening (audit rec 5).
+  EXPECT_EQ(campaign::kMaxDsuSize, 65536);
+}
+
+TEST(UnionFind, RejectsOversizeWithDiagnosticCitingCap) {
+  try {
+    DSU dsu(campaign::kMaxDsuSize);
+    FAIL() << "expected std::invalid_argument at cap boundary";
+  } catch (const std::invalid_argument& e) {
+    const std::string msg = e.what();
+    // Error must name the cap so a future parameter drift bug is
+    // diagnosable without reading the source.
+    EXPECT_NE(msg.find("65536"), std::string::npos)
+        << "diagnostic must cite the cap 65536, got: " << msg;
+    EXPECT_NE(msg.find("uint16"), std::string::npos)
+        << "diagnostic must name the uint16 storage, got: " << msg;
+  } catch (const std::exception& e) {
+    FAIL() << "wrong exception type: " << e.what();
+  }
+}
+
+TEST(UnionFind, RejectsNegativeSize) {
+  EXPECT_THROW(DSU(-1), std::invalid_argument);
 }

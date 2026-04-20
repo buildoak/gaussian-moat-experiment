@@ -26,11 +26,20 @@ namespace campaign {
 //
 // All operations O(α(N)) amortized.
 //
-// STUB in Phase 1 except for the constructor and trivial accessors; full
-// impl in M3.
+// Hard cap: uint16_t parents ⇒ max N = 65536. At project parameters the
+// per-tile prime count is capped at MAX_PRIMES_GPU (6144), so this cap
+// holds with 10× headroom. Constructing a DSU at or above the cap throws
+// `std::invalid_argument` with a diagnostic identifying the cap and the
+// attempted size — this is the clean boundary called out by the audit
+// (audit §Ship as-is item 2 + audit rec (5) on explicit error surface).
+inline constexpr std::int32_t kMaxDsuSize = 65536;  // UINT16_MAX + 1
+
 class DSU {
  public:
   // Create a DSU with `n` elements, each its own singleton root.
+  //
+  // Preconditions: 0 <= n < kMaxDsuSize (= 65536). Throws
+  // `std::invalid_argument` with a named diagnostic on violation.
   explicit DSU(std::int32_t n);
 
   // Return the root of element x with path compression.

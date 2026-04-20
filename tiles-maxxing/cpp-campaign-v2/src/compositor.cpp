@@ -47,8 +47,17 @@ void assert_not_side_exposed_lr_input(const Grid& grid,
                                       const TileCoord& coord,
                                       Face face) {
   // Theorem 12 supplies reflection closure for side-exposed octant faces.
-  assert(!(coord.i == grid.i_min && face == Face::L));
-  assert(!(coord.i == grid.i_max && face == Face::R));
+  // Release-mode hard check: face_L at i_min and face_R at i_max must
+  // never enter L-R stitching (the structural `has_column` filter already
+  // skips them). Throwing here is the named seatbelt for that contract.
+  if (coord.i == grid.i_min && face == Face::L) {
+    throw std::runtime_error(
+        "side-exposure violation: face_L at i_min entered L-R stitching");
+  }
+  if (coord.i == grid.i_max && face == Face::R) {
+    throw std::runtime_error(
+        "side-exposure violation: face_R at i_max entered L-R stitching");
+  }
 }
 
 }  // namespace
@@ -106,7 +115,16 @@ struct Compositor::State {
 
   std::uint32_t global_group_id(std::int64_t tile_index,
                                 int group_label) const {
-    if (group_label < 1 ||
+    // Explicit zero-sentinel check. Well-formed non-overflow tiles must
+    // carry only labels in 1..128 inside `face_groups[0..sum(n))`. Label 0
+    // is reserved for the zero-padded tail past `n[f]` and must never
+    // reach `global_group_id` from the active-port loop. Named precondition
+    // per audit rec (2): encode zero-sentinel discipline at the read site.
+    if (group_label == 0) {
+      throw std::runtime_error(
+          "TileOp group label is 0 (reserved zero-sentinel) in active port");
+    }
+    if (group_label < 0 ||
         group_label > static_cast<int>(kGroupsPerTile)) {
       throw std::runtime_error("TileOp group label outside 1..128");
     }

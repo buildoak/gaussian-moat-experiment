@@ -90,11 +90,20 @@ struct CampaignConstants {
   //   R_inner > 0, R_outer > R_inner, K_SQ > 0.
   //   (R_outer ^ 2) fits in u64  — caller responsibility (R ≤ 4e9).
   //
+  // If `strict` is true, the annulus-thickness soundness precondition
+  //   (R_outer - R_inner) > S*sqrt(2) + 2*sqrt(K)
+  // is enforced at construction time (library-level gate per audit rec
+  // (3)). If `strict` is false (default), the check is skipped so tiny-
+  // radius unit tests can still construct instances — the same gate is
+  // still enforced by `campaign_main` before emitting a verdict. Any new
+  // entry point that produces a real verdict SHOULD use strict=true.
+  //
   // Throws std::invalid_argument on any invariant violation. The throw
   // surface is small — campaign_main validates CLI before calling.
   static CampaignConstants from_radii(std::uint64_t R_inner,
                                       std::uint64_t R_outer,
-                                      std::uint32_t K_SQ_arg);
+                                      std::uint32_t K_SQ_arg,
+                                      bool strict = false);
 
   // -------------------------------------------------------------------------
   // Accessors for i128 constants

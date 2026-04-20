@@ -34,7 +34,8 @@ inline __int128 assemble_i128(std::uint64_t hi, std::uint64_t lo) noexcept {
 
 CampaignConstants CampaignConstants::from_radii(std::uint64_t R_inner,
                                                 std::uint64_t R_outer,
-                                                std::uint32_t K_SQ_arg) {
+                                                std::uint32_t K_SQ_arg,
+                                                bool strict) {
   // Basic invariant checks.
   if (R_inner == 0) {
     throw std::invalid_argument("R_inner must be > 0");
@@ -99,15 +100,27 @@ CampaignConstants CampaignConstants::from_radii(std::uint64_t R_inner,
     throw std::invalid_argument(msg.str());
   }
 
-  // Annulus thickness is NOT enforced here. The real-valued bound
-  //   R_outer - R_inner > S*sqrt(2) + 2*sqrt(K)
-  // is a soundness precondition for the *campaign verdict* (blueprint §2,
-  // Theorem 11 Case A.2), not a structural precondition for the Grid /
-  // TileOp machinery. Tiny-radius tests (e.g. R_inner=10000, R_outer=10032
-  // at width 32) exercise the primitives and must be allowed to run.
+  // Annulus thickness enforcement policy:
   //
-  // `verify_annulus_thickness(...)` below is the user-facing check; it's
-  // invoked by campaign_main at production init but skipped in unit tests.
+  //  * strict=false (default): NOT enforced here. The real-valued bound
+  //    (R_outer - R_inner) > S*sqrt(2) + 2*sqrt(K) is a soundness
+  //    precondition for the *campaign verdict* (blueprint §2, Theorem 11
+  //    Case A.2), not a structural precondition for the Grid / TileOp
+  //    machinery. Tiny-radius tests (e.g. R_inner=10000, R_outer=10032
+  //    at width 32) exercise the primitives with this relaxed setting.
+  //
+  //  * strict=true: enforced library-side (audit rec (3)). Used by
+  //    campaign_main and any other entry point that produces a real
+  //    verdict. Ensures alternative harnesses (CUDA port, integration
+  //    tests that purport to emit verdicts) cannot bypass the gate.
+  if (strict && !c.verify_annulus_thickness()) {
+    std::ostringstream msg;
+    msg << "annulus too thin: (R_outer - R_inner) = "
+        << (R_outer - R_inner)
+        << " must exceed S*sqrt(2) + 2*sqrt(K) "
+        << "(soundness precondition, Theorem 11 Case A.2).";
+    throw std::invalid_argument(msg.str());
+  }
 
   return c;
 }

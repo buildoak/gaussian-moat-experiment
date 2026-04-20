@@ -289,21 +289,33 @@ std::pair<std::int32_t, std::int32_t> find_tower(std::int32_t i,
 }
 
 // -----------------------------------------------------------------------------
-// Invariant checks (I1, I2, I4) — runtime asserts in DEBUG
+// Invariant checks (I1, I2, I4) — shared helper + release-mode seatbelt
 // -----------------------------------------------------------------------------
 
-void assert_invariants(const Grid& g) {
-#ifndef NDEBUG
-  if (g.i_max < g.i_min) return;  // empty grid: trivially satisfies
+// Shape-only invariants: checks that read only the tower-index tables
+// (j_low / j_high / tower_offset). No `is_active_tile` calls — O(1) per
+// tile, so the whole scan is O(total_tiles). This is the release-safe
+// seatbelt that compensates for the tower-closing [PROOF GAP] per
+// blueprint §4.3 (audit rec 1).
+//
+// Returns empty string iff shape invariants hold; otherwise a diagnostic
+// naming the first violation.
+std::string check_shape_invariants(const Grid& g) {
+  if (g.is_sparse()) return {};  // sparse (explicit) grids are not towers
+  if (g.i_max < g.i_min) return {};  // empty grid: trivially satisfies
 
-  // I1 — tower contiguity (every j in [j_low, j_high] must be active).
+  // I1-shape — each column's tower range must be well-formed (empty or
+  // non-decreasing). Does NOT re-run `is_active_tile` (that is DEBUG-only
+  // belt-and-braces and costs O(S) per tile).
   for (std::int32_t i = g.i_min; i <= g.i_max; ++i) {
     const std::size_t k = static_cast<std::size_t>(i - g.i_min);
     const std::int32_t jlo = g.j_low[k];
     const std::int32_t jhi = g.j_high[k];
-    assert(jlo <= jhi + 1);  // empty column or well-formed range
-    for (std::int32_t j = jlo; j <= jhi; ++j) {
-      assert(is_active_tile(i, j, g) && "I1 contiguity violated");
+    if (jlo > jhi + 1) {
+      std::ostringstream msg;
+      msg << "I1 malformed column range at i=" << i
+          << " (j_low=" << jlo << ", j_high=" << jhi << ")";
+      return msg.str();
     }
   }
 
@@ -312,18 +324,28 @@ void assert_invariants(const Grid& g) {
     const std::size_t k = static_cast<std::size_t>(i - g.i_min);
     const std::int32_t d_lo = g.j_low[k + 1] - g.j_low[k];
     const std::int32_t d_hi = g.j_high[k + 1] - g.j_high[k];
-    // Only assert if both columns are non-empty.
     const bool col_k_nonempty = g.j_high[k] >= g.j_low[k];
     const bool col_k1_nonempty = g.j_high[k + 1] >= g.j_low[k + 1];
     if (col_k_nonempty && col_k1_nonempty) {
-      assert(d_lo >= -1 && d_lo <= 1 && "I2 j_low shift > 1");
-      assert(d_hi >= -1 && d_hi <= 1 && "I2 j_high shift > 1");
+      if (d_lo < -1 || d_lo > 1) {
+        std::ostringstream msg;
+        msg << "I2 j_low shift > 1 between i=" << i
+            << " and i=" << (i + 1) << " (delta=" << d_lo << ")";
+        return msg.str();
+      }
+      if (d_hi < -1 || d_hi > 1) {
+        std::ostringstream msg;
+        msg << "I2 j_high shift > 1 between i=" << i
+            << " and i=" << (i + 1) << " (delta=" << d_hi << ")";
+        return msg.str();
+      }
     }
   }
 
   // I4 — diagonal orphans: for every diagonally-adjacent active pair
   // (i, j) and (i+1, j+1) or (i, j) and (i+1, j-1), at least one
-  // face-neighbor common to both is active.
+  // face-neighbor common to both is active. O(total_tiles), table-only.
+  // This is the scan the blueprint §4.3 names as mandatory.
   auto col_has = [&](std::int32_t i, std::int32_t j) -> bool {
     if (!g.has_column(i)) return false;
     const auto [lo, hi] = g.column_bounds(i);
@@ -333,27 +355,55 @@ void assert_invariants(const Grid& g) {
   for (std::int32_t i = g.i_min; i < g.i_max; ++i) {
     const auto [lo, hi] = g.column_bounds(i);
     for (std::int32_t j = lo; j <= hi; ++j) {
-      // (i, j) active; check diagonals (i+1, j+1) and (i+1, j-1)
       for (int dj : {+1, -1}) {
         const std::int32_t j2 = j + dj;
         if (col_has(i + 1, j2)) {
-          // A common face-neighbor must be active: either (i+1, j) or
-          // (i, j2). (i, j) is already known active, which is not a
-          // face-neighbor of (i+1, j2). Face-neighbors of the pair are
-          // the two "corner-completers".
           const bool n1 = col_has(i + 1, j);
           const bool n2 = col_has(i, j2);
-          assert((n1 || n2) && "I4 diagonal orphan detected");
+          if (!n1 && !n2) {
+            std::ostringstream msg;
+            msg << "I4 diagonal orphan: active (" << i << "," << j
+                << ") and (" << (i + 1) << "," << j2
+                << ") share no active face-neighbor";
+            return msg.str();
+          }
         }
       }
     }
   }
+  return {};
+}
+
+void assert_invariants(const Grid& g) {
+#ifndef NDEBUG
+  // DEBUG-mode extra cost: re-run `is_active_tile` for every tile inside
+  // each column's tower range (belt-and-braces over the shape check).
+  // Release builds do NOT pay this (O(S) per tile is prohibitive at
+  // project scale); the always-on `verify_invariants()` below covers the
+  // shape-level guarantees that the audit (rec 1) requires.
+  if (!g.is_sparse() && g.i_max >= g.i_min) {
+    for (std::int32_t i = g.i_min; i <= g.i_max; ++i) {
+      const std::size_t k = static_cast<std::size_t>(i - g.i_min);
+      const std::int32_t jlo = g.j_low[k];
+      const std::int32_t jhi = g.j_high[k];
+      for (std::int32_t j = jlo; j <= jhi; ++j) {
+        assert(is_active_tile(i, j, g) &&
+               "I1 contiguity: tile inside tower range is not active");
+      }
+    }
+  }
+  const std::string err = check_shape_invariants(g);
+  assert(err.empty() && "Grid invariants violated (I1/I2/I4 shape)");
 #else
   (void)g;
 #endif
 }
 
 }  // namespace
+
+std::string Grid::verify_invariants() const {
+  return check_shape_invariants(*this);
+}
 
 bool Grid::has_column(std::int32_t i) const noexcept {
   return i >= i_min && i <= i_max;

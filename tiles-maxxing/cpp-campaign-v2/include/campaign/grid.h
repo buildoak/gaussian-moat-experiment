@@ -13,7 +13,11 @@
 // All arithmetic is integer (i64 or wider). No std::sqrt, no floating
 // point — per forbidden-pattern rule §6.3 #1.
 //
-// Invariants asserted by Grid::build() in DEBUG:
+// Invariants (I1, I2, I4) are checked in DEBUG by Grid::build() and also
+// available as the always-on `Grid::verify_invariants()` member that
+// callers can invoke in release builds for a runtime seatbelt (blueprint
+// §4.3 mandatory gate, closes the [PROOF GAP] tower-closing compensation
+// at spec line 361).
 //   I1 — tower contiguity: Tower_i is a contiguous integer interval.
 //   I2 — bounded shift:    |j_low(i+1) - j_low(i)| ≤ 1,
 //                          |j_high(i+1) - j_high(i)| ≤ 1.
@@ -25,6 +29,7 @@
 #pragma once
 
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "campaign/campaign_constants.h"
@@ -147,6 +152,18 @@ struct Grid {
   // this expands the contiguous tower range; for sparse grids this returns
   // only explicitly listed coordinates.
   std::vector<TileCoord> enumerate_column_tiles(std::int32_t i) const;
+
+  // Always-on runtime seatbelt for the I1/I2/I4 invariants. Returns the
+  // empty string iff the grid satisfies all three; otherwise returns a
+  // non-empty diagnostic describing the first violation. Intended to be
+  // called by production entry points (see campaign_main) as the
+  // release-mode compensation for the tower-closing [PROOF GAP] at spec
+  // line 361 per blueprint §4.3. O(total_tiles) — see Grid::build.
+  //
+  // Sparse (explicit_tiles) grids skip the I1/I2 shape checks because they
+  // do not represent a tower; only the explicit-tile set is validated for
+  // structural consistency.
+  std::string verify_invariants() const;
 };
 
 }  // namespace campaign

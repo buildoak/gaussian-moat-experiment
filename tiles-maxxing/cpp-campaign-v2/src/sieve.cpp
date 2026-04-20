@@ -4,10 +4,23 @@
 #include <stdexcept>
 #include <vector>
 
+#include "campaign/constants.h"
 #include "campaign/primality.h"
 #include "campaign/sieve.h"
 
 namespace campaign {
+
+// Axis-prime emission relies on the halo at column i=0 reaching x=0.
+// Concretely: `a_begin(i) = coord.a_lo - C = (OFFSET_X + S*i) - C`.
+// For a=0 to be reachable at i=0 we need `OFFSET_X - C <= 0` i.e.
+// `OFFSET_X <= C`. At K_SQ∈{36,40} we have C=6, OFFSET_X=1 — safe.
+// Audit rec (4): guard the contingency at compile time so future
+// offset/halo changes cannot silently drop axis-prime emission.
+static_assert(OFFSET_X >= 0,
+              "OFFSET_X must be non-negative (canonical octant)");
+static_assert(OFFSET_X <= C,
+              "OFFSET_X must be <= C so axis primes at x=0 are reachable "
+              "from the i=0 halo; see audit rec (4)");
 
 namespace {
 

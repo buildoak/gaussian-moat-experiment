@@ -82,6 +82,24 @@ TEST(CampaignConstants, AnnulusThicknessGate) {
   EXPECT_TRUE(wide.verify_annulus_thickness());
 }
 
+TEST(CampaignConstants, FromRadiiStrictThrowsOnTooThin) {
+  // Audit rec (3): `from_radii(..., strict=true)` refuses to build a
+  // constants bundle when the annulus is too thin, pushing the soundness
+  // gate down to library level so future entry points (CUDA harness,
+  // integration harnesses) cannot bypass the check.
+  EXPECT_THROW(campaign::CampaignConstants::from_radii(
+                   10000, 10032, campaign::k_sq_value, /*strict=*/true),
+               std::invalid_argument);
+
+  // And confirms the strict=false default path still works for tests.
+  EXPECT_NO_THROW(campaign::CampaignConstants::from_radii(
+      10000, 10032, campaign::k_sq_value));
+
+  // Project-scale radii must pass strict mode.
+  EXPECT_NO_THROW(campaign::CampaignConstants::from_radii(
+      80'000'000ULL, 80'008'192ULL, campaign::k_sq_value, /*strict=*/true));
+}
+
 TEST(CampaignConstants, FloorIsqrtIsIntegerOnly) {
   EXPECT_EQ(campaign::floor_isqrt(0), 0);
   EXPECT_EQ(campaign::floor_isqrt(1), 1);

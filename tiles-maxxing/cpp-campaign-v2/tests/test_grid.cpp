@@ -173,4 +173,53 @@ TEST(Grid, ScaleBuildCompletesUnder500ms) {
   EXPECT_LT(elapsed_ms.count(), 500);
 }
 
+TEST(Grid, VerifyInvariantsReturnsEmptyOnWellFormedBuild) {
+  // Audit rec (1): always-on seatbelt. Must succeed on the canonical tiny
+  // build that already satisfies I1/I2/I4 structurally.
+  auto g = campaign::Grid::build(kRinner, kRouter, campaign::k_sq_value);
+  const std::string err = g.verify_invariants();
+  EXPECT_TRUE(err.empty())
+      << "well-formed grid should verify clean, got: " << err;
+}
+
+TEST(Grid, VerifyInvariantsDetectsI2Violation) {
+  // Synthesize a broken grid: bump the second column's j_low so the
+  // shift from column 0 to column 1 exceeds 1. The release-mode shape
+  // check must catch this without needing is_active_tile.
+  auto g = campaign::Grid::build(kRinner, kRouter, campaign::k_sq_value);
+  ASSERT_GE(g.j_low.size(), 2u)
+      << "tiny-radius build should span at least 2 columns";
+
+  g.j_low[1] = g.j_low[0] + 5;   // shift > 1
+  g.j_high[1] = g.j_high[1] + 5; // keep column non-empty
+
+  const std::string err = g.verify_invariants();
+  EXPECT_FALSE(err.empty()) << "tampered grid must flag a violation";
+  EXPECT_NE(err.find("I2"), std::string::npos)
+      << "diagnostic must name the violated invariant, got: " << err;
+}
+
+TEST(Grid, VerifyInvariantsDetectsI1MalformedRange) {
+  // j_low > j_high + 1 is a structurally malformed column range that
+  // the shape check catches without re-running is_active_tile.
+  auto g = campaign::Grid::build(kRinner, kRouter, campaign::k_sq_value);
+  ASSERT_FALSE(g.j_low.empty());
+
+  g.j_low[0] = g.j_high[0] + 10;  // malformed: j_low > j_high + 1
+
+  const std::string err = g.verify_invariants();
+  EXPECT_FALSE(err.empty());
+  EXPECT_NE(err.find("I1"), std::string::npos)
+      << "diagnostic must name I1 (malformed range), got: " << err;
+}
+
+TEST(Grid, VerifyInvariantsEmptyGridReturnsEmpty) {
+  // Empty grids trivially satisfy — must not spuriously report error.
+  campaign::Grid g{};
+  g.i_min = 0;
+  g.i_max = -1;
+  g.total_tiles = 0;
+  EXPECT_TRUE(g.verify_invariants().empty());
+}
+
 }  // namespace
