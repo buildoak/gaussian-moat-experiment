@@ -1,0 +1,66 @@
+name: cpp-campaign-v2 CI
+
+on:
+  push:
+    paths:
+      - 'tiles-maxxing/cpp-campaign-v2/**'
+      - '.github/workflows/ci.yml'
+  pull_request:
+    paths:
+      - 'tiles-maxxing/cpp-campaign-v2/**'
+      - '.github/workflows/ci.yml'
+
+jobs:
+  build-and-test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        k_sq: [36, 40]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: tiles-maxxing/cpp-campaign-v2
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install mpmath for bz_check.py
+        run: pip install 'mpmath==1.3.0'
+
+      - name: Install OpenMP (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install libomp
+          # Expose libomp to CMake via OpenMP_ROOT (works for AppleClang).
+          echo "OpenMP_ROOT=$(brew --prefix libomp)" >> "$GITHUB_ENV"
+
+      - name: Install OpenMP (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libomp-dev
+
+      - name: Configure
+        run: cmake -DK_SQ=${{ matrix.k_sq }} -S . -B build
+
+      - name: Build
+        run: cmake --build build -j
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Smoke test — campaign_main --help
+        run: ./build/campaign_main --help
+
+      - name: Smoke test — tiny-radius grid enumeration
+        run: |
+          ./build/campaign_main \
+            --k-sq=${{ matrix.k_sq }} \
+            --r-inner=10000 \
+            --r-outer=10032 \
+            --region full-octant
