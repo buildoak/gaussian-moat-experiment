@@ -9,6 +9,8 @@ output/
 profiles/
 thermal/
 *.bin
+# Goldens are the correctness anchor — keep their binaries under version control.
+!tiles-maxxing/cpp-campaign-v2/goldens/*.bin
 .cache/
 *.gprf
 runs/

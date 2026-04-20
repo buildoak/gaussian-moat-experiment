@@ -1,0 +1,40 @@
+{
+  "bytes_per_tile": 256,
+  "collar": 6,
+  "constants_hash": "5640cf17cdd59abd73d0d655ad2ff993581df20ff27aa2c5dc2b91f94b0277d7",
+  "generated_at": "2026-04-20T14:29:53+00:00",
+  "grid_params_hash": "30a0b5357c1b09f8d00c919dee6860a50f5f1574ae3d20a7ddfc11a9aa1b6974",
+  "k_sq": 36,
+  "mr_witness_set_sha256": "92b8b0ea7ae8703a3fae4f7a1581dd0d04e041bde4eb1d23621a8f39846e909c",
+  "offset": [
+    1,
+    1
+  ],
+  "r_inner": 80000000,
+  "r_outer": 80008192,
+  "schema_version": 1,
+  "snapshot_sha256": "f906d3032acde99f06db40dab6e3150a28c9f18c8fdd70fbaa33e11022f37d7d",
+  "tile_count": 5,
+  "tiles": [
+    {
+      "i": 117187,
+      "j": 289695
+    },
+    {
+      "i": 117187,
+      "j": 289696
+    },
+    {
+      "i": 117187,
+      "j": 289710
+    },
+    {
+      "i": 117187,
+      "j": 289729
+    },
+    {
+      "i": 117188,
+      "j": 289696
+    }
+  ]
+}
