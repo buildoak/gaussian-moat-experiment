@@ -69,12 +69,20 @@ OFFSET_Y = 1
 S = 256
 
 # Derived: C = floor_isqrt(K_SQ); for K=36 this is exactly 6.
+# Use math.isqrt (stdlib, C-implemented, O(log n)). Original linear version
+# is kept in comments for reference; it is correct but O(sqrt(n)) and infeasible
+# for R >= 80M. math.isqrt produces the same integer result.
+#
+# Original (linear, kept for provenance):
+#     def floor_isqrt(n):
+#         r = 0
+#         while (r + 1) * (r + 1) <= n: r += 1
+#         return r
+import math as _math_stdlib
+
 def floor_isqrt(n: int) -> int:
     assert n >= 0
-    r = 0
-    while (r + 1) * (r + 1) <= n:
-        r += 1
-    return r
+    return _math_stdlib.isqrt(n)
 
 def ceil_isqrt(n: int) -> int:
     f = floor_isqrt(n)

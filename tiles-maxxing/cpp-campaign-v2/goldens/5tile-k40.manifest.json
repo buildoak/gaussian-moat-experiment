@@ -1,0 +1,12 @@
+{
+  "bytes_per_tile": 256,
+  "constants_hash": "976032f4257b831e9052c10aa280aee77f74bee1533f0dfceee898a636294a15",
+  "generated_at": "2026-04-21T12:19:20Z",
+  "grid_params_hash": "59f8ccbbd222a30a11b564d927917490e466861a88a569949b68a7250d0981e6",
+  "k_sq": 40,
+  "mr_witness_set_sha256": "92b8b0ea7ae8703a3fae4f7a1581dd0d04e041bde4eb1d23621a8f39846e909c",
+  "r_inner": 800000000,
+  "r_outer": 800010000,
+  "schema_version": 1,
+  "tile_count": 5
+}

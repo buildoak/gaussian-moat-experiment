@@ -378,6 +378,7 @@ int main(int argc, char** argv) {
     return 3;
   }
 
+  const auto grid_start = Clock::now();
   campaign::Grid full_grid;
   try {
     full_grid = campaign::Grid::build(*r_inner, *r_outer, k_sq_u32);
@@ -397,6 +398,7 @@ int main(int argc, char** argv) {
       return 3;
     }
   }
+  const auto grid_end = Clock::now();
 
   campaign::Region region;
   try {
@@ -466,6 +468,8 @@ int main(int argc, char** argv) {
             << "  constants_hash: " << constants.canonical_hash() << "\n"
             << "  mr_witness_sha256: "
             << campaign::CampaignConstants::mr_witness_set_sha256() << "\n"
+            << "  grid-init:    " << std::setw(6)
+            << elapsed_ms(grid_start, grid_end) << " ms\n"
             << "  sieve+encode: " << std::setw(6)
             << elapsed_ms(encode_start, encode_end) << " ms\n"
             << "  compositor:    " << std::setw(6)
@@ -474,6 +478,12 @@ int main(int argc, char** argv) {
             << elapsed_ms(snapshot_start, snapshot_end) << " ms\n"
             << "  total:         " << std::setw(6)
             << elapsed_ms(total_start, total_end) << " ms\n"
+            << "TIMING: t_grid=" << (elapsed_ms(grid_start, grid_end) / 1000.0)
+            << "s t_tile_loop=" << (elapsed_ms(encode_start, encode_end) / 1000.0)
+            << "s t_compositor=" << (elapsed_ms(comp_start, comp_end) / 1000.0)
+            << "s t_snapshot=" << (elapsed_ms(snapshot_start, snapshot_end) / 1000.0)
+            << "s t_total=" << (elapsed_ms(total_start, total_end) / 1000.0)
+            << "s n_tiles=" << active_tiles.size() << "\n"
             << "VERDICT: " << verdict_name(verdict) << "\n";
   return 0;
 }

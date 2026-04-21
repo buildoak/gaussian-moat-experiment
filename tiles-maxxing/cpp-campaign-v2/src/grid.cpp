@@ -246,44 +246,124 @@ std::int32_t find_i_max(const Grid& g) {
   return std::numeric_limits<std::int32_t>::min();
 }
 
-// Find [j_low, j_high] for column i. Precondition: column has at least one
-// active tile.
+// Find [j_low, j_high] for column i.
+//
+// Strategy: corner-based necessary conditions give analytic j_low / j_high
+// candidates in O(1) per column. These bracket the true active range (the
+// corner screens are necessary, not sufficient, so the bracket is at most
+// one or two tiles too wide). A short boundary walk then tightens to the
+// exact range.
+//
+//   Outer screen  (defines j_high_candidate):
+//     min_norm_sq on the octant-feasible corner subset = x_lo² + y_lo²
+//     (valid when y_lo >= x_lo, which holds for all j >= i in column i).
+//     Tile passes iff x_lo² + y_lo² <= R_outer²  ⇔
+//       y_lo <= floor_isqrt(R_outer² − x_lo²)
+//     j_high_candidate = floor((y_lo_max − o_y) / S).
+//
+//   Inner screen  (defines j_low_candidate):
+//     max_norm_sq on the non-negative corner subset = x_hi² + y_hi².
+//     Tile passes iff x_hi² + y_hi² >= R_inner²  ⇔
+//       y_hi >= ceil_isqrt(R_inner² − x_hi²)  (or any y_hi if x_hi² >= R_inner²).
+//     j_low_candidate from y_lo + S >= y_hi_min:
+//       j_low_candidate = ceil((y_hi_min − o_y − S) / S)
+//     (clamped to 0 when the inner bound is trivially satisfied).
+//
+//   Octant clip:  j_low_candidate is also bounded by  j >= i − 1
+//     (derived from y_hi >= x_lo, i.e. y_lo + S >= x_lo, with o_x = o_y).
+//
+// Boundary confirmation walks `is_active_tile` inward from the j_high
+// candidate and outward from the j_low candidate (each 0–2 steps) to
+// hit the exact range used by the original O(S)-per-column full scan.
+//
+// Returns (0, -1) for an empty column.
 std::pair<std::int32_t, std::int32_t> find_tower(std::int32_t i,
                                                  const Grid& g) {
-  // Start from the diagonal (j = i), widen up and down.
-  const std::int64_t x_lo_64 = static_cast<std::int64_t>(OFFSET_X) +
-                                static_cast<std::int64_t>(S) * i;
-  const __int128 rem = static_cast<__int128>(g.R_outer_sq) -
-                       static_cast<__int128>(x_lo_64) *
-                           static_cast<__int128>(x_lo_64);
+  const std::int64_t S64 = static_cast<std::int64_t>(S);
+  const std::int64_t o_x = static_cast<std::int64_t>(OFFSET_X);
+  const std::int64_t o_y = static_cast<std::int64_t>(OFFSET_Y);
+  const std::int64_t x_lo_64 = o_x + S64 * i;
+  const std::int64_t x_hi_64 = x_lo_64 + S64;
+  const std::int64_t R_outer_64 = static_cast<std::int64_t>(g.R_outer);
+  const std::int64_t R_inner_64 = static_cast<std::int64_t>(g.R_inner);
+  const __int128 R_outer_sq_128 =
+      static_cast<__int128>(g.R_outer_sq);
+  const __int128 R_inner_sq_128 =
+      static_cast<__int128>(g.R_inner_sq);
 
-  std::int32_t j_upper = 0;
-  if (rem >= 0) {
-    const std::int64_t y_max_for_x =
-        floor_isqrt_i128(rem, static_cast<std::int64_t>(g.R_outer));
-    j_upper = static_cast<std::int32_t>(
-        (y_max_for_x - static_cast<std::int64_t>(OFFSET_Y)) /
-        static_cast<std::int64_t>(S));
+  // --- j_high_candidate from outer screen ---
+  const __int128 rem_outer = R_outer_sq_128 - sq128(x_lo_64);
+  if (rem_outer < 0) {
+    return {0, -1};  // column past the outer arc — empty
   }
-  const std::int32_t j_search_lo = std::max<std::int32_t>(i - 2, 0);
-  const std::int32_t j_search_hi = j_upper + 2;
+  const std::int64_t y_lo_max = floor_isqrt_i128(rem_outer, R_outer_64);
+  // j_high_candidate: largest j with y_lo <= y_lo_max.
+  //   y_lo = j * S + o_y <= y_lo_max  ⇔  j <= (y_lo_max - o_y) / S
+  // Integer floor-division of non-negative numerator (y_lo_max >= 0 and
+  // y_lo_max >= o_y whenever column has any active tile).
+  std::int64_t j_high_candidate;
+  if (y_lo_max < o_y) {
+    // Outer screen forces y_lo < o_y — no tile in column.
+    return {0, -1};
+  }
+  j_high_candidate = (y_lo_max - o_y) / S64;
 
-  // Find any active j.
-  std::int32_t any = -1;
-  for (std::int32_t j = j_search_lo; j <= j_search_hi; ++j) {
-    if (is_active_tile(i, j, g)) { any = j; break; }
-  }
-  if (any == -1) {
-    return {0, -1};  // empty column
+  // --- j_low_candidate from inner screen + octant clip ---
+  // Octant: j >= i - 1 (from y_hi >= x_lo with o_x = o_y).
+  std::int64_t j_low_candidate = static_cast<std::int64_t>(i) - 1;
+  if (j_low_candidate < 0) j_low_candidate = 0;
+
+  // Inner screen: need y_hi >= y_hi_min where y_hi_min = ceil_isqrt(R_inner² − x_hi²).
+  // If x_hi² >= R_inner², the inner bound is trivially satisfied — no tightening.
+  const __int128 rem_inner = R_inner_sq_128 - sq128(x_hi_64);
+  if (rem_inner > 0) {
+    const std::int64_t y_hi_min = ceil_isqrt_i128(rem_inner, R_inner_64);
+    // y_hi = (j + 1) * S + o_y >= y_hi_min  ⇔  j >= (y_hi_min - o_y - S) / S (ceil).
+    const std::int64_t numer = y_hi_min - o_y - S64;
+    std::int64_t j_inner_lo;
+    if (numer <= 0) {
+      j_inner_lo = 0;
+    } else {
+      // ceil(numer / S) for positive numer, positive S.
+      j_inner_lo = (numer + S64 - 1) / S64;
+    }
+    if (j_inner_lo > j_low_candidate) j_low_candidate = j_inner_lo;
   }
 
-  // Extend down.
-  std::int32_t j_low = any;
-  while (j_low > 0 && is_active_tile(i, j_low - 1, g)) --j_low;
-  // And up (walk out to j_search_hi + margin).
-  std::int32_t j_high = any;
-  while (j_high < j_search_hi + 2 && is_active_tile(i, j_high + 1, g))
-    ++j_high;
+  if (j_low_candidate > j_high_candidate) {
+    return {0, -1};  // analytic bracket collapses — empty column
+  }
+
+  // Guard against overflow into int32 — j values are bounded by R/S ~ 3e5
+  // at project scale, well within int32_t range, but be defensive.
+  constexpr std::int64_t kI32Max =
+      static_cast<std::int64_t>(std::numeric_limits<std::int32_t>::max());
+  if (j_high_candidate > kI32Max) j_high_candidate = kI32Max;
+  if (j_low_candidate > kI32Max) j_low_candidate = kI32Max;
+
+  // --- Boundary confirmation ---
+  // Walk inward from j_high_candidate while tiles are inactive.
+  // (Corner screen is necessary; actual activity requires passing the full
+  // predicate. The candidate is typically exact; 0–2 steps in practice.)
+  std::int32_t j_high =
+      static_cast<std::int32_t>(j_high_candidate);
+  while (j_high >= static_cast<std::int32_t>(j_low_candidate) &&
+         !is_active_tile(i, j_high, g)) {
+    --j_high;
+  }
+  if (j_high < static_cast<std::int32_t>(j_low_candidate)) {
+    return {0, -1};
+  }
+
+  // Walk outward (upward in j) from j_low_candidate while tiles are inactive.
+  std::int32_t j_low =
+      static_cast<std::int32_t>(j_low_candidate);
+  while (j_low <= j_high && !is_active_tile(i, j_low, g)) {
+    ++j_low;
+  }
+  if (j_low > j_high) {
+    return {0, -1};
+  }
 
   return {j_low, j_high};
 }
