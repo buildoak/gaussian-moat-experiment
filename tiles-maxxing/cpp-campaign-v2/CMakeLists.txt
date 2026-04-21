@@ -103,10 +103,9 @@ target_link_libraries(campaign
 # ---------------------------------------------------------------------------
 # Pre-build BZ check target
 # ---------------------------------------------------------------------------
-# Resolves R_inner / R_outer via cache vars (caller passes project
-# deployment values). Tiny-radius unit tests do NOT trigger this check.
-set(BZ_R_INNER "80000000" CACHE STRING "R_inner passed to bz_check.py")
-set(BZ_R_OUTER "80008192" CACHE STRING "R_outer passed to bz_check.py")
+# Audit Codex-M2 (2026-04-21): radii are sourced from scripts/bz_config.json
+# (single source of truth) so CMake and bz_check.py cannot drift. Tiny-radius
+# unit tests do NOT trigger this check.
 
 # bz_check.py is a PEP 723 script: it declares its own `mpmath` dependency
 # inline. Prefer `uv run` (which understands the inline dep block and
@@ -126,11 +125,12 @@ else()
 endif()
 
 if(BZ_CHECK_CMD)
+  # bz_check.py loads R_inner/R_outer for K_SQ from scripts/bz_config.json
+  # when not supplied on the CLI. The target depends on the config file so
+  # edits re-trigger the gate.
   add_custom_target(bz_check ALL
-    COMMAND ${BZ_CHECK_CMD}
-      --r-inner ${BZ_R_INNER}
-      --r-outer ${BZ_R_OUTER}
-      --k-sq    ${K_SQ}
+    COMMAND ${BZ_CHECK_CMD} --k-sq ${K_SQ}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/scripts/bz_config.json
     COMMENT "Running bz_check.py (BZ reconciliation, blueprint §2)"
     VERBATIM
   )

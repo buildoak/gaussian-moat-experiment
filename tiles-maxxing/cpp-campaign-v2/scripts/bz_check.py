@@ -9,11 +9,19 @@
 from __future__ import annotations
 
 import argparse
+import json
 import math
+import pathlib
 import sys
 from dataclasses import dataclass
 
 from mpmath import mp
+
+# Canonical per-deployment radii live in scripts/bz_config.json. Audit
+# Codex-M2 (2026-04-21): BZ gate must bind to a single source so that
+# CMakeLists.txt and this script cannot drift. Callers can still override
+# via --r-inner/--r-outer for one-off audits.
+_CONFIG_PATH = pathlib.Path(__file__).parent / "bz_config.json"
 
 
 MR_BASES_U64 = (2, 3, 5, 7, 11, 13, 17, 19, 23, 29, 31, 37)
@@ -111,6 +119,20 @@ def build_zones(r_inner: int, r_outer: int, k_sq: int) -> tuple[BadZone, BadZone
     )
 
 
+def load_config_radii(k_sq: int) -> tuple[int, int]:
+    """Return (r_inner, r_outer) for the given K_SQ from bz_config.json."""
+    if not _CONFIG_PATH.is_file():
+        raise SystemExit(f"BZ config missing: {_CONFIG_PATH}")
+    cfg = json.loads(_CONFIG_PATH.read_text())
+    entry = cfg.get("k_sq_to_radii", {}).get(str(k_sq))
+    if entry is None:
+        raise SystemExit(
+            f"BZ config {_CONFIG_PATH} has no k_sq={k_sq} entry. "
+            "Add it before running the BZ gate for that deployment."
+        )
+    return int(entry["r_inner"]), int(entry["r_outer"])
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
@@ -118,20 +140,27 @@ def parse_args() -> argparse.Namespace:
             "intervals where norm-form and lattice-witness geometry may diverge."
         )
     )
-    parser.add_argument("--r-inner", type=int, required=True)
-    parser.add_argument("--r-outer", type=int, required=True)
+    parser.add_argument("--r-inner", type=int, default=None)
+    parser.add_argument("--r-outer", type=int, default=None)
     parser.add_argument("--k-sq", type=int, required=True)
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
+    if args.k_sq <= 0:
+        raise SystemExit("--k-sq must be positive")
+    # Bind radii to the canonical config unless the caller overrides both.
+    if args.r_inner is None or args.r_outer is None:
+        cfg_inner, cfg_outer = load_config_radii(args.k_sq)
+        if args.r_inner is None:
+            args.r_inner = cfg_inner
+        if args.r_outer is None:
+            args.r_outer = cfg_outer
     if args.r_inner <= 0:
         raise SystemExit("--r-inner must be positive")
     if args.r_outer <= args.r_inner:
         raise SystemExit("--r-outer must be greater than --r-inner")
-    if args.k_sq <= 0:
-        raise SystemExit("--k-sq must be positive")
 
     mp.dps = 50
 

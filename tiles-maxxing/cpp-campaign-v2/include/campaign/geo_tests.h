@@ -1,16 +1,19 @@
 // include/campaign/geo_tests.h
 //
-// Band-based inner / outer geo tests for the cpp-campaign-v2 reference build.
+// Spec norm-form inner / outer geo tests for the cpp-campaign-v2 reference build.
 //
 // Given a prime with squared norm `norm_sq`, decide whether it lies in
 // `geo_I` (the canonical inner-boundary prime set) or `geo_O` (the outer
-// set). Model A semantics are the integer bands:
+// set). Spec predicate (tile-operator-definition-v-claude.md:314-325):
 //
-//   inner: R_inner^2 <= norm_sq <= (R_inner + ceil_isqrt(K))^2
-//   outer: (R_outer - ceil_isqrt(K))^2 <= norm_sq <= R_outer^2
+//   inner: (norm_sq - R_inner^2 - K)^2 <= 4 * R_inner^2 * K
+//   outer: (R_outer^2 - norm_sq + K)^2 <= 4 * R_outer^2 * K   (equivalently
+//                                         (norm_sq - R_outer^2 + K)^2 <= ...)
 //
-// CRITICAL: the band width uses CEIL_ISQRT(K), not the collar C. For
-// non-square K (e.g. K = 40), C = 6 but the candidate band width is 7.
+// Audit Codex-M1 (2026-04-21): previous implementation used a widened
+// ceil_isqrt(K) band as the primary test; at K=36 the two are identical,
+// but at K=40 the band accepted primes the spec rejects. The ceil_isqrt(K)
+// prefilter is retained inside the implementation as a short-circuit.
 //
 // Dependencies: campaign_constants.h.
 

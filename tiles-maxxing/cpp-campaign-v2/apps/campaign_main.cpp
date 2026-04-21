@@ -83,10 +83,16 @@ bool parse_uint64(const std::string& s, std::uint64_t& out) {
 }
 
 std::uint64_t annulus_thickness_rhs(std::uint32_t k_sq) {
+  // Spec (tile-operator-definition-v-claude.md:352): delta > S*sqrt(2) + 2*sqrt(K).
+  // Squaring: delta^2 > 2*S^2 + 4*S*sqrt(2K) + 4K.
+  // Audit O-M1: previous code used ceil_isqrt(K) instead of ceil_isqrt(2K).
+  // Stronger (project delta=8192 clears both trivially; only edge-parameter
+  // configurations with delta in [sqrt(spec_rhs_weak), sqrt(spec_rhs_true))
+  // differ). Use ceil_isqrt(2*K) to match spec's 4*S*sqrt(2K) cross term.
   const std::uint64_t s = static_cast<std::uint64_t>(campaign::S);
-  const std::uint64_t ceil_sqrt_k =
-      static_cast<std::uint64_t>(campaign::ceil_isqrt(k_sq));
-  return 2ULL * s * s + 4ULL * s * ceil_sqrt_k + 4ULL * k_sq;
+  const std::uint64_t ceil_sqrt_2k =
+      static_cast<std::uint64_t>(campaign::ceil_isqrt(2 * k_sq));
+  return 2ULL * s * s + 4ULL * s * ceil_sqrt_2k + 4ULL * k_sq;
 }
 
 bool annulus_thickness_ok(std::uint64_t r_inner,

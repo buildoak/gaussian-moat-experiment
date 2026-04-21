@@ -184,6 +184,15 @@ struct Compositor::State {
                 std::int64_t b_idx,
                 const TileOp& a,
                 const TileOp& b) {
+    // Overflow tiles carry a zero-payload TileOp and have already latched
+    // `spanning_detected` in `mark_tile_ports`. Skip port-ordinal matching
+    // with either neighbor — the conservative SPANNING verdict is already
+    // recorded, and an overflow tile's zero n[] would otherwise spuriously
+    // fail the Lemma 4 equal-count check against a normal neighbor (blueprint
+    // §10: OVERFLOW_BIT forces SPANNING, never participates in stitching).
+    if ((a.tile_flags & OVERFLOW_BIT) || (b.tile_flags & OVERFLOW_BIT)) {
+      return;
+    }
     const int face_o = face_index(Face::O);
     const int face_i = face_index(Face::I);
     require_port_count_equal(a.n[face_o], b.n[face_i], "I/O");
@@ -204,6 +213,10 @@ struct Compositor::State {
     assert_not_side_exposed_lr_input(grid, a_coord, Face::R);
     assert_not_side_exposed_lr_input(grid, b_coord, Face::L);
 
+    // See `match_io` for the overflow skip rationale (blueprint §10).
+    if ((a.tile_flags & OVERFLOW_BIT) || (b.tile_flags & OVERFLOW_BIT)) {
+      return;
+    }
     const int face_r = face_index(Face::R);
     const int face_l = face_index(Face::L);
     require_port_count_equal(a.n[face_r], b.n[face_l], "L/R");
