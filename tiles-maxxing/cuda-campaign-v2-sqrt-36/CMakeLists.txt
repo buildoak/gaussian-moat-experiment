@@ -54,6 +54,24 @@ target_compile_definitions(cuda_vs_cpu_diff
 
 enable_testing()
 
+add_library(k3k4_parity_support STATIC
+  tests/support/k3k4_parity_support.cpp
+)
+target_include_directories(k3k4_parity_support
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cpp-campaign-v2/src
+)
+target_link_libraries(k3k4_parity_support
+  PUBLIC
+    campaign_cuda
+)
+target_compile_definitions(k3k4_parity_support
+  PRIVATE
+    K_SQ=${K_SQ}
+)
+
 add_executable(test_stub_roundtrip
   tests/test_stub_roundtrip.cpp
 )
@@ -68,3 +86,25 @@ target_compile_definitions(test_stub_roundtrip
 
 add_test(NAME test_stub_roundtrip COMMAND test_stub_roundtrip)
 add_test(NAME cuda_vs_cpu_diff_one_tile COMMAND cuda_vs_cpu_diff --r-inner 100 --r-outer 500 --limit 1)
+
+foreach(k3k4_test
+    test_k3k4_parent_parity
+    test_dense_remap_adversarial
+    test_geo_i128_sweep)
+  add_executable(${k3k4_test}
+    tests/${k3k4_test}.cpp
+  )
+  target_link_libraries(${k3k4_test}
+    PRIVATE
+      k3k4_parity_support
+  )
+  target_include_directories(${k3k4_test}
+    PRIVATE
+      ${CMAKE_CURRENT_SOURCE_DIR}/../cpp-campaign-v2/src
+  )
+  target_compile_definitions(${k3k4_test}
+    PRIVATE
+      K_SQ=${K_SQ}
+  )
+  add_test(NAME ${k3k4_test} COMMAND ${k3k4_test})
+endforeach()
