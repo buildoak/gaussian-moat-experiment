@@ -30,6 +30,7 @@ add_library(campaign_cuda STATIC
   src/kernel_uf_v2.cu
   src/kernel_geo_flags.cu
   src/kernel_face_encode_v2.cu
+  src/kernel_face_sort_pack.cu
   src/host_driver.cpp
 )
 target_include_directories(campaign_cuda
@@ -64,6 +65,9 @@ set_source_files_properties(src/kernel_geo_flags.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
 )
 set_source_files_properties(src/kernel_face_encode_v2.cu PROPERTIES
+  COMPILE_FLAGS "--maxrregcount=40"
+)
+set_source_files_properties(src/kernel_face_sort_pack.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
 )
 
