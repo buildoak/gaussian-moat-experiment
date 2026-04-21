@@ -29,11 +29,13 @@ add_library(campaign_cuda STATIC
   src/kernel_compact.cu
   src/kernel_uf_v2.cu
   src/kernel_geo_flags.cu
+  src/kernel_face_encode_v2.cu
   src/host_driver.cpp
 )
 target_include_directories(campaign_cuda
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${CMAKE_CUDA_TOOLKIT_INCLUDE_DIRECTORIES}
   PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../cpp-campaign-v2/src
 )
@@ -47,6 +49,7 @@ target_compile_definitions(campaign_cuda
 )
 set_target_properties(campaign_cuda PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
+  CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
 set_source_files_properties(src/kernel_sieve.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
@@ -58,6 +61,9 @@ set_source_files_properties(src/kernel_uf_v2.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
 )
 set_source_files_properties(src/kernel_geo_flags.cu PROPERTIES
+  COMPILE_FLAGS "--maxrregcount=40"
+)
+set_source_files_properties(src/kernel_face_encode_v2.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
 )
 

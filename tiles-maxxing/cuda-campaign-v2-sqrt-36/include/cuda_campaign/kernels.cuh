@@ -9,6 +9,7 @@
 #include "campaign/tileop.h"
 #include "cuda_campaign/compact_buffers.cuh"
 #include "cuda_campaign/constants.cuh"
+#include "cuda_campaign/face_encode_buffers.cuh"
 #include "cuda_campaign/tileop.cuh"
 #include "cuda_campaign/uf_buffers.cuh"
 
@@ -105,5 +106,9 @@ void launch_kernel_geo_norm_sweep(const std::uint64_t* d_norm_sq,
 std::vector<std::uint8_t> debug_run_k4_geo_i128_sweep(
     const campaign::CampaignConstants& constants,
     const std::vector<std::uint64_t>& norm_sq_values);
+
+void launch_kernel_face_encode_v2(const FaceEncodeBuffers& buffers,
+                                  int num_tiles,
+                                  cudaStream_t stream = nullptr);
 
 }  // namespace cuda_campaign
