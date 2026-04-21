@@ -4,6 +4,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <iomanip>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -26,6 +27,8 @@ struct Options {
   std::size_t limit = 1;
   bool m4 = false;
   bool k5 = false;
+  bool verbose = false;
+  bool self_test_verbose_mismatch = false;
 };
 
 struct M4ExpectedTile {
@@ -38,7 +41,8 @@ struct M4ExpectedTile {
 
 void print_usage(const char* argv0) {
   std::cerr << "usage: " << argv0
-            << " [--r-inner N] [--r-outer N] [--limit N] [--m4] [--k5]\n";
+            << " [--r-inner N] [--r-outer N] [--limit N] [--m4] [--k5]"
+            << " [--verbose]\n";
 }
 
 bool parse_u64(const char* text, std::uint64_t* out) {
@@ -75,6 +79,14 @@ bool parse_args(int argc, char** argv, Options* options) {
       options->k5 = true;
       continue;
     }
+    if (arg == "--verbose") {
+      options->verbose = true;
+      continue;
+    }
+    if (arg == "--self-test-verbose-mismatch") {
+      options->self_test_verbose_mismatch = true;
+      continue;
+    }
     if (i + 1 >= argc) return false;
     if (arg == "--r-inner") {
       if (!parse_u64(argv[++i], &options->r_inner)) return false;
@@ -89,33 +101,63 @@ bool parse_args(int argc, char** argv, Options* options) {
   return true;
 }
 
-bool same_face_payload(const campaign::TileOp& lhs,
+bool same_tileop_bytes(const campaign::TileOp& lhs,
                        const campaign::TileOp& rhs) {
-  return std::memcmp(lhs.n, rhs.n, sizeof(lhs.n)) == 0 &&
-         std::memcmp(lhs.face_groups, rhs.face_groups,
-                     sizeof(lhs.face_groups)) == 0;
+  return std::memcmp(&lhs, &rhs, sizeof(campaign::TileOp)) == 0;
 }
 
-int print_face_payload_diff(const campaign::TileOp& expected,
-                            const campaign::TileOp& actual,
-                            std::size_t tile_idx,
-                            const campaign::TileCoord& coord) {
-  for (std::size_t i = 0; i < sizeof(expected.n); ++i) {
-    if (expected.n[i] == actual.n[i]) continue;
-    std::cerr << "diff at tile " << tile_idx << " (i=" << coord.i
-              << ", j=" << coord.j << "), n[" << i << "]: cpu="
-              << +expected.n[i] << " cuda=" << +actual.n[i] << "\n";
+struct TileOpByteDiff {
+  bool found = false;
+  std::size_t offset = 0;
+  std::uint8_t cpu = 0;
+  std::uint8_t cuda = 0;
+};
+
+TileOpByteDiff first_tileop_byte_diff(const campaign::TileOp& expected,
+                                      const campaign::TileOp& actual) {
+  const auto* expected_bytes =
+      reinterpret_cast<const std::uint8_t*>(&expected);
+  const auto* actual_bytes = reinterpret_cast<const std::uint8_t*>(&actual);
+  for (std::size_t i = 0; i < sizeof(campaign::TileOp); ++i) {
+    if (expected_bytes[i] == actual_bytes[i]) continue;
+    return TileOpByteDiff{true, i, expected_bytes[i], actual_bytes[i]};
+  }
+  return TileOpByteDiff{};
+}
+
+int print_tileop_diff(const campaign::TileOp& expected,
+                      const campaign::TileOp& actual,
+                      std::size_t tile_idx,
+                      const campaign::TileCoord& coord,
+                      bool verbose) {
+  const TileOpByteDiff diff = first_tileop_byte_diff(expected, actual);
+  if (!diff.found) return 0;
+
+  std::cerr << "diff at tile " << tile_idx << " (i=" << coord.i
+            << ", j=" << coord.j << ")";
+  if (!verbose) {
+    std::cerr << ": TileOp bytes differ; rerun with --verbose for first "
+              << "byte divergence\n";
     return 1;
   }
-  for (std::size_t i = 0; i < sizeof(expected.face_groups); ++i) {
-    if (expected.face_groups[i] == actual.face_groups[i]) continue;
-    std::cerr << "diff at tile " << tile_idx << " (i=" << coord.i
-              << ", j=" << coord.j << "), face_groups[" << i
-              << "]: cpu=" << +expected.face_groups[i]
-              << " cuda=" << +actual.face_groups[i] << "\n";
-    return 1;
-  }
-  return 0;
+
+  std::cerr << ", TileOp byte offset " << diff.offset << ": cpu="
+            << static_cast<int>(diff.cpu) << " gpu="
+            << static_cast<int>(diff.cuda) << " (cpu=0x" << std::hex
+            << std::setw(2) << std::setfill('0') << static_cast<int>(diff.cpu)
+            << " gpu=0x" << std::setw(2) << static_cast<int>(diff.cuda)
+            << std::dec << std::setfill(' ') << ")\n";
+  return 1;
+}
+
+int run_self_test_verbose_mismatch(bool verbose) {
+  campaign::TileOp cpu{};
+  campaign::TileOp gpu{};
+  auto* gpu_bytes = reinterpret_cast<std::uint8_t*>(&gpu);
+  gpu_bytes[sizeof(campaign::TileOp) - 1] = 0x5aU;
+  const campaign::TileCoord coord{3, 5, campaign::OFFSET_X + 3 * campaign::S,
+                                  campaign::OFFSET_Y + 5 * campaign::S};
+  return print_tileop_diff(cpu, gpu, 17, coord, verbose);
 }
 
 bool within_k_sq(const campaign::Prime& lhs, const campaign::Prime& rhs) {
@@ -275,6 +317,10 @@ int main(int argc, char** argv) {
   }
 
   try {
+    if (options.self_test_verbose_mismatch) {
+      return run_self_test_verbose_mismatch(options.verbose);
+    }
+
     const auto constants = campaign::CampaignConstants::from_radii(
         options.r_inner, options.r_outer,
         static_cast<std::uint32_t>(campaign::k_sq_value));
@@ -300,13 +346,14 @@ int main(int argc, char** argv) {
         const campaign::TileOp cpu =
             campaign::process_tile(coord, constants, grid);
         const campaign::TileOp& cuda = gpu.tileops[tile_idx];
-        if (!same_face_payload(cpu, cuda)) {
-          return print_face_payload_diff(cpu, cuda, tile_idx, coord);
+        if (!same_tileop_bytes(cpu, cuda)) {
+          return print_tileop_diff(cpu, cuda, tile_idx, coord,
+                                   options.verbose);
         }
       }
 
       std::cout << "cuda_vs_cpu_diff: " << limit
-                << " tile(s) matched K1-K5 face_groups parity\n";
+                << " tile(s) matched K1-K5 full TileOp parity\n";
       return 0;
     }
 
