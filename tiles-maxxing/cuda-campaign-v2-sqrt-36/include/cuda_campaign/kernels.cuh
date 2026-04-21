@@ -34,6 +34,11 @@ struct K1K4DebugDownload {
   std::vector<std::uint32_t> prime_count;
   std::vector<std::uint32_t> prime_pos;
   std::vector<std::uint16_t> parent;
+  std::vector<std::uint8_t> prime_geo_bits;
+  std::vector<std::uint16_t> wire_label_by_raw_root;
+  std::vector<std::uint16_t> max_label;
+  std::vector<std::uint8_t> overflow;
+  std::vector<std::uint8_t> group_flags;
 };
 
 void upload_cuda_constants(const campaign::CampaignConstants& constants);
