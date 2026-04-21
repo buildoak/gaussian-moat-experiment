@@ -92,6 +92,40 @@ target_compile_definitions(test_stub_roundtrip
     K_SQ=${K_SQ}
 )
 
+add_library(k5_parity_support STATIC
+  tests/support/k5_parity_support.cpp
+)
+target_include_directories(k5_parity_support
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/tests
+)
+target_link_libraries(k5_parity_support
+  PUBLIC
+    campaign_cuda
+)
+target_compile_definitions(k5_parity_support
+  PRIVATE
+    K_SQ=${K_SQ}
+)
+
+foreach(k5_test
+    test_face_groups_parity
+    test_port_sort_collision
+    test_full_tileop_parity)
+  add_executable(${k5_test}
+    tests/${k5_test}.cpp
+  )
+  target_link_libraries(${k5_test}
+    PRIVATE
+      k5_parity_support
+  )
+  target_compile_definitions(${k5_test}
+    PRIVATE
+      K_SQ=${K_SQ}
+  )
+  add_test(NAME ${k5_test} COMMAND ${k5_test})
+endforeach()
+
 add_test(NAME test_stub_roundtrip COMMAND test_stub_roundtrip)
 add_test(NAME cuda_vs_cpu_diff_one_tile COMMAND cuda_vs_cpu_diff --r-inner 100 --r-outer 500 --limit 1)
 
