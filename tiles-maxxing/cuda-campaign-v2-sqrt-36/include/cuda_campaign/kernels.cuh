@@ -90,4 +90,20 @@ void launch_kernel_uf_v2(const std::uint32_t* d_bitmap,
                          int num_tiles,
                          cudaStream_t stream = nullptr);
 
+void launch_kernel_geo_flags(const campaign::TileCoord* d_coords,
+                             const std::uint32_t* d_prime_pos,
+                             const std::uint32_t* d_prime_count,
+                             std::uint8_t* d_prime_geo_bits,
+                             int num_tiles,
+                             cudaStream_t stream = nullptr);
+
+void launch_kernel_geo_norm_sweep(const std::uint64_t* d_norm_sq,
+                                  std::uint8_t* d_geo_bits,
+                                  std::size_t count,
+                                  cudaStream_t stream = nullptr);
+
+std::vector<std::uint8_t> debug_run_k4_geo_i128_sweep(
+    const campaign::CampaignConstants& constants,
+    const std::vector<std::uint64_t>& norm_sq_values);
+
 }  // namespace cuda_campaign

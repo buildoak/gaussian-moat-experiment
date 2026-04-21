@@ -28,6 +28,7 @@ add_library(campaign_cuda STATIC
   src/kernel_mr.cu
   src/kernel_compact.cu
   src/kernel_uf_v2.cu
+  src/kernel_geo_flags.cu
   src/host_driver.cpp
 )
 target_include_directories(campaign_cuda
@@ -54,6 +55,9 @@ set_source_files_properties(src/kernel_compact.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=32"
 )
 set_source_files_properties(src/kernel_uf_v2.cu PROPERTIES
+  COMPILE_FLAGS "--maxrregcount=40"
+)
+set_source_files_properties(src/kernel_geo_flags.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
 )
 
@@ -157,5 +161,11 @@ foreach(k3k4_test
     PRIVATE
       K_SQ=${K_SQ}
   )
+  if(k3k4_test STREQUAL test_geo_i128_sweep)
+    target_compile_definitions(${k3k4_test}
+      PRIVATE
+        CUDA_CAMPAIGN_ENABLE_GEO_GPU_TEST_API
+    )
+  endif()
   add_test(NAME ${k3k4_test} COMMAND ${k3k4_test})
 endforeach()

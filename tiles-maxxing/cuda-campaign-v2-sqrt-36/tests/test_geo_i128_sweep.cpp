@@ -3,6 +3,9 @@
 #include <vector>
 
 #include "campaign/geo_tests.h"
+#ifdef CUDA_CAMPAIGN_ENABLE_GEO_GPU_TEST_API
+#include "cuda_campaign/kernels.cuh"
+#endif
 #include "support/k3k4_parity_support.h"
 
 int main() {
@@ -19,14 +22,14 @@ int main() {
     }
   }
 
-#ifdef CUDA_CAMPAIGN_ENABLE_K3K4_GPU_TEST_API
+#ifdef CUDA_CAMPAIGN_ENABLE_GEO_GPU_TEST_API
   std::vector<std::uint64_t> norm_sq_values;
   norm_sq_values.reserve(fixture.rows.size());
   for (const auto& row : fixture.rows) {
     norm_sq_values.push_back(row.norm_sq);
   }
 
-  const auto gpu = cuda_campaign::test_support::gpu_api::debug_run_k4_geo_i128_sweep(
+  const auto gpu = cuda_campaign::debug_run_k4_geo_i128_sweep(
       fixture.constants, norm_sq_values);
   if (gpu.size() != fixture.rows.size()) {
     std::cerr << "GPU geo sweep returned " << gpu.size()
@@ -34,10 +37,13 @@ int main() {
     return 1;
   }
   for (std::size_t i = 0; i < fixture.rows.size(); ++i) {
-    if (gpu[i].norm_sq != fixture.rows[i].norm_sq ||
-        gpu[i].inner != fixture.rows[i].inner ||
-        gpu[i].outer != fixture.rows[i].outer) {
+    const std::uint8_t expected =
+        (fixture.rows[i].inner ? 0x1U : 0U) |
+        (fixture.rows[i].outer ? 0x2U : 0U);
+    if (gpu[i] != expected) {
       std::cerr << "GPU geo flags differ at norm_sq=" << fixture.rows[i].norm_sq
+                << ": got " << static_cast<int>(gpu[i])
+                << " expected " << static_cast<int>(expected)
                 << "\n";
       return 1;
     }
