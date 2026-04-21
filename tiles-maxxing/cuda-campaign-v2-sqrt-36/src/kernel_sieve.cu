@@ -43,6 +43,10 @@ __device__ void sieve_row_k1(std::uint32_t ws[BITMAP_WORDS_PER_ROW],
     }
   }
 
+  if (a == 0) {
+    return;
+  }
+
   for (int k = 0; k < INERT_PRIMES_COUNT; ++k) {
     const InertPrimeBarrettGPU entry = c_inert_barrett[k];
     const std::uint32_t p = static_cast<std::uint32_t>(entry.p);

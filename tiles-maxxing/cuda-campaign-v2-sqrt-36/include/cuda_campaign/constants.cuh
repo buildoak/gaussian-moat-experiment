@@ -33,7 +33,7 @@ inline constexpr std::uint32_t LAST_WORD_MASK =
     (std::uint32_t{1} << LAST_WORD_VALID_BITS) - 1U;
 inline constexpr int BITMAP_WORDS = BITMAP_ROWS * BITMAP_WORDS_PER_ROW;
 
-inline constexpr int MAX_CANDIDATES_GPU = MAX_PRIMES_GPU;
+inline constexpr int MAX_CANDIDATES_GPU = 16384;
 inline constexpr int BLOCK_THREADS = 288;
 inline constexpr int ACTIVE_ROWS = SIDE_EXP;
 
@@ -74,5 +74,7 @@ static_assert(k_sq_value != 40 || (C == 6 && SIDE_EXP == 269 &&
               "K_SQ=40 CUDA constants mismatch");
 static_assert(COLLAR == C, "CUDA collar must use v2 floor_isqrt C");
 static_assert(MAX_PRIMES_GPU == 6144, "CUDA K1/K2 expects 6144 prime capacity");
+static_assert(MAX_CANDIDATES_GPU >= MAX_PRIMES_GPU,
+              "K1 candidate capacity must cover at least compacted primes");
 
 }  // namespace cuda_campaign
