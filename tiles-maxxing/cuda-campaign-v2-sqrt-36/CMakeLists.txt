@@ -1,0 +1,70 @@
+cmake_minimum_required(VERSION 3.25)
+
+if(NOT DEFINED K_SQ)
+  set(K_SQ 36 CACHE STRING "Squared step bound for the campaign")
+endif()
+
+if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+  set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "CUDA architectures")
+endif()
+
+project(cuda_campaign_v2_sqrt36 LANGUAGES CXX CUDA)
+
+set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+
+set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+set(CMAKE_CUDA_EXTENSIONS OFF)
+
+set(CAMPAIGN_BUILD_TESTS OFF CACHE BOOL "Do not build CPU campaign tests" FORCE)
+add_subdirectory(../cpp-campaign-v2 cpp_campaign_v2_build EXCLUDE_FROM_ALL)
+
+add_library(campaign_cuda STATIC
+  src/stub_passthrough.cu
+)
+target_include_directories(campaign_cuda
+  PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+)
+target_link_libraries(campaign_cuda
+  PUBLIC
+    campaign
+)
+target_compile_definitions(campaign_cuda
+  PUBLIC
+    K_SQ=${K_SQ}
+)
+set_target_properties(campaign_cuda PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+)
+
+add_executable(cuda_vs_cpu_diff
+  apps/cuda_vs_cpu_diff.cpp
+)
+target_link_libraries(cuda_vs_cpu_diff
+  PRIVATE
+    campaign_cuda
+)
+target_compile_definitions(cuda_vs_cpu_diff
+  PRIVATE
+    K_SQ=${K_SQ}
+)
+
+enable_testing()
+
+add_executable(test_stub_roundtrip
+  tests/test_stub_roundtrip.cpp
+)
+target_link_libraries(test_stub_roundtrip
+  PRIVATE
+    campaign_cuda
+)
+target_compile_definitions(test_stub_roundtrip
+  PRIVATE
+    K_SQ=${K_SQ}
+)
+
+add_test(NAME test_stub_roundtrip COMMAND test_stub_roundtrip)
+add_test(NAME cuda_vs_cpu_diff_one_tile COMMAND cuda_vs_cpu_diff --r-inner 100 --r-outer 500 --limit 1)
