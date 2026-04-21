@@ -7,6 +7,8 @@ status: complete
 refs: [methodology/lemmas_v2/campaign-blueprint.md, methodology/lemmas_v2/tile-operator-definition-v-claude.md, methodology/lemmas_v2/BACKLOG.md, AGENTS.md]
 ---
 
+> **2026-04-21 status update.** Dual blinded independent audit completed (Opus 4.7 subagent + Codex gpt-5.4 xhigh via agent-mux `auditor` profile, both blinded to the prior `docs/final-math-audit.md` and to each other). **0 BLOCKERs.** 3 high-confidence findings (both auditors converged), 7 unique-but-real findings (one auditor, tiebroken against spec+code), 1 dismissed. **Pre-flight on Mac Mini is GREEN** for R=80M/K=36 and R=800M/K=40 (structurally sound against false MOAT at project params). **CUDA-port to RTX 4090 is GREEN after a small must-fix list** (all one-liner or short-commit items: `annulus_thickness_rhs` sqrt coefficient, flip `verify_annulus_thickness` default to strict=true, bind BZ gate to runtime radii, spec norm-form for K=40 geo band, real golden test). Full synthesis + action table: [`_audits/2026-04-21/synthesis.md`](../../_audits/2026-04-21/synthesis.md). Individual reports: [`opus.md`](../../_audits/2026-04-21/opus.md), [`codex.md`](../../_audits/2026-04-21/codex.md).
+
 ## 1. Executive summary
 
 We build `tiles-maxxing/cpp-campaign-v2/` — a single, unified, self-contained C++ reference campaign — as the **ground truth** the later CUDA port will be byte-compared against. Scope: the full Blueprint v3 pipeline end-to-end (grid → sieve+axis primes → tile UF → face-strip UF → TileOp encode → compositor → verdict → snapshot), implemented in plain C++20 on a Mac Mini / Linux x64 host. No GPU. No Jetson SSH dance. No Python hot path.
