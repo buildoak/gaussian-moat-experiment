@@ -14,6 +14,7 @@ The specific target: probe an annular ring for **connectivity transfer** from it
 
 The operator enables this probe to run in parallel across thousands of GPU threads, each processing one tile independently. Only the composition step is sequential, and it operates on compressed boundary data — not the full graph.
 
+
 ---
 
 ## The Graph
@@ -25,6 +26,11 @@ The operator enables this probe to run in parallel across thousands of GPU threa
 
 K defines the resolution of the connectivity probe. The Gaussian moat conjecture asks: for what K does G remain connected to infinity?
 
+
+---
+
+
+
 ---
 
 ## Tile
@@ -34,80 +40,101 @@ A tile T is defined by origin (tₓ, tᵧ) ∈ Z² and three parameters:
 | Parameter | Symbol | Role |
 |-----------|--------|------|
 | Side | S | Tile proper spans [tₓ, tₓ + S] × [tᵧ, tᵧ + S] — (S+1)² lattice points |
-| Collar | C = ⌈√K⌉ | Extension beyond tile proper on all four sides |
+| Collar | C = ⌊√K⌋ | Extension beyond tile proper on all four sides |
 | Halo | — | Full processing domain: tile proper + collar = (S + 1 + 2C)² lattice points |
 
-**Edge completeness guarantee.** For any edge {p, q} ∈ E: the coordinate offset satisfies |Δ| ≤ ⌊√K⌋ ≤ C in each axis. If p lies in any tile's proper region, q lies within that tile's halo. Both endpoints survive in at least one tile's local graph.
+**Collar sufficiency.** C = ⌊√K⌋ is the tight collar width. For any edge {p, q} ∈ E, the per-axis offset satisfies |Δ| ≤ C: if |Δ| ≥ C + 1, then Δ² ≥ (⌊√K⌋ + 1)² > K, contradicting ‖p − q‖² ≤ K. Formal proof in [tile-operator-completeness.md](tile-operator-completeness.md).
 
-**Shared boundary.** A tile by itself can be placed anywhere. But for composition into a structure that probes connectivity soundly and completely, tiles must be placed face-to-face — ports are defined such that they only compose correctly under face-to-face alignment. Under the (S+1)-point convention, adjacent tiles share boundary rows or columns: tile A's outer edge and tile B's inner edge are the same physical row. Both tiles' halos extend C units beyond this shared boundary into their own interiors.
+**Edge completeness.** If p lies in any tile's proper region, every neighbor q (with ‖p − q‖² ≤ K) lies within that tile's halo. Both endpoints of every edge survive in at least one tile's local graph.
+
+**Shared boundary.** Under the (S+1)-point convention, adjacent tiles share boundary rows or columns: tile A's outer edge and tile B's inner edge are the same physical row. Both tiles' halos extend C units beyond this shared boundary into the adjacent tile's territory, creating a **bidirectional collar** of width 2C centered on the shared boundary.
 
 ---
 
 ## Faces
 
-Each tile has four faces at the edges of its proper region — the interfaces through which tiles communicate:
+Each tile has four faces at the edges of its proper region — the interfaces through which tiles communicate.
 
-| Face | Position | Along-face coordinate h | Depth predicate (tile-relative) |
-|------|----------|------------------------|---------------------------------|
-| **I** (inner) | bottom row | h = col | row ≤ C |
-| **O** (outer) | top row | h = col | row ≥ S − C |
-| **L** (left) | left column | h = row | col ≤ C |
-| **R** (right) | right column | h = row | col ≥ S − C |
+**Coordinate convention.** Tile-relative coordinates: col = x − tₓ (horizontal), row = y − tᵧ (vertical). Row 0 is the bottom edge (face I), row S is the top edge (face O).
 
-A **face prime** is a Gaussian prime within distance C of a face boundary.
+| Face | Boundary | Along-face coord h | Depth predicate (tile-relative) |
+|------|----------|--------------------|---------------------------------|
+| **I** (inner) | row = 0 | h = col | row ≤ C |
+| **O** (outer) | row = S | h = col | row ≥ S − C |
+| **L** (left) | col = 0 | h = row | col ≤ C |
+| **R** (right) | col = S | h = row | col ≥ S − C |
 
-The **collar region** of a face f is the set of Gaussian primes within perpendicular distance C of f's boundary line — the strip of primes that participate in connectivity transfer through f. For face-to-face tiles A and B sharing boundary f, every prime in the collar region is a face prime of at least one tile.
+A **face prime** is a Gaussian prime within perpendicular distance C of a face boundary line. Face primes have no along-face restriction — a prime in a corner of the halo (outside the proper region in both axes) is a face prime of both adjacent faces. This unrestricted extent is necessary: for offset tiles (adjacent towers with different base_y), restricting face primes to the proper region's row or column range would split port sets at the overlap boundary between towers.
+
+The **collar region** of a face f is the set of face primes of f — the full strip within perpendicular distance C on both sides of f's boundary line.
 
 ---
 
 ## Ports
 
-After local UF runs on G_T = (V_T, E_T), face primes carry UF component labels. A **port** is an indicator that connectivity traverses the face at a specific location — evidence that a connected component crosses from the tile's interior, through the face line, to at least one prime on the collar side of the boundary.
+A **port** on face f records that connectivity touches f at a specific along-face location. A port is generated by exactly one of two events:
 
-Not every face prime produces a port. A face prime that is isolated (no edges) is not a port — there is nothing to transfer. A face prime whose UF component reaches only the interior side of the face but never crosses to the collar side is not a port — connectivity reached the face but did not traverse it.
+1. **Edge crossing.** An edge {p, q} ∈ E where p and q lie on strictly opposite sides of f's boundary line — one at positive depth (interior side), one at negative depth (collar side). The edge spans the face.
 
-**Construction.** Sort face primes by h (ties broken by depth, then coordinates). Scan sequentially: if consecutive face primes p, q satisfy ‖p − q‖² > K in full 2D distance, a new port begins. Single-port single-face groups — components that enter the face but traverse nowhere — are pruned.
+2. **On-face prime.** A Gaussian prime at depth 0 — sitting exactly on f's boundary line.
 
-A connected component may produce multiple ports on the same face (crossing at spatially separated locations) or ports on different faces. Ports are not one-per-group — they are independent indicators of connectivity traversal.
+Each port is an atomic event: one edge or one prime.
 
-**Port anchor h₁.** Each port has an anchor **h₁** — the along-face coordinate of the port's first (lowest-h) prime. h₁ uniquely locates the port on the face: since ports are spatially contiguous and sorted by h, no two ports on the same face share an h₁.
+**Port anchor h₁.** Each port carries an along-face coordinate h₁ that locates it on the face:
 
-Given two tiles sharing part or all of a face, h₁ is sufficient information for matching ports across the boundary. Two ports from adjacent tiles that cover the same physical boundary primes will have corresponding h₁ values (equal after accounting for the coordinate offset between tiles). This is what makes the stitch operation well-defined — a port's location on the physical boundary is fully determined by its h₁ and its tile's origin.
+- **I/O faces** (horizontal boundary, h = col): h₁ is the col of the **leftmost** prime — the prime with the smallest x-coordinate. For edge crossings, this is min(col_p, col_q). For on-face primes, h₁ = col of the prime.
+- **L/R faces** (vertical boundary, h = row): h₁ is the row of the **topmost** prime — the prime with the largest y-coordinate. For edge crossings, this is max(row_p, row_q). For on-face primes, h₁ = row of the prime.
 
-Each port carries two pieces of information: its **location** (h₁, face) and its **group label** — the connectivity group it belongs to. A port is a lightweight structure: a location on the face plus a pointer to its connectivity class.
+"Leftmost" and "topmost" are absolute geometric properties. Both tiles sharing a face select the same physical prime and compute the same h₁, differing only by the known coordinate offset between tiles.
+
+Each port carries: its **location** (h₁, face) and its **group label** — the connectivity group it belongs to.
+
+### Port set agreement
+
+Two tiles sharing a face f produce the same set of ports on f, independently.
+
+Both tiles' halos extend C units beyond f into the adjacent tile's territory. The bidirectional collar — C units on each side of f — lies entirely within both halos. Within this shared area:
+
+1. **Same primes.** Both tiles see every Gaussian prime in the bidirectional collar.
+2. **Same edges.** Edge completeness guarantees every edge incident to a collar prime has both endpoints within both halos.
+3. **Same crossings.** The same edges cross f in both tiles' local graphs.
+4. **Same on-face primes.** Both tiles see the same primes on f's boundary line.
+
+Same events → same ports → same h₁ values. Group labels differ (they depend on tile-internal UF beyond the shared collar), but the port set is identical.
+
+This agreement is what makes stitch well-defined. For I/O faces (positional matching within a tower), identical port sets guarantee identical counts and ordering. For L/R faces (h₁ matching between offset towers), corresponding h₁ values on both sides ensure the offset predicate finds every match.
 
 ---
 
 ## Groups
 
-A **group** is an equivalence class of ports under interior connectivity. Two ports share a group iff their face primes are connected through paths within the tile's full local UF — potentially routing through interior primes that are not face primes themselves.
+A **group** is an equivalence class of ports under interior connectivity. Two ports on the same tile share a group iff their defining primes are connected through paths within the tile's full local UF — potentially routing through interior primes that are not face primes.
 
 **Assignment.** Scan faces in order I → O → L → R, ascending h₁ within each face. First encounter of a UF component root assigns the next group ID (1-indexed, u8). A single group may span multiple faces — primes on different tile boundaries connected through the interior.
 
-Groups are the semantic payload of the operator: they encode *which boundary regions connect to which* without revealing *how* the connection routes through the interior.
+**Group categories:**
+
+- **Multi-face groups** (ports on two or more faces) — primary carriers of connectivity transfer. A component enters through one face and exits through another.
+- **Single-face, multi-port groups** (multiple ports on one face, connected through the interior) — prove that spatially separated regions of the same face connect through the tile's interior.
+- **Single-face, single-port groups** — components that touch one face at one location and no other face. These carry no connectivity transfer. They are retained: removing them would break port set agreement, since the adjacent tile's UF may assign the same boundary primes to a multi-face group, creating a port count mismatch that corrupts positional matching.
+
+Groups encode *which boundary regions connect to which* without revealing *how* the connection routes through the interior.
 
 ---
 
 ## The Operator
 
-**TileOp(T)** is the complete process that takes the local subgraph G_T and outputs the compressed connectivity transfer verdict for the tile. It decomposes into two steps:
+**TileOp(T)** takes the local subgraph G_T and outputs the compressed connectivity transfer structure for the tile. Two steps:
 
-**Step 1 — Closure.** Compute cl(E_T) — the transitive closure of the local edge set via Union-Find. This step IS a closure operator (extensive, monotone, idempotent). The closure decomposition theorem — cl(E) = cl(cl(E₁) ∪ cl(E₂)) — applies to this step, enabling independent per-tile computation.
+**Step 1 — Closure.** Compute cl(E_T) — the transitive closure of the local edge set via Union-Find. This IS a closure operator (extensive, monotone, idempotent). The closure decomposition theorem — cl(E) = cl(cl(E₁) ∪ cl(E₂)) — applies, enabling independent per-tile computation.
 
-**Step 2 — Projection.** Identify which connected components traverse each face, encode these as ports grouped by interior connectivity. This step is a faithful surjection — it discards interior routing but preserves all boundary connectivity. It is NOT a closure operator (the input and output domains differ; idempotence does not typecheck).
+**Step 2 — Projection.** Identify ports on each face (edge crossings and on-face primes), assign group labels from the UF component structure. This is a faithful surjection — it discards interior routing but preserves all boundary connectivity. It is NOT a closure operator (input and output domains differ).
 
-The composition of these two steps compresses cl(E_T) into **face-to-face reachability**. Primes that carry no connectivity transfer information are discarded: interior primes with no face contact, isolated face primes, and face primes whose components never cross to the collar side of the boundary.
+The composition of these two steps compresses cl(E_T) into **face-to-face reachability**: which boundary ports connect to which through the tile's interior.
 
-Among groups that survive:
+**A lossy compression of the tile's full graph, but a lossless compression of its boundary connectivity.**
 
-- **Multi-face groups** (ports on two or more faces) — the primary carriers of connectivity transfer across the tile.
-- **Single-face, multi-port groups** (multiple ports on one face, connected through the interior) — preserved. They prove that spatially separated regions of the same face connect through the tile's interior.
-
-*Note:* Single-face, single-port groups are pruned — dead ends where a component enters the face but reaches no other face and no other port. No connectivity transfer.
-
-The retained information: which boundary ports connect to which through the tile's interior. **A lossy compression of the tile's full graph, but a lossless compression of its boundary connectivity.**
-
-The end result of TileOp is a lightweight structure: a collection of ports, each carrying a face, an h₁, and a group label. A tile that may contain thousands of primes and edges compresses to a handful of ports. This is what makes composition tractable — stitch operates on ports, not on graphs.
+The result: a collection of ports, each carrying a face, an h₁, and a group label. A tile with thousands of primes compresses to a compact port set. Stitch operates on ports, not on graphs.
 
 ---
 
@@ -117,45 +144,43 @@ The end result of TileOp is a lightweight structure: a collection of ports, each
 
 The **stitch** operation composes two tiles A and B at a specified face pair. stitch(f_A, f_B) is defined when face f_A of tile A and face f_B of tile B share a physical boundary — fully or partially.
 
-The **overlap region** is the intersection of the physical boundaries of f_A and f_B. For full face-to-face alignment, the overlap is the entire face. For partial overlap (e.g., adjacent towers with a y-offset), the overlap is a contiguous strip where both faces coincide. Ports with h₁ outside the overlap region are unmatched by this stitch — they are left for other stitch operations to cover.
+The **overlap region** is the intersection of the physical boundaries of f_A and f_B. For full face-to-face alignment, the overlap is the entire face. For partial overlap (adjacent towers with a y-offset), the overlap is a contiguous strip where both faces coincide. Ports with h₁ outside the overlap are unmatched by this stitch — left for other stitch operations.
 
 ### Two modes
 
-**Mode 1 — Partial overlap (general case).** Faces share a partial physical boundary. Port matching requires h₁ comparison.
+**Mode 1 — h₁ matching (L/R between towers).** Faces share a partial physical boundary with a coordinate offset between towers.
 
 **Mechanics:**
 
 1. **Wire intra-tile groups.** Within each tile, union all ports sharing a group label — encoding the internal connectivity that TileOp compressed.
-2. **Match ports in the overlap region.** For each port P_A on f_A and port P_B on f_B: compute h₁ correspondence accounting for the coordinate offset between tiles. Ports whose h₁ values map to the same physical boundary location are matched.
-3. **Union matched groups.** For each matched port pair, union their groups in the global UF.
-4. **Output.** The combined connectivity structure. Ports outside the overlap remain unmatched — available for subsequent stitch operations.
+2. **Match ports in the overlap.** For each port P_A on f_A and P_B on f_B: apply the h₁ offset predicate accounting for the tower base_y difference. Ports whose h₁ values map to the same physical location are matched.
+3. **Union matched groups.** For each matched pair, union their groups in the global UF.
+4. **Output.** Ports outside the overlap remain unmatched — available for subsequent stitch operations.
 
-h₁ is sufficient for matching: ports are spatially contiguous on the face, and the collar guarantee (C ≥ ⌈√K⌉) ensures both tiles see the same face primes in the overlap region.
+**Mode 2 — Positional matching (I/O within a tower).** Faces share the entire physical boundary with zero coordinate offset. By port set agreement, both tiles produce identical port sets on the shared face — same ports, same count, same ordering. The k-th port on f_A matches the k-th port on f_B. No h₁ comparison needed.
 
-**Mode 2 — Full overlap (aligned case).** Faces share the entire physical boundary with zero coordinate offset. Port matching by h₁ can be pruned — sequential port order suffices, since ports align by positional identity on the shared boundary row/column.
-
-This holds for stitch(O_A, I_B) within a vertical tower, where tiles stack with zero horizontal offset. The h₁ encoding is not needed; group labels alone determine the match.
+This applies to stitch(O_A, I_B) within a vertical tower. Port set agreement guarantees positional matching is well-defined.
 
 ### Properties
 
-**Associativity.** stitch is associative along a chain: stitch(R_B, L_C) after stitch(R_A, L_B) yields the same connectivity as stitching in any other order. This permits sequential processing without affecting the verdict.
+**Associativity.** The final connectivity partition is independent of stitch order. Follows from UF union order-independence.
 
-**Scope.** Each stitch is faithful for connectivity through its overlap region. Faithfulness of the full boundary between two adjacent regions requires **stitch coverage** — that the union of all overlap regions across all stitched face pairs covers every crossing edge. This is a property of the tiling arrangement, not of stitch itself.
+**Scope.** Each stitch is faithful for connectivity through its overlap region. Faithfulness of the full boundary requires **stitch coverage** — the union of all overlap regions covers every crossing edge. This is a tiling-arrangement property, not a stitch property.
 
 ---
 
 ## Tiled Connectivity Transfer Pipeline
 
-The full computation that applies the Tile Operator at scale.
+The full computation applying the Tile Operator at scale.
 
 **Input:**
 - Region R ⊂ Z[i], graph G = (V, E) with squared step bound K
 - Designated boundary face sets F_in (inner) and F_out (outer)
 
 **Preconditions:**
-- **Tiles** {T₁, ..., Tₙ} with side S and collar C ≥ ⌈√K⌉
+- **Tiles** {T₁, ..., Tₙ} with side S and collar C = ⌊√K⌋
 - **Coverage:** every prime in R lies in at least one tile's proper region
-- **Stitch coverage:** for every edge {p, q} ∈ E that crosses between adjacent tiles' regions, there exists at least one face pair (fᵢ, fⱼ) where stitch is applied and both p and q fall within the overlap's collar region
+- **Stitch coverage:** for every edge {p, q} ∈ E crossing between adjacent tiles' proper regions, at least one face pair stitch covers both p and q in its overlap collar
 
 **Steps:**
 1. **Partition.** Decompose R into tiles satisfying the preconditions.
@@ -171,4 +196,3 @@ The full computation that applies the Tile Operator at scale.
 **Proved sound and complete:** [tile-operator-completeness.md](tile-operator-completeness.md)
 **Closure decomposition foundation:** [closure-decomposition.md](closure-decomposition.md)
 **Annular instantiation:** [grid-composition.md](grid-composition.md)
-**Grid composition, spanning verdict, and annular scanning:** [grid-composition.md](grid-composition.md)

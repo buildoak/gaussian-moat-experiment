@@ -23,7 +23,9 @@ option(CAMPAIGN_BUILD_TESTS
 # ---------------------------------------------------------------------------
 # Compile options
 # ---------------------------------------------------------------------------
-add_compile_options(-Wall -Wextra -Wpedantic -Werror)
+# Note: -Wpedantic removed because __int128 is a valid GCC extension required
+# for 128-bit arithmetic in geo_tests.cpp and campaign_constants.cpp
+add_compile_options(-Wall -Wextra -Werror)
 
 # Protect against the Apple/Clang libc++ which inlines sqrt templates in
 # <cmath>. If CAMPAIGN_STRICT + the pragma poisons `sqrt`, transitive

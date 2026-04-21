@@ -19,7 +19,7 @@ struct CompactBuffers {
   std::uint32_t* d_prime_count;  // [N]
 };
 
-static_assert(MAX_PRIMES_GPU == 6144, "K3 compact capacity must be 6144");
+static_assert(MAX_PRIMES_GPU >= 6144, "K3 compact capacity must be at least 6144");
 static_assert(ROW_PREFIX_ENTRIES == 270,
               "K3 row-prefix stride changed; update downstream buffer sizing");
 static_assert(ROW_PREFIX_BYTES_PER_TILE == 540,

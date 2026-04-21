@@ -11,7 +11,8 @@ inline constexpr int S = campaign::S;
 inline constexpr int TILEOP_SIZE = campaign::TILEOP_SIZE;
 inline constexpr int OFFSET_X = campaign::OFFSET_X;
 inline constexpr int OFFSET_Y = campaign::OFFSET_Y;
-inline constexpr int MAX_PRIMES_GPU = campaign::MAX_PRIMES_GPU;
+// Override CPU's 6144 — with fixed K1, tiles can have up to ~8000 primes
+inline constexpr int MAX_PRIMES_GPU = 8192;
 inline constexpr int MAX_GROUPS_PER_TILE = campaign::MAX_GROUPS_PER_TILE;
 inline constexpr int MAX_PORTS_PER_TILE = campaign::MAX_PORTS_PER_TILE;
 inline constexpr int C = campaign::C;
@@ -73,7 +74,7 @@ static_assert(k_sq_value != 40 || (C == 6 && SIDE_EXP == 269 &&
                                    NUM_BACKWARD_OFFSETS == 56),
               "K_SQ=40 CUDA constants mismatch");
 static_assert(COLLAR == C, "CUDA collar must use v2 floor_isqrt C");
-static_assert(MAX_PRIMES_GPU == 6144, "CUDA K1/K2 expects 6144 prime capacity");
+static_assert(MAX_PRIMES_GPU >= 6144, "CUDA prime capacity must be at least 6144");
 static_assert(MAX_CANDIDATES_GPU >= MAX_PRIMES_GPU,
               "K1 candidate capacity must cover at least compacted primes");
 

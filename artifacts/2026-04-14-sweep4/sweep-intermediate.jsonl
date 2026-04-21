@@ -1,0 +1,360 @@
+{
+  "R": 875000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2416893,
+  "total_tiles": 87290165,
+  "towers_processed": 692488,
+  "tiles_processed": 22852103,
+  "wall_time_seconds": 188.776,
+  "overflow_count": 0,
+  "total_groups": 224507992,
+  "inner_roots": 2604606,
+  "outer_roots": 2591307,
+  "peak_rss_mb": 1862.1
+}
+{
+  "R": 900000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2485947,
+  "total_tiles": 89784166,
+  "towers_processed": 2485947,
+  "tiles_processed": 89784166,
+  "wall_time_seconds": 756.505,
+  "overflow_count": 0,
+  "total_groups": 887949873,
+  "inner_roots": 10960189,
+  "outer_roots": 10903931,
+  "peak_rss_mb": 7007.6
+}
+{
+  "R": 925000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2555000,
+  "total_tiles": 92278122,
+  "towers_processed": 2555000,
+  "tiles_processed": 92278122,
+  "wall_time_seconds": 774.416,
+  "overflow_count": 0,
+  "total_groups": 918448525,
+  "inner_roots": 11339108,
+  "outer_roots": 11273997,
+  "peak_rss_mb": 7202.5
+}
+{
+  "R": 950000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2624054,
+  "total_tiles": 94772122,
+  "towers_processed": 1888,
+  "tiles_processed": 62303,
+  "wall_time_seconds": 7.556,
+  "overflow_count": 0,
+  "total_groups": 624390,
+  "inner_roots": 6763,
+  "outer_roots": 6982,
+  "peak_rss_mb": 578.0
+}
+{
+  "R": 975000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2693107,
+  "total_tiles": 97266079,
+  "towers_processed": 2693107,
+  "tiles_processed": 97266079,
+  "wall_time_seconds": 814.219,
+  "overflow_count": 0,
+  "total_groups": 979808137,
+  "inner_roots": 12089610,
+  "outer_roots": 12022497,
+  "peak_rss_mb": 7577.0
+}
+{
+  "R": 1025000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2831214,
+  "total_tiles": 102254036,
+  "towers_processed": 2831214,
+  "tiles_processed": 102254036,
+  "wall_time_seconds": 849.863,
+  "overflow_count": 0,
+  "total_groups": 1041632542,
+  "inner_roots": 12841826,
+  "outer_roots": 12767811,
+  "peak_rss_mb": 7954.5
+}
+{
+  "R": 1050000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2900267,
+  "total_tiles": 104747989,
+  "towers_processed": 2900267,
+  "tiles_processed": 104747989,
+  "wall_time_seconds": 879.097,
+  "overflow_count": 0,
+  "total_groups": 1072618474,
+  "inner_roots": 13225020,
+  "outer_roots": 13147769,
+  "peak_rss_mb": 8147.1
+}
+{
+  "R": 1075000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2969321,
+  "total_tiles": 107241989,
+  "towers_processed": 2969321,
+  "tiles_processed": 107241989,
+  "wall_time_seconds": 880.140,
+  "overflow_count": 0,
+  "total_groups": 1103861739,
+  "inner_roots": 13607225,
+  "outer_roots": 13524242,
+  "peak_rss_mb": 8336.0
+}
+{
+  "R": 1100000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 3038374,
+  "total_tiles": 109735945,
+  "towers_processed": 3038374,
+  "tiles_processed": 109735945,
+  "wall_time_seconds": 916.895,
+  "overflow_count": 0,
+  "total_groups": 1135098204,
+  "inner_roots": 13980394,
+  "outer_roots": 13897780,
+  "peak_rss_mb": 8524.1
+}
+{
+  "R": 1125000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 3107427,
+  "total_tiles": 112229900,
+  "towers_processed": 3107427,
+  "tiles_processed": 112229900,
+  "wall_time_seconds": 932.990,
+  "overflow_count": 0,
+  "total_groups": 1166540260,
+  "inner_roots": 14361125,
+  "outer_roots": 14274274,
+  "peak_rss_mb": 8704.6
+}
+{
+  "R": 650000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 1795413,
+  "total_tiles": 64844433,
+  "towers_processed": 5001,
+  "tiles_processed": 165032,
+  "wall_time_seconds": 7.943,
+  "overflow_count": 0,
+  "total_groups": 1505927,
+  "inner_roots": 16518,
+  "outer_roots": 16801,
+  "peak_rss_mb": 451.2
+}
+{
+  "R": 700000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 1933520,
+  "total_tiles": 69832388,
+  "towers_processed": 7796,
+  "tiles_processed": 257267,
+  "wall_time_seconds": 8.021,
+  "overflow_count": 0,
+  "total_groups": 2391605,
+  "inner_roots": 26241,
+  "outer_roots": 26969,
+  "peak_rss_mb": 478.9
+}
+{
+  "R": 750000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2071626,
+  "total_tiles": 74820299,
+  "towers_processed": 10843,
+  "tiles_processed": 357818,
+  "wall_time_seconds": 8.215,
+  "overflow_count": 0,
+  "total_groups": 3388559,
+  "inner_roots": 37212,
+  "outer_roots": 37833,
+  "peak_rss_mb": 505.2
+}
+{
+  "R": 800000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2209733,
+  "total_tiles": 79808256,
+  "towers_processed": 33166,
+  "tiles_processed": 1094477,
+  "wall_time_seconds": 15.537,
+  "overflow_count": 0,
+  "total_groups": 10528301,
+  "inner_roots": 116518,
+  "outer_roots": 117700,
+  "peak_rss_mb": 560.7
+}
+{
+  "R": 850000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2347840,
+  "total_tiles": 84796209,
+  "towers_processed": 86527,
+  "tiles_processed": 2855390,
+  "wall_time_seconds": 30.993,
+  "overflow_count": 0,
+  "total_groups": 27860519,
+  "inner_roots": 310796,
+  "outer_roots": 311525,
+  "peak_rss_mb": 678.7
+}
+{
+  "R": 880000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2430704,
+  "total_tiles": 87788973,
+  "towers_processed": 2430704,
+  "tiles_processed": 87788973,
+  "wall_time_seconds": 752.223,
+  "overflow_count": 0,
+  "total_groups": 863626304,
+  "inner_roots": 10663867,
+  "outer_roots": 10602638,
+  "peak_rss_mb": 6872.8
+}
+{
+  "R": 885000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2444515,
+  "total_tiles": 88287783,
+  "towers_processed": 451467,
+  "tiles_processed": 14898410,
+  "wall_time_seconds": 133.766,
+  "overflow_count": 0,
+  "total_groups": 146756882,
+  "inner_roots": 1674906,
+  "outer_roots": 1666453,
+  "peak_rss_mb": 1356.0
+}
+{
+  "R": 890000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2458325,
+  "total_tiles": 88786549,
+  "towers_processed": 2458325,
+  "tiles_processed": 88786549,
+  "wall_time_seconds": 754.445,
+  "overflow_count": 0,
+  "total_groups": 875768270,
+  "inner_roots": 10803519,
+  "outer_roots": 10751442,
+  "peak_rss_mb": 6946.8
+}
+{
+  "R": 895000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2472136,
+  "total_tiles": 89285357,
+  "towers_processed": 1064569,
+  "tiles_processed": 35341211,
+  "wall_time_seconds": 306.179,
+  "overflow_count": 0,
+  "total_groups": 349060799,
+  "inner_roots": 4131375,
+  "outer_roots": 4107639,
+  "peak_rss_mb": 2695.2
+}
+{
+  "R": 940000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2596432,
+  "total_tiles": 93774503,
+  "towers_processed": 2596432,
+  "tiles_processed": 93774503,
+  "wall_time_seconds": 788.647,
+  "overflow_count": 0,
+  "total_groups": 936808330,
+  "inner_roots": 11556145,
+  "outer_roots": 11493829,
+  "peak_rss_mb": 7326.3
+}
+{
+  "R": 945000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2610243,
+  "total_tiles": 94273313,
+  "towers_processed": 2610243,
+  "tiles_processed": 94273313,
+  "wall_time_seconds": 787.697,
+  "overflow_count": 0,
+  "total_groups": 942906236,
+  "inner_roots": 11638242,
+  "outer_roots": 11574287,
+  "peak_rss_mb": 7367.4
+}
+{
+  "R": 950000000,
+  "K_SQ": 40,
+  "verdict": "SPANNING",
+  "num_towers": 2624054,
+  "total_tiles": 94772122,
+  "towers_processed": 1888,
+  "tiles_processed": 62303,
+  "wall_time_seconds": 7.616,
+  "overflow_count": 0,
+  "total_groups": 624390,
+  "inner_roots": 6763,
+  "outer_roots": 6982,
+  "peak_rss_mb": 578.2
+}
+{
+  "R": 955000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2637864,
+  "total_tiles": 95270887,
+  "towers_processed": 2637864,
+  "tiles_processed": 95270887,
+  "wall_time_seconds": 785.120,
+  "overflow_count": 0,
+  "total_groups": 955191675,
+  "inner_roots": 11788200,
+  "outer_roots": 11719637,
+  "peak_rss_mb": 7435.1
+}
+{
+  "R": 960000000,
+  "K_SQ": 40,
+  "verdict": "MOAT",
+  "num_towers": 2651675,
+  "total_tiles": 95769695,
+  "towers_processed": 2651675,
+  "tiles_processed": 95769695,
+  "wall_time_seconds": 792.225,
+  "overflow_count": 0,
+  "total_groups": 961311751,
+  "inner_roots": 11859916,
+  "outer_roots": 11796278,
+  "peak_rss_mb": 7475.9
+}
