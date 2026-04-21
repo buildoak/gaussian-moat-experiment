@@ -10,6 +10,7 @@
 #include "cuda_campaign/compact_buffers.cuh"
 #include "cuda_campaign/constants.cuh"
 #include "cuda_campaign/face_encode_buffers.cuh"
+#include "cuda_campaign/face_sort_pack.cuh"
 #include "cuda_campaign/tileop.cuh"
 #include "cuda_campaign/uf_buffers.cuh"
 
@@ -41,6 +42,22 @@ struct K1K4DebugDownload {
   std::vector<std::uint8_t> group_flags;
 };
 
+struct K1K5Buffers {
+  K1K4Buffers k1k4;
+  TileOp* d_tileops = nullptr;
+  FaceEncodeDebugBuffers face_debug;
+};
+
+struct K1K5DebugDownload {
+  K1K4DebugDownload k1k4;
+  std::vector<campaign::TileOp> tileops;
+  std::vector<std::uint16_t> face_indices;
+  std::vector<std::uint16_t> face_counts;
+  std::vector<std::uint16_t> face_roots;
+  std::vector<FaceRepresentative> face_reps;
+  std::vector<std::uint16_t> face_rep_counts;
+};
+
 void upload_cuda_constants(const campaign::CampaignConstants& constants);
 void upload_sieve_tables();
 void upload_backward_offsets();
@@ -51,7 +68,16 @@ void launch_k1_to_k4(const K1K4Buffers& buffers,
                      int num_tiles,
                      cudaStream_t stream = nullptr);
 
+void launch_k1_to_k5(const K1K5Buffers& buffers,
+                     int num_tiles,
+                     cudaStream_t stream = nullptr);
+
 K1K4DebugDownload run_k1_to_k4_debug(
+    const std::vector<campaign::TileCoord>& coords,
+    const campaign::CampaignConstants& constants,
+    cudaStream_t stream = nullptr);
+
+K1K5DebugDownload run_k1_to_k5_debug(
     const std::vector<campaign::TileCoord>& coords,
     const campaign::CampaignConstants& constants,
     cudaStream_t stream = nullptr);
