@@ -101,7 +101,8 @@ int main() {
 
     bool saw_pending_gpu = false;
     for (const auto& coord : coords) {
-      const campaign::TileOp cpu = k5_parity::cpu_tileop(coord, constants);
+      const campaign::TileOp cpu =
+          k5_parity::row_major_cpu_tileop(coord, constants);
       const k5_parity::GpuTileOpResult gpu =
           k5_parity::gpu_tileop_or_pending(coord, constants);
       if (!gpu.available) {

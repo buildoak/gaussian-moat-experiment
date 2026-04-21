@@ -493,7 +493,8 @@ int main() {
         ++checked_face_debug;
       }
 
-      const campaign::TileOp cpu = k5_parity::cpu_tileop(coord, constants);
+      const campaign::TileOp cpu =
+          k5_parity::row_major_cpu_tileop(coord, constants);
       if (!k5_parity::face_group_padding_zero(cpu)) {
         std::cerr << "CPU oracle emitted non-zero face_groups padding\n";
         return 1;

@@ -34,6 +34,10 @@ std::vector<campaign::TileCoord> first_active_tiles(std::uint64_t r_inner,
 campaign::TileOp cpu_tileop(const campaign::TileCoord& coord,
                             const campaign::CampaignConstants& constants);
 
+campaign::TileOp row_major_cpu_tileop(
+    const campaign::TileCoord& coord,
+    const campaign::CampaignConstants& constants);
+
 GpuTileOpResult gpu_tileop_or_pending(const campaign::TileCoord& coord,
                                       const campaign::CampaignConstants& constants);
 

@@ -1,9 +1,13 @@
 #include "support/k5_parity_support.h"
 
 #include <algorithm>
+#include <cstdint>
 #include <cstring>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
+
+#include "campaign/geo_tests.h"
 
 #include "../../../cpp-campaign-v2/src/tileop_internal.h"
 
@@ -54,6 +58,29 @@ campaign::TileOp cpu_tileop(const campaign::TileCoord& coord,
                             const campaign::CampaignConstants& constants) {
   const campaign::Grid grid{};
   return campaign::process_tile(coord, constants, grid);
+}
+
+campaign::TileOp row_major_cpu_tileop(
+    const campaign::TileCoord& coord,
+    const campaign::CampaignConstants& constants) {
+  std::vector<campaign::Prime> primes = campaign::sieve_tile(coord, constants);
+  std::sort(primes.begin(), primes.end(), [](const campaign::Prime& lhs,
+                                             const campaign::Prime& rhs) {
+    return lhs.packed_pos < rhs.packed_pos;
+  });
+
+  std::vector<campaign::internal::PrimeGeoFlags> flags;
+  flags.reserve(primes.size());
+  for (const campaign::Prime& prime : primes) {
+    const auto norm_sq = static_cast<std::int64_t>(prime.norm_sq);
+    flags.push_back(campaign::internal::PrimeGeoFlags{
+        campaign::is_inner_prime(norm_sq, constants),
+        campaign::is_outer_prime(norm_sq, constants),
+    });
+  }
+
+  return campaign::internal::build_tileop_for_primes_in_input_order(
+      std::move(primes), std::move(flags), coord, constants);
 }
 
 GpuTileOpResult gpu_tileop_or_pending(const campaign::TileCoord&,

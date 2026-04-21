@@ -40,4 +40,10 @@ TileOp build_tileop_for_primes(std::vector<Prime> primes,
                                const TileCoord& coord,
                                const CampaignConstants& constants);
 
+TileOp build_tileop_for_primes_in_input_order(
+    std::vector<Prime> primes,
+    std::vector<PrimeGeoFlags> prime_flags,
+    const TileCoord& coord,
+    const CampaignConstants& constants);
+
 }  // namespace campaign::internal

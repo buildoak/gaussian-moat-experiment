@@ -74,6 +74,10 @@ set_source_files_properties(src/kernel_face_sort_pack.cu PROPERTIES
 add_executable(cuda_vs_cpu_diff
   apps/cuda_vs_cpu_diff.cpp
 )
+target_include_directories(cuda_vs_cpu_diff
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cpp-campaign-v2/src
+)
 target_link_libraries(cuda_vs_cpu_diff
   PRIVATE
     campaign_cuda

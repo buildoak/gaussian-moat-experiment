@@ -8,6 +8,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "campaign/campaign_constants.h"
@@ -18,6 +19,7 @@
 #include "campaign/tileop.h"
 #include "campaign/union_find.h"
 #include "cuda_campaign/kernels.cuh"
+#include "tileop_internal.h"
 
 namespace {
 
@@ -229,6 +231,46 @@ std::uint8_t prime_geo_bits(const campaign::Prime& prime,
   return bits;
 }
 
+campaign::TileOp build_k5_cpu_tileop_from_gpu_order(
+    const campaign::TileCoord& coord,
+    const campaign::CampaignConstants& constants,
+    const cuda_campaign::K1K4DebugDownload& gpu,
+    std::size_t tile_idx) {
+  const std::uint32_t gpu_count = gpu.prime_count[tile_idx];
+  std::vector<campaign::Prime> primes;
+  primes.reserve(gpu_count);
+  std::vector<campaign::internal::PrimeGeoFlags> flags;
+  flags.reserve(gpu_count);
+
+  for (std::uint32_t prime_idx = 0; prime_idx < gpu_count; ++prime_idx) {
+    const std::size_t offset =
+        tile_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU) +
+        prime_idx;
+    const std::uint32_t packed_pos = gpu.prime_pos[offset];
+    const std::int64_t row =
+        static_cast<std::int64_t>(packed_pos / cuda_campaign::SIDE_EXP);
+    const std::int64_t col =
+        static_cast<std::int64_t>(packed_pos % cuda_campaign::SIDE_EXP);
+    const std::int64_t a =
+        coord.a_lo + col - static_cast<std::int64_t>(cuda_campaign::C);
+    const std::int64_t b =
+        coord.b_lo + row - static_cast<std::int64_t>(cuda_campaign::C);
+    const auto norm_sq = static_cast<std::uint64_t>(
+        static_cast<__int128>(a) * static_cast<__int128>(a) +
+        static_cast<__int128>(b) * static_cast<__int128>(b));
+    primes.push_back(campaign::Prime{a, b, norm_sq, packed_pos});
+
+    const std::uint8_t bits = gpu.prime_geo_bits[offset] & 0x3U;
+    flags.push_back(campaign::internal::PrimeGeoFlags{
+        (bits & 0x1U) != 0,
+        (bits & 0x2U) != 0,
+    });
+  }
+
+  return campaign::internal::build_tileop_for_primes_in_input_order(
+      std::move(primes), std::move(flags), coord, constants);
+}
+
 M4ExpectedTile build_m4_expected_tile(
     const std::vector<campaign::Prime>& primes,
     const std::vector<std::int32_t>& parent,
@@ -343,8 +385,8 @@ int main(int argc, char** argv) {
 
       for (std::size_t tile_idx = 0; tile_idx < limit; ++tile_idx) {
         const campaign::TileCoord& coord = coords[tile_idx];
-        const campaign::TileOp cpu =
-            campaign::process_tile(coord, constants, grid);
+        const campaign::TileOp cpu = build_k5_cpu_tileop_from_gpu_order(
+            coord, constants, gpu.k1k4, tile_idx);
         const campaign::TileOp& cuda = gpu.tileops[tile_idx];
         if (!same_tileop_bytes(cpu, cuda)) {
           return print_tileop_diff(cpu, cuda, tile_idx, coord,

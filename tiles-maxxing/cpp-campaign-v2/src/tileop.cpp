@@ -207,7 +207,6 @@ TileOp build_tileop_for_primes(std::vector<Prime> primes,
                                std::vector<PrimeGeoFlags> prime_flags,
                                const TileCoord& coord,
                                const CampaignConstants& constants) {
-  (void)constants;
   if (primes.size() != prime_flags.size()) {
     throw std::invalid_argument("prime_flags size must match primes size");
   }
@@ -224,6 +223,20 @@ TileOp build_tileop_for_primes(std::vector<Prime> primes,
   for (std::size_t i = 0; i < zipped.size(); ++i) {
     primes[i] = zipped[i].prime;
     prime_flags[i] = zipped[i].flags;
+  }
+
+  return build_tileop_for_primes_in_input_order(
+      std::move(primes), std::move(prime_flags), coord, constants);
+}
+
+TileOp build_tileop_for_primes_in_input_order(
+    std::vector<Prime> primes,
+    std::vector<PrimeGeoFlags> prime_flags,
+    const TileCoord& coord,
+    const CampaignConstants& constants) {
+  (void)constants;
+  if (primes.size() != prime_flags.size()) {
+    throw std::invalid_argument("prime_flags size must match primes size");
   }
 
   TileOp out{};
