@@ -207,9 +207,9 @@ std::vector<campaign::Prime> gpu_compact_primes(
     const std::int64_t col =
         static_cast<std::int64_t>(packed_pos % cuda_campaign::SIDE_EXP);
     const std::int64_t a =
-        coord.a_lo + row - static_cast<std::int64_t>(cuda_campaign::C);
+        coord.a_lo + col - static_cast<std::int64_t>(cuda_campaign::C);
     const std::int64_t b =
-        coord.b_lo + col - static_cast<std::int64_t>(cuda_campaign::C);
+        coord.b_lo + row - static_cast<std::int64_t>(cuda_campaign::C);
     const std::uint64_t norm_sq =
         static_cast<std::uint64_t>(a * a) + static_cast<std::uint64_t>(b * b);
     ordered.push_back(campaign::Prime{a, b, norm_sq, packed_pos});

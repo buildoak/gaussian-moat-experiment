@@ -71,16 +71,17 @@ __global__ void kernel_mr(const campaign::TileCoord* __restrict__ coords,
       continue;
     }
 
+    // K1 scans fixed-a rows; K3-K5 consume canonical row=b, col=a bitmaps.
     if (ca == 0 || cb == 0) {
       if (is_axis_gaussian_prime_gpu(ca, cb, d_fj64_table)) {
-        gpu_bitmap_set_global(tile_bitmap, cand_row, cand_col);
+        gpu_bitmap_set_global(tile_bitmap, cand_col, cand_row);
       }
       continue;
     }
 
     if ((norm == 2ULL) ||
         (((norm & 3ULL) == 1ULL) && is_prime_fj64_gpu(norm, d_fj64_table))) {
-      gpu_bitmap_set_global(tile_bitmap, cand_row, cand_col);
+      gpu_bitmap_set_global(tile_bitmap, cand_col, cand_row);
     }
   }
 }

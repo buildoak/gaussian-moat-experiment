@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+cmake_minimum_required(VERSION 3.22)
 
 if(NOT DEFINED K_SQ)
   set(K_SQ 36 CACHE STRING "Squared step bound for the campaign")
@@ -171,6 +171,14 @@ endforeach()
 
 add_test(NAME test_stub_roundtrip COMMAND test_stub_roundtrip)
 add_test(NAME cuda_vs_cpu_diff_one_tile COMMAND cuda_vs_cpu_diff --r-inner 100 --r-outer 500 --limit 1)
+add_test(NAME campaign_main_cuda_small_octant
+  COMMAND campaign_main_cuda
+    --k-sq=${K_SQ}
+    --r-inner 100
+    --r-outer 500
+    --region full-octant
+    --out /tmp/campaign_main_cuda_small_octant.bin
+    --chunk-size 64)
 
 foreach(k3k4_test
     test_k3k4_parent_parity
