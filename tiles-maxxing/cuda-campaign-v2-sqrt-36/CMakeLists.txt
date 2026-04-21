@@ -26,6 +26,7 @@ add_library(campaign_cuda STATIC
   src/constants_upload.cu
   src/kernel_sieve.cu
   src/kernel_mr.cu
+  src/kernel_compact.cu
   src/kernel_uf_v2.cu
 )
 target_include_directories(campaign_cuda
@@ -47,6 +48,9 @@ set_target_properties(campaign_cuda PROPERTIES
 )
 set_source_files_properties(src/kernel_sieve.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
+)
+set_source_files_properties(src/kernel_compact.cu PROPERTIES
+  COMPILE_FLAGS "--maxrregcount=32"
 )
 set_source_files_properties(src/kernel_uf_v2.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
