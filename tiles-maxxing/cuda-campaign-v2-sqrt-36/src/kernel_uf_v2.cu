@@ -117,8 +117,8 @@ static __device__ __forceinline__ std::uint8_t geo_bits_for_prime_pos_uf(
     const DeviceCampaignConstants& constants) {
   const std::int64_t row = static_cast<std::int64_t>(packed_pos / SIDE_EXP);
   const std::int64_t col = static_cast<std::int64_t>(packed_pos % SIDE_EXP);
-  const std::int64_t a = coord.a_lo + col - static_cast<std::int64_t>(C);
-  const std::int64_t b = coord.b_lo + row - static_cast<std::int64_t>(C);
+  const std::int64_t a = coord.a_lo + row - static_cast<std::int64_t>(C);
+  const std::int64_t b = coord.b_lo + col - static_cast<std::int64_t>(C);
   const std::uint64_t norm_sq =
       static_cast<std::uint64_t>(a * a) + static_cast<std::uint64_t>(b * b);
   return geo_bits_for_norm_sq_uf(norm_sq, constants);
