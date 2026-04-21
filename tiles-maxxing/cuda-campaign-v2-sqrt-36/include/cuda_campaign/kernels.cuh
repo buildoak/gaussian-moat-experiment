@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "campaign/campaign_constants.h"
 #include "campaign/grid.h"
@@ -18,11 +19,36 @@ namespace cuda_campaign {
 
 campaign::TileOp run_stub_passthrough(const campaign::TileOp& cpu_result);
 
+struct K1K4Buffers {
+  const campaign::TileCoord* d_coords = nullptr;
+  std::uint32_t* d_cand_list = nullptr;
+  std::uint32_t* d_total_cands = nullptr;
+  std::uint32_t* d_bitmap = nullptr;
+  const std::uint16_t* d_fj64_table = nullptr;
+  CompactBuffers compact;
+  UfBuffers uf;
+};
+
+struct K1K4DebugDownload {
+  std::vector<std::uint32_t> prime_count;
+  std::vector<std::uint32_t> prime_pos;
+  std::vector<std::uint16_t> parent;
+};
+
 void upload_cuda_constants(const campaign::CampaignConstants& constants);
 void upload_sieve_tables();
 void upload_backward_offsets();
 void upload_fj64_table(std::uint16_t** d_fj64_table);
 void free_fj64_table(std::uint16_t* d_fj64_table);
+
+void launch_k1_to_k4(const K1K4Buffers& buffers,
+                     int num_tiles,
+                     cudaStream_t stream = nullptr);
+
+K1K4DebugDownload run_k1_to_k4_debug(
+    const std::vector<campaign::TileCoord>& coords,
+    const campaign::CampaignConstants& constants,
+    cudaStream_t stream = nullptr);
 
 void launch_kernel_sieve(const campaign::TileCoord* d_coords,
                          std::uint32_t* d_cand_list,

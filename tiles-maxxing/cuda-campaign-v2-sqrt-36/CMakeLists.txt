@@ -28,6 +28,7 @@ add_library(campaign_cuda STATIC
   src/kernel_mr.cu
   src/kernel_compact.cu
   src/kernel_uf_v2.cu
+  src/host_driver.cpp
 )
 target_include_directories(campaign_cuda
   PUBLIC
