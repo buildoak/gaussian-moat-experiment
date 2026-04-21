@@ -23,10 +23,15 @@ add_subdirectory(../cpp-campaign-v2 cpp_campaign_v2_build EXCLUDE_FROM_ALL)
 
 add_library(campaign_cuda STATIC
   src/stub_passthrough.cu
+  src/constants_upload.cu
+  src/kernel_sieve.cu
+  src/kernel_mr.cu
 )
 target_include_directories(campaign_cuda
   PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cpp-campaign-v2/src
 )
 target_link_libraries(campaign_cuda
   PUBLIC
@@ -38,6 +43,9 @@ target_compile_definitions(campaign_cuda
 )
 set_target_properties(campaign_cuda PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
+)
+set_source_files_properties(src/kernel_sieve.cu PROPERTIES
+  COMPILE_FLAGS "--maxrregcount=40"
 )
 
 add_executable(cuda_vs_cpu_diff
