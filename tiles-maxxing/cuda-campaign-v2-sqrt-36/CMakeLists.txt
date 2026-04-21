@@ -87,6 +87,22 @@ target_compile_definitions(cuda_vs_cpu_diff
     K_SQ=${K_SQ}
 )
 
+add_executable(campaign_main_cuda
+  apps/campaign_main_cuda.cpp
+)
+target_include_directories(campaign_main_cuda
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cpp-campaign-v2/src
+)
+target_link_libraries(campaign_main_cuda
+  PRIVATE
+    campaign_cuda
+)
+target_compile_definitions(campaign_main_cuda
+  PRIVATE
+    K_SQ=${K_SQ}
+)
+
 enable_testing()
 
 add_library(k3k4_parity_support STATIC
