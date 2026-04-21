@@ -17,6 +17,42 @@ __device__ __forceinline__ void write_flag_tileop(TileOp* out,
   out->tile_flags = flag;
 }
 
+__device__ __forceinline__ void bit_set(std::uint8_t* flags,
+                                        int group_label_1based) {
+  const int g0 = group_label_1based - 1;
+  flags[g0 >> 3] |= static_cast<std::uint8_t>(1u << (g0 & 7));
+}
+
+__device__ __forceinline__ void unpack_group_flags(
+    TileOp* out,
+    const std::uint8_t* __restrict__ tile_group_flags) {
+  if (tile_group_flags == nullptr) return;
+  if (threadIdx.x != 0) return;
+  for (int g0 = 0; g0 < MAX_GROUPS_PER_TILE; ++g0) {
+    const std::uint8_t bits = tile_group_flags[g0] & 0x3U;
+    const int label = g0 + 1;
+    if ((bits & 0x1U) != 0) {
+      bit_set(out->inner_flags, label);
+    }
+    if ((bits & 0x2U) != 0) {
+      bit_set(out->outer_flags, label);
+    }
+  }
+}
+
+__device__ __forceinline__ void zero_face_debug_counts(
+    std::uint16_t* __restrict__ tile_face_counts,
+    std::uint16_t* __restrict__ tile_face_rep_counts) {
+  if (threadIdx.x < NUM_FACES) {
+    if (tile_face_counts != nullptr) {
+      tile_face_counts[threadIdx.x] = 0;
+    }
+    if (tile_face_rep_counts != nullptr) {
+      tile_face_rep_counts[threadIdx.x] = 0;
+    }
+  }
+}
+
 __device__ __forceinline__ std::int64_t face_perp_from_packed(
     std::uint32_t packed,
     Face face) {
@@ -205,6 +241,7 @@ __global__ void kernel_face_encode_v2(
     const std::uint8_t* __restrict__ d_remap_overflow,
     const std::uint16_t* __restrict__ d_parent,
     const std::uint16_t* __restrict__ d_wire_label_by_raw_root,
+    const std::uint8_t* __restrict__ d_group_flags,
     TileOp* __restrict__ d_tileops,
     std::uint16_t* __restrict__ d_face_indices,
     std::uint16_t* __restrict__ d_face_counts,
@@ -220,8 +257,23 @@ __global__ void kernel_face_encode_v2(
   const bool remap_overflow =
       d_remap_overflow != nullptr && d_remap_overflow[tile_idx] != 0;
   TileOp* out = d_tileops + static_cast<std::size_t>(tile_idx);
+  const std::uint8_t* tile_group_flags =
+      d_group_flags == nullptr
+          ? nullptr
+          : d_group_flags + static_cast<std::size_t>(tile_idx) * 256U;
+  std::uint16_t* tile_face_counts =
+      d_face_counts == nullptr
+          ? nullptr
+          : d_face_counts + static_cast<std::size_t>(tile_idx) *
+                                FACE_COUNT_STRIDE;
+  std::uint16_t* tile_face_rep_counts =
+      d_face_rep_counts == nullptr
+          ? nullptr
+          : d_face_rep_counts + static_cast<std::size_t>(tile_idx) *
+                                    FACE_COUNT_STRIDE;
 
   if (prime_count == 0) {
+    zero_face_debug_counts(tile_face_counts, tile_face_rep_counts);
     if (tid == 0) {
       write_flag_tileop(out, EMPTY_BIT);
     }
@@ -229,6 +281,7 @@ __global__ void kernel_face_encode_v2(
   }
 
   if (remap_overflow) {
+    zero_face_debug_counts(tile_face_counts, tile_face_rep_counts);
     if (tid == 0) {
       write_flag_tileop(out, OVERFLOW_BIT);
     }
@@ -238,6 +291,8 @@ __global__ void kernel_face_encode_v2(
   if (tid == 0) {
     write_flag_tileop(out, 0);
   }
+  __syncthreads();
+  unpack_group_flags(out, tile_group_flags);
 
   const int bounded = prime_count < MAX_PRIMES_GPU
                           ? static_cast<int>(prime_count)
@@ -258,11 +313,6 @@ __global__ void kernel_face_encode_v2(
           ? nullptr
           : d_face_indices + static_cast<std::size_t>(tile_idx) * NUM_FACES *
                                  FACE_INDEX_STRIDE;
-  std::uint16_t* tile_face_counts =
-      d_face_counts == nullptr
-          ? nullptr
-          : d_face_counts + static_cast<std::size_t>(tile_idx) *
-                                FACE_COUNT_STRIDE;
   std::uint16_t* tile_face_roots =
       d_face_roots == nullptr
           ? nullptr
@@ -273,11 +323,6 @@ __global__ void kernel_face_encode_v2(
           ? nullptr
           : d_face_reps + static_cast<std::size_t>(tile_idx) * NUM_FACES *
                               FACE_REP_STRIDE;
-  std::uint16_t* tile_face_rep_counts =
-      d_face_rep_counts == nullptr
-          ? nullptr
-          : d_face_rep_counts + static_cast<std::size_t>(tile_idx) *
-                                    FACE_COUNT_STRIDE;
 
   if (tile_face_indices == nullptr || tile_face_counts == nullptr) {
     return;
@@ -317,7 +362,8 @@ void launch_kernel_face_encode_v2(const FaceEncodeBuffers& buffers,
   kernel_face_encode_v2<<<num_tiles, BLOCK_THREADS, 0, stream>>>(
       buffers.in.d_coords, buffers.in.d_prime_pos, buffers.in.d_prime_count,
       buffers.in.d_remap_overflow, buffers.in.d_parent,
-      buffers.in.d_wire_label_by_raw_root, buffers.d_tileops,
+      buffers.in.d_wire_label_by_raw_root, buffers.in.d_group_flags,
+      buffers.d_tileops,
       buffers.debug.d_face_indices, buffers.debug.d_face_counts,
       buffers.debug.d_face_roots, buffers.debug.d_face_reps,
       buffers.debug.d_face_rep_counts, num_tiles);

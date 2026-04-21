@@ -31,6 +31,7 @@ struct FaceEncodeInputBuffers {
   const std::uint8_t* d_remap_overflow = nullptr;       // [N], optional
   const std::uint16_t* d_parent = nullptr;              // [N * MAX_PRIMES_GPU], optional
   const std::uint16_t* d_wire_label_by_raw_root = nullptr; // [N * MAX_PRIMES_GPU], optional
+  const std::uint8_t* d_group_flags = nullptr;          // [N * 256], optional
 };
 
 struct FaceEncodeDebugBuffers {

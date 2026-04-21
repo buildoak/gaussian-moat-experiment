@@ -121,6 +121,7 @@ void launch_k1_to_k5(const K1K5Buffers& buffers,
   face_encode.in.d_parent = buffers.k1k4.uf.out.d_parent;
   face_encode.in.d_wire_label_by_raw_root =
       buffers.k1k4.uf.out.d_wire_label_by_raw_root;
+  face_encode.in.d_group_flags = buffers.k1k4.uf.out.d_group_flags;
   face_encode.d_tileops = buffers.d_tileops;
   face_encode.debug = buffers.face_debug;
   launch_kernel_face_encode_v2(face_encode, num_tiles, stream);

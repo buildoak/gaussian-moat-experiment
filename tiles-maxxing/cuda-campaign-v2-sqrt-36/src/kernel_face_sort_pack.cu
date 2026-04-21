@@ -37,6 +37,18 @@ __device__ __forceinline__ void zero_tileop(TileOp* out) {
   }
 }
 
+__device__ __forceinline__ void zero_sort_payload(TileOp* out) {
+  for (int i = 0; i < NUM_FACES; ++i) {
+    out->n[i] = 0;
+  }
+  for (int i = 0; i < MAX_PORTS_PER_TILE; ++i) {
+    out->face_groups[i] = 0;
+  }
+  for (int i = 0; i < static_cast<int>(sizeof(out->reserved)); ++i) {
+    out->reserved[i] = 0;
+  }
+}
+
 __global__ void kernel_face_sort_pack(
     const FaceRepresentative* __restrict__ d_face_reps,
     const std::uint16_t* __restrict__ d_face_rep_counts,
@@ -56,7 +68,7 @@ __global__ void kernel_face_sort_pack(
   TileOp* out = d_tileops + static_cast<std::size_t>(tile_idx);
 
   if (tid == 0) {
-    zero_tileop(out);
+    zero_sort_payload(out);
     overflow = 0;
   }
   if (tid < NUM_FACES) {
@@ -72,7 +84,7 @@ __global__ void kernel_face_sort_pack(
     std::uint32_t sum = 0;
     for (int face = 0; face < NUM_FACES; ++face) {
       sum += counts[face];
-      if (counts[face] > MAX_PORTS_PER_TILE) {
+      if (counts[face] > 255U) {
         overflow = 1;
       }
     }
@@ -80,6 +92,7 @@ __global__ void kernel_face_sort_pack(
       overflow = 1;
     }
     if (overflow != 0) {
+      zero_tileop(out);
       out->tile_flags = OVERFLOW_BIT;
     }
   }
