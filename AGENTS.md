@@ -2,10 +2,28 @@
 
 Orientation for agents about to build or modify campaigns. Read top-to-bottom before touching code. Every section earns its space.
 
-## Current State (2026-04-19)
+## Ground Truth — Tsuchimura's Moat (k²=36)
+
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| **Paper** | METR 2004-13 | Tsuchimura, 2004 |
+| **k²** | 36 | Step size k = 6 |
+| **Moat boundary** | **80,015,782** | Distance from origin where connectivity terminates |
+| **Interpretation** | R_outer < 80,015,782 → SPANNING expected | R_outer ≥ 80,015,782 → MOAT expected |
+
+The moat boundary is the **farthest point reachable** from origin via Gaussian prime steps ≤6. Any annulus with R_outer below this value should show SPANNING (connectivity exists). The moat appears somewhere just past 80,015,782.
+
+**Local reference:** `~/thinking/pratchett-os/centerpiece/research/gaussian-moat/2026-03-15-tsuchimura-baseline-reconstruction.md` (Appendix B reconstruction from paper Section 4 / Table page 9).
+
+**Validation checkpoint:** A correct implementation at k²=36 MUST return SPANNING for R=80M (R_outer=80,008,192) and MOAT for R values past 80,015,782.
+
+---
+
+## Current State (2026-04-22)
 
 - **Blueprint v3 canonical.** `methodology/lemmas_v2/campaign-blueprint.md` supersedes the sqrt-36/40 pipelines.
-- **No running compute.** RTX 4090 instance destroyed 2026-04-14 after artifact verification.
+- **RTX 4090 instance active.** vast.ai ID 35378303 — destroy when audit complete.
+- **K1 overflow bug identified (2026-04-22).** `kernel_sieve.cu` silently truncates candidates at MAX_CANDIDATES_GPU without setting overflow flag. Can cause false MOAT. Fix in progress.
 - **campaign-sqrt-36-v2 pending build.** v1 campaigns (`campaign-sqrt-36`, `campaign-sqrt-40`) are stale — use as directory templates only, not as reference for geometry or compositor math.
 - **BZ pre-build soundness gate pending.** `build/bz_check.py` not yet implemented. Build must fail if BZ interval is non-empty.
 
@@ -174,7 +192,7 @@ Build flags: `-arch=sm_87 -O3 -std=c++17 --expt-relaxed-constexpr -lineinfo`. Tu
 Operational docs and deploy scripts in `tiles-maxxing/vast-ai/`. Read `vast-ai/README.md` for the full workflow.
 
 1. **tmux for everything.** SSH drops are common. Any command over 5 seconds runs in tmux.
-2. **DESTROY instances when done.** `vastai destroy instance $ID`. Verify with `vastai show instances`. Never leave instances running.
+2. **Do NOT destroy vast.ai instances unless explicitly asked by the user.** If cleanup is needed, use `vastai destroy instance $ID` and verify with `vastai show instances`.
 3. **Pin SSH endpoint once.** Cache port and host at session start. Never re-resolve mid-run.
 4. **Patch `-arch` flag on remote.** Makefile defaults to `sm_87` (Jetson). Change to `sm_86` (3090), `sm_89` (4090), or `sm_80` (A100) on the remote instance. Do not modify the local Makefile.
 5. **Budget awareness.** Track via `vastai show instances`. 3090 ~$0.13/hr, 4090 ~$0.27/hr. Destroy immediately after work.
