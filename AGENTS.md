@@ -17,13 +17,39 @@ The moat boundary is the **farthest point reachable** from origin via Gaussian p
 
 **Validation checkpoint:** A correct implementation at k²=36 MUST return SPANNING for R=80M (R_outer=80,008,192) and MOAT for R values past 80,015,782.
 
+### ✓ v2 Solver Verification — 2026-04-22
+
+**CUDA v2 solver independently confirmed the Tsuchimura result.**
+
+| | Value |
+|---|---|
+| Transition found | R_outer ∈ **(80,015,782, 80,015,790)** |
+| Tsuchimura's exact value (80,015,782) | **SPANNING** |
+| 80,015,790 | **MOAT** |
+| Tsuchimura (2004) | **80,015,782** |
+| Match | **YES — moat is just past Tsuchimura's value** |
+
+Fix commits: `92b3c9a` (K1 overflow), `20f136e` (K4 visible-group remap). Session: `agent-a1b92e62ba5592ec3`. Knowledge base note: `centerpiece/research/gaussian-moat/2026-04-22-v2-solver-moat-verification.md`.
+
+---
+
+## Throughput (2026-04-22, RTX 4090)
+
+| Metric | Value | Notes |
+|--------|------:|-------|
+| CUDA kernels (K1-K5) | **69K tiles/s** | Pure GPU time |
+| Total pipeline | **63K tiles/s** | +compositor +snapshot |
+| Legacy benchmark | ~155K tiles/s | From earlier docs |
+
+Current throughput is ~45% of legacy. Possible causes: different tile size, R_outer scale, added per-tile work (geo flags, visible-root remap, overflow checks). **TODO:** Investigate perf gap if it matters for larger campaigns.
+
 ---
 
 ## Current State (2026-04-22)
 
 - **Blueprint v3 canonical.** `methodology/lemmas_v2/campaign-blueprint.md` supersedes the sqrt-36/40 pipelines.
-- **RTX 4090 instance active.** vast.ai ID 35378303 — destroy when audit complete.
-- **K1 overflow bug identified (2026-04-22).** `kernel_sieve.cu` silently truncates candidates at MAX_CANDIDATES_GPU without setting overflow flag. Can cause false MOAT. Fix in progress.
+- **K1 overflow + K4 visible-remap bugs FIXED.** Commits `92b3c9a`, `20f136e`. All overflow counters now 0 at R=80M.
+- **Moat boundary verified.** Exact bracket (80,015,782, 80,015,790): Tsuchimura's value 80,015,782 returns SPANNING, 80,015,790 returns MOAT. Moat is just past Tsuchimura's value.
 - **campaign-sqrt-36-v2 pending build.** v1 campaigns (`campaign-sqrt-36`, `campaign-sqrt-40`) are stale — use as directory templates only, not as reference for geometry or compositor math.
 - **BZ pre-build soundness gate pending.** `build/bz_check.py` not yet implemented. Build must fail if BZ interval is non-empty.
 
