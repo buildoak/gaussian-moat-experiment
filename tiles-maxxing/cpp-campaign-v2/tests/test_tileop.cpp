@@ -81,6 +81,53 @@ TEST(TileOp, DenseRemapCanonicalFourRootFixture) {
   EXPECT_EQ(remap.zero_based_by_raw_root[88], 3);
 }
 
+TEST(TileOp, DenseRemapLabelsOnlyVisibleRoots) {
+  const campaign::TileCoord coord = origin_coord();
+  std::vector<campaign::Prime> primes;
+  std::vector<campaign::internal::PrimeGeoFlags> flags;
+  primes.reserve(campaign::MAX_GROUPS_PER_TILE + 1);
+  flags.reserve(campaign::MAX_GROUPS_PER_TILE + 1);
+
+  for (int y = 0; y < 9; ++y) {
+    for (int x = 0; x < 15; ++x) {
+      if (static_cast<int>(primes.size()) > campaign::MAX_GROUPS_PER_TILE) {
+        break;
+      }
+      primes.push_back(make_prime(coord.a_lo + 20 + 12 * x,
+                                  coord.b_lo + 20 + 12 * y));
+      flags.push_back(campaign::internal::PrimeGeoFlags{});
+    }
+  }
+
+  const campaign::TileOp op = campaign::internal::build_tileop_for_primes(
+      std::move(primes), std::move(flags), coord, test_constants());
+
+  EXPECT_EQ(op.tile_flags, 0);
+  EXPECT_EQ(op.n[0], 0);
+  EXPECT_EQ(op.n[1], 0);
+  EXPECT_EQ(op.n[2], 0);
+  EXPECT_EQ(op.n[3], 0);
+  for (std::uint8_t byte : op.inner_flags) {
+    EXPECT_EQ(byte, 0);
+  }
+  for (std::uint8_t byte : op.outer_flags) {
+    EXPECT_EQ(byte, 0);
+  }
+}
+
+TEST(TileOp, DenseRemapStillOverflowsVisibleRoots) {
+  const campaign::TileCoord coord = origin_coord();
+  std::vector<campaign::Prime> primes;
+  primes.reserve(campaign::MAX_GROUPS_PER_TILE + 1);
+
+  for (int i = 0; i < campaign::MAX_GROUPS_PER_TILE + 1; ++i) {
+    primes.push_back(make_prime(coord.a_lo + 10 * i, coord.b_lo));
+  }
+
+  const campaign::TileOp op = encode(std::move(primes));
+  EXPECT_EQ(op.tile_flags, campaign::OVERFLOW_BIT);
+}
+
 TEST(TileOp, FaceStripUfHandCaseOnFaceI) {
   std::vector<campaign::Prime> primes = {
       make_prime(1, 1),    make_prime(4, 1),    make_prime(20, 1),

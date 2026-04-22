@@ -89,6 +89,13 @@ bool on_face_strip(const Prime& p, const TileCoord& coord, Face face) noexcept {
          p_perp <= static_cast<std::int64_t>(C);
 }
 
+bool on_any_face_strip(const Prime& p, const TileCoord& coord) noexcept {
+  return on_face_strip(p, coord, Face::I) ||
+         on_face_strip(p, coord, Face::O) ||
+         on_face_strip(p, coord, Face::L) ||
+         on_face_strip(p, coord, Face::R);
+}
+
 std::vector<Port> build_face_ports(const std::vector<Prime>& primes,
                                    DSU* local_dsu,
                                    const DenseRemap& remap,
@@ -178,6 +185,52 @@ DenseRemap dense_remap_roots(DSU* dsu, std::int32_t prime_count) {
   return dense_remap_raw_roots_for_test(raw_roots, prime_count);
 }
 
+DenseRemap dense_remap_visible_roots(
+    DSU* dsu,
+    const std::vector<Prime>& primes,
+    const std::vector<PrimeGeoFlags>& prime_flags,
+    const TileCoord& coord) {
+  const auto prime_count = static_cast<std::int32_t>(primes.size());
+  DenseRemap remap;
+  remap.zero_based_by_raw_root.assign(static_cast<std::size_t>(prime_count), -1);
+  remap.wire_label_by_raw_root.assign(static_cast<std::size_t>(prime_count), 0);
+
+  std::vector<std::uint8_t> visible_by_raw_root(
+      static_cast<std::size_t>(prime_count), 0);
+  for (std::int32_t i = 0; i < prime_count; ++i) {
+    const auto& flags = prime_flags[static_cast<std::size_t>(i)];
+    if (!flags.inner && !flags.outer &&
+        !on_any_face_strip(primes[static_cast<std::size_t>(i)], coord)) {
+      continue;
+    }
+    const std::int32_t raw_root = dsu->find(i);
+    visible_by_raw_root[static_cast<std::size_t>(raw_root)] = 1;
+  }
+
+  for (std::int32_t i = 0; i < prime_count; ++i) {
+    const std::int32_t raw_root = dsu->find(i);
+    if (!visible_by_raw_root[static_cast<std::size_t>(raw_root)]) {
+      continue;
+    }
+
+    auto& zero_based =
+        remap.zero_based_by_raw_root[static_cast<std::size_t>(raw_root)];
+    if (zero_based >= 0) continue;
+
+    if (remap.max_label >= MAX_GROUPS_PER_TILE) {
+      remap.overflow = true;
+      return remap;
+    }
+
+    zero_based = remap.max_label;
+    remap.wire_label_by_raw_root[static_cast<std::size_t>(raw_root)] =
+        static_cast<std::uint8_t>(remap.max_label + 1);
+    ++remap.max_label;
+  }
+
+  return remap;
+}
+
 DenseRemap dense_remap_raw_roots_for_test(const std::vector<std::int32_t>& raw_roots,
                                           std::int32_t raw_root_bound) {
   DenseRemap remap;
@@ -247,7 +300,7 @@ TileOp build_tileop_for_primes_in_input_order(
 
   DSU local_dsu = build_local_dsu(primes);
   DenseRemap remap =
-      dense_remap_roots(&local_dsu, static_cast<std::int32_t>(primes.size()));
+      dense_remap_visible_roots(&local_dsu, primes, prime_flags, coord);
   if (remap.overflow) {
     return overflow_tileop();
   }

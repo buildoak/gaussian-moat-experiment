@@ -124,6 +124,20 @@ static __device__ __forceinline__ std::uint8_t geo_bits_for_prime_pos_uf(
   return geo_bits_for_norm_sq_uf(norm_sq, constants);
 }
 
+static __device__ __forceinline__ bool on_any_face_strip_uf(
+    std::uint32_t packed_pos) {
+  const std::int64_t row = static_cast<std::int64_t>(packed_pos / SIDE_EXP);
+  const std::int64_t col = static_cast<std::int64_t>(packed_pos % SIDE_EXP);
+  const std::int64_t rel_row = row - C;
+  const std::int64_t rel_col = col - C;
+  const std::int64_t c = static_cast<std::int64_t>(C);
+  const std::int64_t s = static_cast<std::int64_t>(S);
+  return (-c <= rel_row && rel_row <= c) ||
+         (-c <= rel_row - s && rel_row - s <= c) ||
+         (-c <= rel_col && rel_col <= c) ||
+         (-c <= rel_col - s && rel_col - s <= c);
+}
+
 static __device__ __forceinline__ void atomic_or_u8(std::uint8_t* ptr,
                                                     std::uint8_t value) {
   auto* word_ptr = reinterpret_cast<unsigned int*>(
@@ -272,14 +286,30 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
   __syncthreads();
 
   // CORRECTNESS: DO NOT PARALLELIZE. CPU dense-remap labels are assigned by
-  // first appearance while scanning compressed roots in ascending prime index.
+  // first appearance while scanning compressed roots in ascending prime index,
+  // after filtering to roots visible to the TileOp wire format.
   // Root-ID sorting or atomic counter schemes permute TileOp group labels.
   if (tid == 0 && tile_wire_label_by_raw_root != nullptr) {
+    constexpr std::uint16_t kVisibleRoot = 0xffffU;
+    for (int i = 0; i < bounded; ++i) {
+      const std::uint8_t bits =
+          tile_prime_geo_bits == nullptr ? 0 : (tile_prime_geo_bits[i] & 0x3U);
+      if (bits == 0 && !on_any_face_strip_uf(tile_prime_pos[i])) {
+        continue;
+      }
+      const std::uint16_t raw_root = tile_parent[i];
+      tile_wire_label_by_raw_root[raw_root] = kVisibleRoot;
+    }
+
     std::uint16_t next_label = 1;
     bool overflow = false;
     for (int i = 0; i < bounded; ++i) {
       const std::uint16_t raw_root = tile_parent[i];
-      if (tile_wire_label_by_raw_root[raw_root] != 0) {
+      const std::uint16_t current = tile_wire_label_by_raw_root[raw_root];
+      if (current == 0) {
+        continue;
+      }
+      if (current != kVisibleRoot) {
         continue;
       }
       if (next_label > MAX_GROUPS_PER_TILE) {

@@ -32,6 +32,12 @@ DSU build_local_dsu(const std::vector<Prime>& primes);
 
 DenseRemap dense_remap_roots(DSU* dsu, std::int32_t prime_count);
 
+DenseRemap dense_remap_visible_roots(
+    DSU* dsu,
+    const std::vector<Prime>& primes,
+    const std::vector<PrimeGeoFlags>& prime_flags,
+    const TileCoord& coord);
+
 DenseRemap dense_remap_raw_roots_for_test(const std::vector<std::int32_t>& raw_roots,
                                           std::int32_t raw_root_bound);
 
