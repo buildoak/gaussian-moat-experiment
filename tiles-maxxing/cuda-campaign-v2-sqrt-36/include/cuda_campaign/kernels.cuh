@@ -25,8 +25,10 @@ struct K1K4Buffers {
   const campaign::TileCoord* d_coords = nullptr;
   std::uint32_t* d_cand_list = nullptr;
   std::uint32_t* d_total_cands = nullptr;
+  std::uint32_t* d_k1_overflow = nullptr;
   std::uint32_t* d_bitmap = nullptr;
   const std::uint16_t* d_fj64_table = nullptr;
+  int k1_candidate_capacity = MAX_CANDIDATES_GPU;
   CompactBuffers compact;
   UfBuffers uf;
 };
@@ -80,12 +82,15 @@ K1K4DebugDownload run_k1_to_k4_debug(
 K1K5DebugDownload run_k1_to_k5_debug(
     const std::vector<campaign::TileCoord>& coords,
     const campaign::CampaignConstants& constants,
+    int k1_candidate_capacity = MAX_CANDIDATES_GPU,
     cudaStream_t stream = nullptr);
 
 void launch_kernel_sieve(const campaign::TileCoord* d_coords,
                          std::uint32_t* d_cand_list,
                          std::uint32_t* d_total_cands,
+                         std::uint32_t* d_k1_overflow,
                          int num_tiles,
+                         int candidate_capacity = MAX_CANDIDATES_GPU,
                          cudaStream_t stream = nullptr);
 
 void launch_kernel_mr(const campaign::TileCoord* d_coords,

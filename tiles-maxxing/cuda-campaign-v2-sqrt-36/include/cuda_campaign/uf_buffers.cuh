@@ -12,6 +12,7 @@ struct UfInputBuffers {
   const std::uint32_t* d_prime_pos = nullptr;    // [N * MAX_PRIMES_GPU]
   const std::uint32_t* d_prime_count = nullptr;  // [N]
   const campaign::TileCoord* d_coords = nullptr; // [N], optional for M4 geo staging
+  const std::uint32_t* d_prior_overflow = nullptr; // [N], optional K1 overflow
 };
 
 struct UfOutputBuffers {

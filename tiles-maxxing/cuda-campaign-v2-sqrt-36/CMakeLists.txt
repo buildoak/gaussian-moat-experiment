@@ -180,6 +180,19 @@ add_test(NAME campaign_main_cuda_small_octant
     --out /tmp/campaign_main_cuda_small_octant.bin
     --chunk-size 64)
 
+add_executable(test_k1_overflow_spanning
+  tests/test_k1_overflow_spanning.cpp
+)
+target_link_libraries(test_k1_overflow_spanning
+  PRIVATE
+    campaign_cuda
+)
+target_compile_definitions(test_k1_overflow_spanning
+  PRIVATE
+    K_SQ=${K_SQ}
+)
+add_test(NAME test_k1_overflow_spanning COMMAND test_k1_overflow_spanning)
+
 foreach(k3k4_test
     test_k3k4_parent_parity
     test_dense_remap_adversarial

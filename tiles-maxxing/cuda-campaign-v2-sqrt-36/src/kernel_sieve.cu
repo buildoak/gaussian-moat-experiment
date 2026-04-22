@@ -123,11 +123,20 @@ __device__ void scatter_survivors_clamped_k1(
 __global__ void kernel_sieve(const campaign::TileCoord* __restrict__ coords,
                              std::uint32_t* __restrict__ d_cand_list,
                              std::uint32_t* __restrict__ d_total_cands,
-                             int num_tiles) {
+                             std::uint32_t* __restrict__ d_k1_overflow,
+                             int num_tiles,
+                             int candidate_capacity) {
   const int tile_idx = static_cast<int>(blockIdx.x);
   if (tile_idx >= num_tiles) return;
 
   const int tid = static_cast<int>(threadIdx.x);
+  std::uint32_t capacity =
+      candidate_capacity > 0
+          ? static_cast<std::uint32_t>(candidate_capacity)
+          : static_cast<std::uint32_t>(MAX_CANDIDATES_GPU);
+  if (capacity > static_cast<std::uint32_t>(MAX_CANDIDATES_GPU)) {
+    capacity = static_cast<std::uint32_t>(MAX_CANDIDATES_GPU);
+  }
   const campaign::TileCoord coord = coords[tile_idx];
   const std::int32_t a_start =
       static_cast<std::int32_t>(coord.a_lo - static_cast<std::int64_t>(C));
@@ -137,9 +146,14 @@ __global__ void kernel_sieve(const campaign::TileCoord* __restrict__ coords,
   std::uint32_t* tile_cand_list =
       d_cand_list + static_cast<std::size_t>(tile_idx) * MAX_CANDIDATES_GPU;
   __shared__ std::uint32_t total_cands;
+  __shared__ std::uint32_t overflow;
 
   if (tid == 0) {
     total_cands = 0U;
+    overflow = 0U;
+    if (d_k1_overflow != nullptr) {
+      d_k1_overflow[tile_idx] = 0U;
+    }
   }
   __syncthreads();
 
@@ -151,12 +165,18 @@ __global__ void kernel_sieve(const campaign::TileCoord* __restrict__ coords,
     const std::uint32_t count = count_sieve_survivors_k1(ws);
     if (count > 0U) {
       const std::uint32_t base = atomicAdd(&total_cands, count);
-      if (base + count <= static_cast<std::uint32_t>(MAX_CANDIDATES_GPU)) {
+      if (base + count <= capacity) {
         scatter_survivors_k1(ws, tile_cand_list, static_cast<int>(base), tid);
-      } else if (base < static_cast<std::uint32_t>(MAX_CANDIDATES_GPU)) {
+      } else {
+        atomicExch(&overflow, 1U);
+        if (d_k1_overflow != nullptr) {
+          atomicExch(d_k1_overflow + tile_idx, 1U);
+        }
+      }
+      if (base + count > capacity && base < capacity) {
         scatter_survivors_clamped_k1(
             ws, tile_cand_list, static_cast<int>(base),
-            static_cast<int>(static_cast<std::uint32_t>(MAX_CANDIDATES_GPU) - base),
+            static_cast<int>(capacity - base),
             tid);
       }
     }
@@ -165,8 +185,12 @@ __global__ void kernel_sieve(const campaign::TileCoord* __restrict__ coords,
 
   if (tid == 0) {
     std::uint32_t final_count = total_cands;
-    if (final_count > static_cast<std::uint32_t>(MAX_CANDIDATES_GPU)) {
-      final_count = static_cast<std::uint32_t>(MAX_CANDIDATES_GPU);
+    if (final_count > capacity) {
+      final_count = capacity;
+    }
+    if (d_k1_overflow != nullptr &&
+        (overflow != 0U || total_cands > capacity)) {
+      d_k1_overflow[tile_idx] = 1U;
     }
     d_total_cands[tile_idx] = final_count;
   }
@@ -177,10 +201,13 @@ __global__ void kernel_sieve(const campaign::TileCoord* __restrict__ coords,
 void launch_kernel_sieve(const campaign::TileCoord* d_coords,
                          std::uint32_t* d_cand_list,
                          std::uint32_t* d_total_cands,
+                         std::uint32_t* d_k1_overflow,
                          int num_tiles,
+                         int candidate_capacity,
                          cudaStream_t stream) {
   kernel_sieve<<<num_tiles, BLOCK_THREADS, 0, stream>>>(
-      d_coords, d_cand_list, d_total_cands, num_tiles);
+      d_coords, d_cand_list, d_total_cands, d_k1_overflow, num_tiles,
+      candidate_capacity);
 }
 
 }  // namespace cuda_campaign

@@ -272,18 +272,18 @@ __global__ void kernel_face_encode_v2(
           : d_face_rep_counts + static_cast<std::size_t>(tile_idx) *
                                     FACE_COUNT_STRIDE;
 
-  if (prime_count == 0) {
-    zero_face_debug_counts(tile_face_counts, tile_face_rep_counts);
-    if (tid == 0) {
-      write_flag_tileop(out, EMPTY_BIT);
-    }
-    return;
-  }
-
   if (remap_overflow) {
     zero_face_debug_counts(tile_face_counts, tile_face_rep_counts);
     if (tid == 0) {
       write_flag_tileop(out, OVERFLOW_BIT);
+    }
+    return;
+  }
+
+  if (prime_count == 0) {
+    zero_face_debug_counts(tile_face_counts, tile_face_rep_counts);
+    if (tid == 0) {
+      write_flag_tileop(out, EMPTY_BIT);
     }
     return;
   }

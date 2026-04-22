@@ -273,6 +273,7 @@ void fill_k1k4_buffers(K1K4Buffers* buffers,
                        campaign::TileCoord* d_coords,
                        std::uint32_t* d_cand_list,
                        std::uint32_t* d_total_cands,
+                       std::uint32_t* d_k1_overflow,
                        std::uint32_t* d_bitmap,
                        std::uint16_t* d_fj64_table,
                        std::uint16_t* d_row_prefix,
@@ -288,6 +289,7 @@ void fill_k1k4_buffers(K1K4Buffers* buffers,
   buffers->d_coords = d_coords;
   buffers->d_cand_list = d_cand_list;
   buffers->d_total_cands = d_total_cands;
+  buffers->d_k1_overflow = d_k1_overflow;
   buffers->d_bitmap = d_bitmap;
   buffers->d_fj64_table = d_fj64_table;
   buffers->compact = CompactBuffers{
@@ -301,6 +303,7 @@ void fill_k1k4_buffers(K1K4Buffers* buffers,
       d_prime_pos,
       d_prime_count,
       d_coords,
+      d_k1_overflow,
   };
   buffers->uf.out.d_parent = d_parent;
   buffers->uf.out.d_prime_geo_bits = d_prime_geo_bits;
@@ -317,6 +320,7 @@ std::size_t phase1_bytes_for_tiles(std::size_t tiles) {
       sizeof(campaign::TileCoord) +
       sizeof(std::uint32_t) * MAX_CANDIDATES_GPU +
       sizeof(std::uint32_t) +
+      sizeof(std::uint32_t) +
       sizeof(std::uint32_t) * BITMAP_WORDS;
   return checked_bytes(tiles, per_tile, "phase1");
 }
@@ -328,6 +332,7 @@ std::size_t phase2_bytes_for_tiles(std::size_t tiles) {
   const std::size_t per_tile =
       sizeof(campaign::TileCoord) +
       sizeof(std::uint32_t) * BITMAP_WORDS +
+      sizeof(std::uint32_t) +
       sizeof(std::uint16_t) * ROW_PREFIX_ENTRIES +
       sizeof(std::uint32_t) * prime_slots +
       sizeof(std::uint32_t) +
@@ -361,7 +366,8 @@ void launch_k1_to_k4(const K1K4Buffers& buffers,
                      int num_tiles,
                      cudaStream_t stream) {
   launch_kernel_sieve(buffers.d_coords, buffers.d_cand_list,
-                      buffers.d_total_cands, num_tiles, stream);
+                      buffers.d_total_cands, buffers.d_k1_overflow, num_tiles,
+                      buffers.k1_candidate_capacity, stream);
   check_last_launch("launch_kernel_sieve");
 
   launch_kernel_mr(buffers.d_coords, buffers.d_cand_list, buffers.d_total_cands,
@@ -423,6 +429,7 @@ K1K4DebugDownload run_k1_to_k4_debug(
     DeviceBuffer<campaign::TileCoord> d_coords(tile_count);
     DeviceBuffer<std::uint32_t> d_cand_list(tile_count * MAX_CANDIDATES_GPU);
     DeviceBuffer<std::uint32_t> d_total_cands(tile_count);
+    DeviceBuffer<std::uint32_t> d_k1_overflow(tile_count);
     DeviceBuffer<std::uint32_t> d_bitmap(tile_count * BITMAP_WORDS);
     DeviceBuffer<std::uint16_t> d_row_prefix(tile_count * ROW_PREFIX_ENTRIES);
     DeviceBuffer<std::uint32_t> d_prime_pos(tile_count * MAX_PRIMES_GPU);
@@ -444,6 +451,7 @@ K1K4DebugDownload run_k1_to_k4_debug(
     buffers.d_coords = d_coords.get();
     buffers.d_cand_list = d_cand_list.get();
     buffers.d_total_cands = d_total_cands.get();
+    buffers.d_k1_overflow = d_k1_overflow.get();
     buffers.d_bitmap = d_bitmap.get();
     buffers.d_fj64_table = d_fj64_table;
     buffers.compact = CompactBuffers{
@@ -457,6 +465,7 @@ K1K4DebugDownload run_k1_to_k4_debug(
         d_prime_pos.get(),
         d_prime_count.get(),
         d_coords.get(),
+        d_k1_overflow.get(),
     };
     buffers.uf.out.d_parent = d_parent.get();
     buffers.uf.out.d_prime_geo_bits = d_prime_geo_bits.get();
@@ -524,6 +533,7 @@ K1K4DebugDownload run_k1_to_k4_debug(
 K1K5DebugDownload run_k1_to_k5_debug(
     const std::vector<campaign::TileCoord>& coords,
     const campaign::CampaignConstants& constants,
+    int k1_candidate_capacity,
     cudaStream_t stream) {
   K1K5DebugDownload out;
   if (coords.empty()) {
@@ -548,6 +558,7 @@ K1K5DebugDownload run_k1_to_k5_debug(
     DeviceBuffer<campaign::TileCoord> d_coords(tile_count);
     DeviceBuffer<std::uint32_t> d_cand_list(tile_count * MAX_CANDIDATES_GPU);
     DeviceBuffer<std::uint32_t> d_total_cands(tile_count);
+    DeviceBuffer<std::uint32_t> d_k1_overflow(tile_count);
     DeviceBuffer<std::uint32_t> d_bitmap(tile_count * BITMAP_WORDS);
     DeviceBuffer<std::uint16_t> d_row_prefix(tile_count * ROW_PREFIX_ENTRIES);
     DeviceBuffer<std::uint32_t> d_prime_pos(prime_slots);
@@ -591,8 +602,10 @@ K1K5DebugDownload run_k1_to_k5_debug(
     buffers.k1k4.d_coords = d_coords.get();
     buffers.k1k4.d_cand_list = d_cand_list.get();
     buffers.k1k4.d_total_cands = d_total_cands.get();
+    buffers.k1k4.d_k1_overflow = d_k1_overflow.get();
     buffers.k1k4.d_bitmap = d_bitmap.get();
     buffers.k1k4.d_fj64_table = d_fj64_table;
+    buffers.k1k4.k1_candidate_capacity = k1_candidate_capacity;
     buffers.k1k4.compact = CompactBuffers{
         d_row_prefix.get(),
         d_prime_pos.get(),
@@ -604,6 +617,7 @@ K1K5DebugDownload run_k1_to_k5_debug(
         d_prime_pos.get(),
         d_prime_count.get(),
         d_coords.get(),
+        d_k1_overflow.get(),
     };
     buffers.k1k4.uf.out.d_parent = d_parent.get();
     buffers.k1k4.uf.out.d_prime_geo_bits = d_prime_geo_bits.get();
@@ -818,6 +832,7 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         DeviceBuffer<std::uint32_t> d_cand_list(
             slab_tiles * MAX_CANDIDATES_GPU);
         DeviceBuffer<std::uint32_t> d_total_cands(slab_tiles);
+        DeviceBuffer<std::uint32_t> d_k1_overflow(slab_tiles);
         DeviceBuffer<std::uint32_t> d_bitmap(slab_tiles * BITMAP_WORDS);
 
         check_cuda(cudaMemcpyAsync(d_coords.get(), slot.coords.get(),
@@ -832,7 +847,8 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
 
         const int num_tiles = static_cast<int>(slab_tiles);
         launch_kernel_sieve(d_coords.get(), d_cand_list.get(),
-                            d_total_cands.get(), num_tiles,
+                            d_total_cands.get(), d_k1_overflow.get(),
+                            num_tiles, MAX_CANDIDATES_GPU,
                             streams.compute.get());
         check_last_launch("dispatch launch_kernel_sieve");
         launch_kernel_mr(d_coords.get(), d_cand_list.get(),
@@ -868,12 +884,12 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         DeviceBuffer<std::uint16_t> d_face_rep_counts(face_count_slots);
 
         K1K4Buffers k1k4{};
-        fill_k1k4_buffers(&k1k4, d_coords.get(), nullptr, nullptr,
-                          d_bitmap.get(), d_fj64_table, d_row_prefix.get(),
-                          d_prime_pos.get(), d_prime_count.get(),
-                          d_parent.get(), d_prime_geo_bits.get(),
-                          d_wire_label_by_raw_root.get(), d_max_label.get(),
-                          d_overflow.get(), d_group_flags.get());
+        fill_k1k4_buffers(
+            &k1k4, d_coords.get(), nullptr, nullptr, d_k1_overflow.get(),
+            d_bitmap.get(), d_fj64_table, d_row_prefix.get(),
+            d_prime_pos.get(), d_prime_count.get(), d_parent.get(),
+            d_prime_geo_bits.get(), d_wire_label_by_raw_root.get(),
+            d_max_label.get(), d_overflow.get(), d_group_flags.get());
 
         launch_kernel_compact(d_bitmap.get(), k1k4.compact, num_tiles,
                               streams.compute.get());

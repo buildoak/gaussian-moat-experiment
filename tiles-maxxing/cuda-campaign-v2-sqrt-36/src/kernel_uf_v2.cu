@@ -150,6 +150,7 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
                              const std::uint32_t* __restrict__ d_prime_pos,
                              const std::uint32_t* __restrict__ d_prime_count,
                              const campaign::TileCoord* __restrict__ d_coords,
+                             const std::uint32_t* __restrict__ d_prior_overflow,
                              std::uint16_t* __restrict__ d_parent,
                              std::uint8_t* __restrict__ d_prime_geo_bits,
                              std::uint16_t* __restrict__ d_wire_label_by_raw_root,
@@ -186,11 +187,13 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
           : d_group_flags + static_cast<std::size_t>(tile_idx) * 256U;
   const campaign::TileCoord coord =
       d_coords == nullptr ? campaign::TileCoord{} : d_coords[tile_idx];
+  const bool prior_overflow =
+      d_prior_overflow != nullptr && d_prior_overflow[tile_idx] != 0U;
 
   const int prime_count = static_cast<int>(d_prime_count[tile_idx]);
   if (tid == 0) {
     if (d_max_label != nullptr) d_max_label[tile_idx] = 0;
-    if (d_overflow != nullptr) d_overflow[tile_idx] = 0;
+    if (d_overflow != nullptr) d_overflow[tile_idx] = prior_overflow ? 1 : 0;
   }
   if (tile_wire_label_by_raw_root != nullptr) {
     for (int i = tid; i < MAX_PRIMES_GPU; i += BLOCK_THREADS) {
@@ -208,6 +211,10 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
     }
   }
   __syncthreads();
+
+  if (prior_overflow) {
+    return;
+  }
 
   if (prime_count > MAX_PRIMES_GPU) {
     if (tid == 0 && d_overflow != nullptr) {
@@ -318,7 +325,8 @@ void launch_kernel_uf_v2(const UfBuffers& buffers,
                          cudaStream_t stream) {
   kernel_uf_v2<<<num_tiles, BLOCK_THREADS, 0, stream>>>(
       buffers.in.d_bitmap, buffers.in.d_row_prefix, buffers.in.d_prime_pos,
-      buffers.in.d_prime_count, buffers.in.d_coords, buffers.out.d_parent,
+      buffers.in.d_prime_count, buffers.in.d_coords,
+      buffers.in.d_prior_overflow, buffers.out.d_parent,
       buffers.out.d_prime_geo_bits, buffers.out.d_wire_label_by_raw_root,
       buffers.out.d_max_label, buffers.out.d_overflow,
       buffers.out.d_group_flags, num_tiles);
