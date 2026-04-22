@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
@@ -231,6 +233,69 @@ std::size_t device_slab_tiles_for(const DispatchConfig& config,
     throw std::runtime_error("CUDA dispatch budget cannot fit one device slab");
   }
   return std::max<std::size_t>(1, std::min(remaining_tiles, budget / per_tile));
+}
+
+void dump_group_overflow_tile_csv(
+    const char* path,
+    const campaign::TileCoord& coord,
+    std::uint32_t candidate_count,
+    std::uint32_t prime_count,
+    std::uint16_t max_label,
+    const std::uint32_t* d_tile_prime_pos,
+    const std::uint16_t* d_tile_parent,
+    const std::uint16_t* d_tile_wire_label_by_raw_root) {
+  std::vector<std::uint32_t> h_prime_pos(MAX_PRIMES_GPU);
+  std::vector<std::uint16_t> h_parent(MAX_PRIMES_GPU);
+  std::vector<std::uint16_t> h_wire_label_by_raw_root(MAX_PRIMES_GPU);
+
+  check_cuda(cudaMemcpy(h_prime_pos.data(), d_tile_prime_pos,
+                        h_prime_pos.size() * sizeof(std::uint32_t),
+                        cudaMemcpyDeviceToHost),
+             "cudaMemcpy(group_dump prime_pos)");
+  check_cuda(cudaMemcpy(h_parent.data(), d_tile_parent,
+                        h_parent.size() * sizeof(std::uint16_t),
+                        cudaMemcpyDeviceToHost),
+             "cudaMemcpy(group_dump parent)");
+  check_cuda(cudaMemcpy(h_wire_label_by_raw_root.data(),
+                        d_tile_wire_label_by_raw_root,
+                        h_wire_label_by_raw_root.size() *
+                            sizeof(std::uint16_t),
+                        cudaMemcpyDeviceToHost),
+             "cudaMemcpy(group_dump labels)");
+
+  std::ofstream out(path);
+  if (!out) {
+    throw std::runtime_error(std::string("failed to open group dump path: ") +
+                             path);
+  }
+
+  out << "# tile_i," << coord.i << "\n";
+  out << "# tile_j," << coord.j << "\n";
+  out << "# a_lo," << coord.a_lo << "\n";
+  out << "# b_lo," << coord.b_lo << "\n";
+  out << "# candidate_count," << candidate_count << "\n";
+  out << "# prime_count," << prime_count << "\n";
+  out << "# max_label," << max_label << "\n";
+  out << "prime_index,a,b,norm_sq,packed_pos,row,col,parent,final_group_label\n";
+
+  const std::uint32_t bounded =
+      std::min<std::uint32_t>(prime_count, MAX_PRIMES_GPU);
+  for (std::uint32_t idx = 0; idx < bounded; ++idx) {
+    const std::uint32_t packed = h_prime_pos[idx];
+    const std::int64_t row = static_cast<std::int64_t>(packed / SIDE_EXP);
+    const std::int64_t col = static_cast<std::int64_t>(packed % SIDE_EXP);
+    const std::int64_t a = coord.a_lo + col - static_cast<std::int64_t>(C);
+    const std::int64_t b = coord.b_lo + row - static_cast<std::int64_t>(C);
+    const std::uint64_t norm_sq =
+        static_cast<std::uint64_t>(a * a) +
+        static_cast<std::uint64_t>(b * b);
+    const std::uint16_t parent = h_parent[idx];
+    const std::uint16_t label =
+        parent < MAX_PRIMES_GPU ? h_wire_label_by_raw_root[parent] : 0;
+    out << idx << "," << a << "," << b << "," << norm_sq << ","
+        << packed << "," << row << "," << col << "," << parent << ","
+        << label << "\n";
+  }
 }
 
 struct HostRingSlot {
@@ -806,6 +871,10 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
     local_stats.pinned_host_bytes =
         pinned_bytes_for_tiles(config.host_chunk_tiles, config.ring_slots);
     local_stats.stream_count = 3;
+    const char* group_dump_path = std::getenv("CUDA_CAMPAIGN_GROUP_DUMP");
+    const bool group_dump_abort =
+        std::getenv("CUDA_CAMPAIGN_GROUP_DUMP_ABORT") != nullptr;
+    bool group_dump_written = false;
 
     int device = 0;
     cudaDeviceProp prop{};
@@ -1031,6 +1100,22 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
             diag.k4_group_overflow = k4_group_overflow;
             diag.k5_port_overflow = k5_port_overflow;
             local_stats.first_overflow_tiles.push_back(diag);
+          }
+
+          if (k4_group_overflow && group_dump_path != nullptr &&
+              !group_dump_written) {
+            dump_group_overflow_tile_csv(
+                group_dump_path, tiles[global_offset + t],
+                h_raw_total_cands[t], h_prime_count[t], h_max_label[t],
+                d_prime_pos.get() + t * MAX_PRIMES_GPU,
+                d_parent.get() + t * MAX_PRIMES_GPU,
+                d_wire_label_by_raw_root.get() + t * MAX_PRIMES_GPU);
+            group_dump_written = true;
+            if (group_dump_abort) {
+              throw std::runtime_error(
+                  std::string("captured K4 group overflow dump at ") +
+                  group_dump_path);
+            }
           }
         }
 
