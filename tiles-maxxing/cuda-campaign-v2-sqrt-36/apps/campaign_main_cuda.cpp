@@ -28,13 +28,14 @@
 #include "campaign/region.h"
 #include "campaign/snapshot.h"
 #include "campaign/tileop.h"
+#include "cuda_campaign/host_driver.h"
 #include "cuda_campaign/kernels.cuh"
 
 namespace {
 
 using Clock = std::chrono::steady_clock;
 
-inline constexpr std::size_t kDefaultChunkSize = 64;
+inline constexpr std::size_t kDefaultChunkSize = 200000;
 
 void print_help(const char* prog) {
   std::cout
@@ -47,7 +48,7 @@ void print_help(const char* prog) {
       << "  --r-outer=R            Outer radius of the annulus (> R_inner)\n"
       << "  --region <spec>        'full-octant' or a path to a region JSON file\n"
       << "  --out <path>           Output snapshot.bin path\n"
-      << "  --chunk-size=N         Tiles per K1-K5 debug dispatch chunk\n"
+      << "  --chunk-size=N         Tiles per production host dispatch chunk\n"
       << "  --threads=N            Accepted for CPU CLI compatibility; ignored\n"
       << "\n"
       << "Compile-time constants (baked in at build):\n"
@@ -433,8 +434,13 @@ int main(int argc, char** argv) {
 
   const auto encode_start = Clock::now();
   std::vector<campaign::TileOp> tileops;
+  cuda_campaign::DispatchStats dispatch_stats;
   try {
-    tileops = process_tiles_cuda(active_tiles, constants, chunk_size);
+    cuda_campaign::DispatchConfig config;
+    config.host_chunk_tiles = chunk_size;
+    tileops =
+        cuda_campaign::dispatch_tile_batch(active_tiles, constants, config,
+                                           &dispatch_stats);
   } catch (const std::exception& e) {
     std::cerr << "Error in CUDA TileOp processing: " << e.what() << "\n";
     return 5;
@@ -479,7 +485,7 @@ int main(int argc, char** argv) {
             << "  offset: (" << campaign::OFFSET_X << ","
             << campaign::OFFSET_Y << ")\n"
             << "  active tiles: " << active_tiles.size() << "\n"
-            << "  chunk-size: " << chunk_size << "\n"
+            << "  chunk-size: " << dispatch_stats.host_chunk_tiles << "\n"
             << "  constants_hash: " << constants.canonical_hash() << "\n"
             << "  mr_witness_sha256: "
             << campaign::CampaignConstants::mr_witness_set_sha256() << "\n"
