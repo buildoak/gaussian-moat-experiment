@@ -273,6 +273,7 @@ void fill_k1k4_buffers(K1K4Buffers* buffers,
                        campaign::TileCoord* d_coords,
                        std::uint32_t* d_cand_list,
                        std::uint32_t* d_total_cands,
+                       std::uint32_t* d_raw_total_cands,
                        std::uint32_t* d_k1_overflow,
                        std::uint32_t* d_bitmap,
                        std::uint16_t* d_fj64_table,
@@ -289,6 +290,7 @@ void fill_k1k4_buffers(K1K4Buffers* buffers,
   buffers->d_coords = d_coords;
   buffers->d_cand_list = d_cand_list;
   buffers->d_total_cands = d_total_cands;
+  buffers->d_raw_total_cands = d_raw_total_cands;
   buffers->d_k1_overflow = d_k1_overflow;
   buffers->d_bitmap = d_bitmap;
   buffers->d_fj64_table = d_fj64_table;
@@ -319,6 +321,7 @@ std::size_t phase1_bytes_for_tiles(std::size_t tiles) {
   const std::size_t per_tile =
       sizeof(campaign::TileCoord) +
       sizeof(std::uint32_t) * MAX_CANDIDATES_GPU +
+      sizeof(std::uint32_t) +
       sizeof(std::uint32_t) +
       sizeof(std::uint32_t) +
       sizeof(std::uint32_t) * BITMAP_WORDS;
@@ -366,7 +369,8 @@ void launch_k1_to_k4(const K1K4Buffers& buffers,
                      int num_tiles,
                      cudaStream_t stream) {
   launch_kernel_sieve(buffers.d_coords, buffers.d_cand_list,
-                      buffers.d_total_cands, buffers.d_k1_overflow, num_tiles,
+                      buffers.d_total_cands, buffers.d_raw_total_cands,
+                      buffers.d_k1_overflow, num_tiles,
                       buffers.k1_candidate_capacity, stream);
   check_last_launch("launch_kernel_sieve");
 
@@ -429,6 +433,7 @@ K1K4DebugDownload run_k1_to_k4_debug(
     DeviceBuffer<campaign::TileCoord> d_coords(tile_count);
     DeviceBuffer<std::uint32_t> d_cand_list(tile_count * MAX_CANDIDATES_GPU);
     DeviceBuffer<std::uint32_t> d_total_cands(tile_count);
+    DeviceBuffer<std::uint32_t> d_raw_total_cands(tile_count);
     DeviceBuffer<std::uint32_t> d_k1_overflow(tile_count);
     DeviceBuffer<std::uint32_t> d_bitmap(tile_count * BITMAP_WORDS);
     DeviceBuffer<std::uint16_t> d_row_prefix(tile_count * ROW_PREFIX_ENTRIES);
@@ -451,6 +456,7 @@ K1K4DebugDownload run_k1_to_k4_debug(
     buffers.d_coords = d_coords.get();
     buffers.d_cand_list = d_cand_list.get();
     buffers.d_total_cands = d_total_cands.get();
+    buffers.d_raw_total_cands = d_raw_total_cands.get();
     buffers.d_k1_overflow = d_k1_overflow.get();
     buffers.d_bitmap = d_bitmap.get();
     buffers.d_fj64_table = d_fj64_table;
@@ -476,6 +482,7 @@ K1K4DebugDownload run_k1_to_k4_debug(
 
     launch_k1_to_k4(buffers, num_tiles, stream);
 
+    out.candidate_count.resize(tile_count);
     out.prime_count.resize(tile_count);
     out.prime_pos.resize(tile_count * MAX_PRIMES_GPU);
     out.parent.resize(tile_count * MAX_PRIMES_GPU);
@@ -485,6 +492,12 @@ K1K4DebugDownload run_k1_to_k4_debug(
     out.overflow.resize(tile_count);
     out.group_flags.resize(tile_count * 256U);
 
+    check_cuda(cudaMemcpyAsync(out.candidate_count.data(),
+                               d_raw_total_cands.get(),
+                               out.candidate_count.size() *
+                                   sizeof(std::uint32_t),
+                               cudaMemcpyDeviceToHost, stream),
+               "cudaMemcpyAsync(candidate_count)");
     check_cuda(cudaMemcpyAsync(out.prime_count.data(), d_prime_count.get(),
                                out.prime_count.size() * sizeof(std::uint32_t),
                                cudaMemcpyDeviceToHost, stream),
@@ -558,6 +571,7 @@ K1K5DebugDownload run_k1_to_k5_debug(
     DeviceBuffer<campaign::TileCoord> d_coords(tile_count);
     DeviceBuffer<std::uint32_t> d_cand_list(tile_count * MAX_CANDIDATES_GPU);
     DeviceBuffer<std::uint32_t> d_total_cands(tile_count);
+    DeviceBuffer<std::uint32_t> d_raw_total_cands(tile_count);
     DeviceBuffer<std::uint32_t> d_k1_overflow(tile_count);
     DeviceBuffer<std::uint32_t> d_bitmap(tile_count * BITMAP_WORDS);
     DeviceBuffer<std::uint16_t> d_row_prefix(tile_count * ROW_PREFIX_ENTRIES);
@@ -602,6 +616,7 @@ K1K5DebugDownload run_k1_to_k5_debug(
     buffers.k1k4.d_coords = d_coords.get();
     buffers.k1k4.d_cand_list = d_cand_list.get();
     buffers.k1k4.d_total_cands = d_total_cands.get();
+    buffers.k1k4.d_raw_total_cands = d_raw_total_cands.get();
     buffers.k1k4.d_k1_overflow = d_k1_overflow.get();
     buffers.k1k4.d_bitmap = d_bitmap.get();
     buffers.k1k4.d_fj64_table = d_fj64_table;
@@ -635,6 +650,7 @@ K1K5DebugDownload run_k1_to_k5_debug(
 
     launch_k1_to_k5(buffers, num_tiles, stream);
 
+    out.k1k4.candidate_count.resize(tile_count);
     out.k1k4.prime_count.resize(tile_count);
     out.k1k4.prime_pos.resize(prime_slots);
     out.k1k4.parent.resize(prime_slots);
@@ -650,6 +666,12 @@ K1K5DebugDownload run_k1_to_k5_debug(
     out.face_reps.resize(face_slots);
     out.face_rep_counts.resize(face_count_slots);
 
+    check_cuda(cudaMemcpyAsync(out.k1k4.candidate_count.data(),
+                               d_raw_total_cands.get(),
+                               out.k1k4.candidate_count.size() *
+                                   sizeof(std::uint32_t),
+                               cudaMemcpyDeviceToHost, stream),
+               "cudaMemcpyAsync(candidate_count)");
     check_cuda(cudaMemcpyAsync(out.k1k4.prime_count.data(),
                                d_prime_count.get(),
                                out.k1k4.prime_count.size() *
@@ -832,6 +854,7 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         DeviceBuffer<std::uint32_t> d_cand_list(
             slab_tiles * MAX_CANDIDATES_GPU);
         DeviceBuffer<std::uint32_t> d_total_cands(slab_tiles);
+        DeviceBuffer<std::uint32_t> d_raw_total_cands(slab_tiles);
         DeviceBuffer<std::uint32_t> d_k1_overflow(slab_tiles);
         DeviceBuffer<std::uint32_t> d_bitmap(slab_tiles * BITMAP_WORDS);
 
@@ -847,8 +870,8 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
 
         const int num_tiles = static_cast<int>(slab_tiles);
         launch_kernel_sieve(d_coords.get(), d_cand_list.get(),
-                            d_total_cands.get(), d_k1_overflow.get(),
-                            num_tiles, MAX_CANDIDATES_GPU,
+                            d_total_cands.get(), d_raw_total_cands.get(),
+                            d_k1_overflow.get(), num_tiles, MAX_CANDIDATES_GPU,
                             streams.compute.get());
         check_last_launch("dispatch launch_kernel_sieve");
         launch_kernel_mr(d_coords.get(), d_cand_list.get(),
@@ -859,7 +882,6 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         check_cuda(cudaStreamSynchronize(streams.compute.get()),
                    "cudaStreamSynchronize(dispatch K2)");
         d_cand_list.reset();
-        d_total_cands.reset();
 
         const std::size_t prime_slots = slab_tiles * MAX_PRIMES_GPU;
         const std::size_t face_slots =
@@ -885,7 +907,8 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
 
         K1K4Buffers k1k4{};
         fill_k1k4_buffers(
-            &k1k4, d_coords.get(), nullptr, nullptr, d_k1_overflow.get(),
+            &k1k4, d_coords.get(), nullptr, nullptr, d_raw_total_cands.get(),
+            d_k1_overflow.get(),
             d_bitmap.get(), d_fj64_table, d_row_prefix.get(),
             d_prime_pos.get(), d_prime_count.get(), d_parent.get(),
             d_prime_geo_bits.get(), d_wire_label_by_raw_root.get(),
@@ -934,6 +957,83 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
                    "cudaEventRecord(compute_done)");
         check_cuda(cudaEventSynchronize(slot.compute_done.get()),
                    "cudaEventSynchronize(compute_done)");
+
+        std::vector<std::uint32_t> h_raw_total_cands(slab_tiles);
+        std::vector<std::uint32_t> h_k1_overflow(slab_tiles);
+        std::vector<std::uint32_t> h_prime_count(slab_tiles);
+        std::vector<std::uint16_t> h_max_label(slab_tiles);
+        std::vector<std::uint8_t> h_remap_overflow(slab_tiles);
+        std::vector<std::uint16_t> h_face_rep_counts(face_count_slots);
+        check_cuda(cudaMemcpy(h_raw_total_cands.data(),
+                              d_raw_total_cands.get(),
+                              h_raw_total_cands.size() *
+                                  sizeof(std::uint32_t),
+                              cudaMemcpyDeviceToHost),
+                   "cudaMemcpy(raw_total_cands)");
+        check_cuda(cudaMemcpy(h_k1_overflow.data(), d_k1_overflow.get(),
+                              h_k1_overflow.size() * sizeof(std::uint32_t),
+                              cudaMemcpyDeviceToHost),
+                   "cudaMemcpy(k1_overflow)");
+        check_cuda(cudaMemcpy(h_prime_count.data(), d_prime_count.get(),
+                              h_prime_count.size() * sizeof(std::uint32_t),
+                              cudaMemcpyDeviceToHost),
+                   "cudaMemcpy(prime_count)");
+        check_cuda(cudaMemcpy(h_max_label.data(), d_max_label.get(),
+                              h_max_label.size() * sizeof(std::uint16_t),
+                              cudaMemcpyDeviceToHost),
+                   "cudaMemcpy(max_label)");
+        check_cuda(cudaMemcpy(h_remap_overflow.data(), d_overflow.get(),
+                              h_remap_overflow.size() * sizeof(std::uint8_t),
+                              cudaMemcpyDeviceToHost),
+                   "cudaMemcpy(remap_overflow)");
+        check_cuda(cudaMemcpy(h_face_rep_counts.data(),
+                              d_face_rep_counts.get(),
+                              h_face_rep_counts.size() *
+                                  sizeof(std::uint16_t),
+                              cudaMemcpyDeviceToHost),
+                   "cudaMemcpy(face_rep_counts)");
+
+        for (std::size_t t = 0; t < slab_tiles; ++t) {
+          const bool k1_cand_overflow = h_k1_overflow[t] != 0;
+          const bool k4_prime_overflow =
+              h_prime_count[t] > static_cast<std::uint32_t>(MAX_PRIMES_GPU);
+          const bool k4_group_overflow =
+              h_remap_overflow[t] != 0 && !k1_cand_overflow &&
+              !k4_prime_overflow;
+          std::uint32_t port_sum = 0;
+          std::uint16_t port_counts[4] = {0, 0, 0, 0};
+          for (int face = 0; face < NUM_FACES; ++face) {
+            const std::uint16_t ports =
+                h_face_rep_counts[t * NUM_FACES + static_cast<std::size_t>(face)];
+            port_counts[face] = ports;
+            port_sum += ports;
+          }
+          const bool k5_port_overflow = port_sum > MAX_PORTS_PER_TILE;
+
+          local_stats.k1_cand_overflow_count += k1_cand_overflow ? 1U : 0U;
+          local_stats.k4_prime_overflow_count += k4_prime_overflow ? 1U : 0U;
+          local_stats.k4_group_overflow_count += k4_group_overflow ? 1U : 0U;
+          local_stats.k5_port_overflow_count += k5_port_overflow ? 1U : 0U;
+
+          if ((k1_cand_overflow || k4_prime_overflow ||
+               k4_group_overflow || k5_port_overflow) &&
+              local_stats.first_overflow_tiles.size() < 10) {
+            DispatchStats::OverflowDiagnostic diag{};
+            diag.coord = tiles[global_offset + t];
+            diag.candidate_count = h_raw_total_cands[t];
+            diag.prime_count = h_prime_count[t];
+            diag.group_count = h_max_label[t];
+            for (int face = 0; face < NUM_FACES; ++face) {
+              diag.port_counts[face] = port_counts[face];
+            }
+            diag.k1_cand_overflow = k1_cand_overflow;
+            diag.k4_prime_overflow = k4_prime_overflow;
+            diag.k4_group_overflow = k4_group_overflow;
+            diag.k5_port_overflow = k5_port_overflow;
+            local_stats.first_overflow_tiles.push_back(diag);
+          }
+        }
+
         check_cuda(cudaStreamWaitEvent(streams.d2h.get(),
                                        slot.compute_done.get(), 0),
                    "cudaStreamWaitEvent(compute_done)");

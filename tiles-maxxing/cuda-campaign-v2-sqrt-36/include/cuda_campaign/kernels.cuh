@@ -25,6 +25,7 @@ struct K1K4Buffers {
   const campaign::TileCoord* d_coords = nullptr;
   std::uint32_t* d_cand_list = nullptr;
   std::uint32_t* d_total_cands = nullptr;
+  std::uint32_t* d_raw_total_cands = nullptr;
   std::uint32_t* d_k1_overflow = nullptr;
   std::uint32_t* d_bitmap = nullptr;
   const std::uint16_t* d_fj64_table = nullptr;
@@ -34,6 +35,7 @@ struct K1K4Buffers {
 };
 
 struct K1K4DebugDownload {
+  std::vector<std::uint32_t> candidate_count;
   std::vector<std::uint32_t> prime_count;
   std::vector<std::uint32_t> prime_pos;
   std::vector<std::uint16_t> parent;
@@ -88,6 +90,7 @@ K1K5DebugDownload run_k1_to_k5_debug(
 void launch_kernel_sieve(const campaign::TileCoord* d_coords,
                          std::uint32_t* d_cand_list,
                          std::uint32_t* d_total_cands,
+                         std::uint32_t* d_raw_total_cands,
                          std::uint32_t* d_k1_overflow,
                          int num_tiles,
                          int candidate_capacity = MAX_CANDIDATES_GPU,

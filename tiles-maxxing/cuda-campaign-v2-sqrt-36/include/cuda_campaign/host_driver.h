@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -30,6 +31,23 @@ struct DispatchStats {
   std::size_t pinned_host_bytes = 0;
   int stream_count = 0;
   std::string device_name;
+  std::uint64_t k1_cand_overflow_count = 0;
+  std::uint64_t k4_prime_overflow_count = 0;
+  std::uint64_t k4_group_overflow_count = 0;
+  std::uint64_t k5_port_overflow_count = 0;
+
+  struct OverflowDiagnostic {
+    campaign::TileCoord coord{};
+    std::uint32_t candidate_count = 0;
+    std::uint32_t prime_count = 0;
+    std::uint16_t group_count = 0;
+    std::uint16_t port_counts[4] = {0, 0, 0, 0};
+    bool k1_cand_overflow = false;
+    bool k4_prime_overflow = false;
+    bool k4_group_overflow = false;
+    bool k5_port_overflow = false;
+  };
+  std::vector<OverflowDiagnostic> first_overflow_tiles;
 };
 
 std::size_t phase1_bytes_for_tiles(std::size_t tiles);

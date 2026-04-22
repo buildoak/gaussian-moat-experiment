@@ -486,6 +486,14 @@ int main(int argc, char** argv) {
             << campaign::OFFSET_Y << ")\n"
             << "  active tiles: " << active_tiles.size() << "\n"
             << "  chunk-size: " << dispatch_stats.host_chunk_tiles << "\n"
+            << "  k1_cand_overflow_count: "
+            << dispatch_stats.k1_cand_overflow_count << "\n"
+            << "  k4_prime_overflow_count: "
+            << dispatch_stats.k4_prime_overflow_count << "\n"
+            << "  k4_group_overflow_count: "
+            << dispatch_stats.k4_group_overflow_count << "\n"
+            << "  k5_port_overflow_count: "
+            << dispatch_stats.k5_port_overflow_count << "\n"
             << "  constants_hash: " << constants.canonical_hash() << "\n"
             << "  mr_witness_sha256: "
             << campaign::CampaignConstants::mr_witness_set_sha256() << "\n"
@@ -508,5 +516,22 @@ int main(int argc, char** argv) {
             << "s t_total=" << (elapsed_ms(total_start, total_end) / 1000.0)
             << "s n_tiles=" << active_tiles.size() << "\n"
             << "VERDICT: " << verdict_name(verdict) << "\n";
+  if (!dispatch_stats.first_overflow_tiles.empty()) {
+    std::cout << "OVERFLOW_DIAGNOSTICS:\n";
+    for (const auto& diag : dispatch_stats.first_overflow_tiles) {
+      std::cout << "  tile=(" << diag.coord.i << "," << diag.coord.j << ")"
+                << " candidate_count=" << diag.candidate_count
+                << " prime_count=" << diag.prime_count
+                << " group_count=" << diag.group_count
+                << " ports=[" << diag.port_counts[0] << ","
+                << diag.port_counts[1] << "," << diag.port_counts[2]
+                << "," << diag.port_counts[3] << "]"
+                << " overflow_types="
+                << (diag.k1_cand_overflow ? "k1_cand " : "")
+                << (diag.k4_prime_overflow ? "k4_prime " : "")
+                << (diag.k4_group_overflow ? "k4_group " : "")
+                << (diag.k5_port_overflow ? "k5_port " : "") << "\n";
+    }
+  }
   return 0;
 }

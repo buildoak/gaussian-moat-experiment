@@ -123,6 +123,7 @@ __device__ void scatter_survivors_clamped_k1(
 __global__ void kernel_sieve(const campaign::TileCoord* __restrict__ coords,
                              std::uint32_t* __restrict__ d_cand_list,
                              std::uint32_t* __restrict__ d_total_cands,
+                             std::uint32_t* __restrict__ d_raw_total_cands,
                              std::uint32_t* __restrict__ d_k1_overflow,
                              int num_tiles,
                              int candidate_capacity) {
@@ -192,6 +193,9 @@ __global__ void kernel_sieve(const campaign::TileCoord* __restrict__ coords,
         (overflow != 0U || total_cands > capacity)) {
       d_k1_overflow[tile_idx] = 1U;
     }
+    if (d_raw_total_cands != nullptr) {
+      d_raw_total_cands[tile_idx] = total_cands;
+    }
     d_total_cands[tile_idx] = final_count;
   }
 }
@@ -201,12 +205,13 @@ __global__ void kernel_sieve(const campaign::TileCoord* __restrict__ coords,
 void launch_kernel_sieve(const campaign::TileCoord* d_coords,
                          std::uint32_t* d_cand_list,
                          std::uint32_t* d_total_cands,
+                         std::uint32_t* d_raw_total_cands,
                          std::uint32_t* d_k1_overflow,
                          int num_tiles,
                          int candidate_capacity,
                          cudaStream_t stream) {
   kernel_sieve<<<num_tiles, BLOCK_THREADS, 0, stream>>>(
-      d_coords, d_cand_list, d_total_cands, d_k1_overflow, num_tiles,
+      d_coords, d_cand_list, d_total_cands, d_raw_total_cands, d_k1_overflow, num_tiles,
       candidate_capacity);
 }
 
