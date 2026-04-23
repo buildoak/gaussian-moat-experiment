@@ -22,16 +22,38 @@ std::int64_t checked_i64(__int128 value) {
   return static_cast<std::int64_t>(value);
 }
 
+__int128 floor_sqrt_i128(__int128 value) {
+  EXPECT_GE(value, 0);
+  if (value <= 0) {
+    return 0;
+  }
+
+  __int128 lo = 0;
+  __int128 hi = 1;
+  while (hi <= value / hi) {
+    hi *= 2;
+  }
+  while (lo + 1 < hi) {
+    const __int128 mid = lo + (hi - lo) / 2;
+    if (mid <= value / mid) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  return lo;
+}
+
 __int128 inner_upper(const campaign::CampaignConstants& cc) {
-  const __int128 c = campaign::ceil_isqrt(campaign::k_sq_value);
-  const __int128 r = static_cast<__int128>(cc.R_inner);
-  return static_cast<__int128>(cc.R_inner_sq) + 2 * r * c + c * c;
+  return static_cast<__int128>(cc.R_inner_sq) +
+         static_cast<__int128>(campaign::k_sq_value) +
+         floor_sqrt_i128(cc.four_rin_sq_k_i128());
 }
 
 __int128 outer_lower(const campaign::CampaignConstants& cc) {
-  const __int128 c = campaign::ceil_isqrt(campaign::k_sq_value);
-  const __int128 r = static_cast<__int128>(cc.R_outer);
-  return static_cast<__int128>(cc.R_outer_sq) - 2 * r * c + c * c;
+  return static_cast<__int128>(cc.R_outer_sq) +
+         static_cast<__int128>(campaign::k_sq_value) -
+         floor_sqrt_i128(cc.four_rout_sq_k_i128());
 }
 
 }  // namespace
