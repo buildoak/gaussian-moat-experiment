@@ -45,11 +45,12 @@ Current throughput is ~45% of legacy. Possible causes: different tile size, R_ou
 
 ---
 
-## Current State (2026-04-22)
+## Current State (2026-04-23)
 
 - **Blueprint v3 canonical.** `methodology/lemmas_v2/campaign-blueprint.md` supersedes the sqrt-36/40 pipelines.
 - **K1 overflow + K4 visible-remap bugs FIXED.** Commits `92b3c9a`, `20f136e`. All overflow counters now 0 at R=80M.
 - **Moat boundary verified.** Exact bracket (80,015,782, 80,015,790): Tsuchimura's value 80,015,782 returns SPANNING, 80,015,790 returns MOAT. Moat is just past Tsuchimura's value.
+- **Hard-negative sweep voided.** The 2026-04-22 hard-negative sweep used narrow-shell `R_inner` semantics and is invalid for moat detection; see `docs/supportive/2026-04-23-hard-negative-sweep-postmortem.md`. Tsuchimura reproduction remains valid.
 - **campaign-sqrt-36-v2 pending build.** v1 campaigns (`campaign-sqrt-36`, `campaign-sqrt-40`) are stale — use as directory templates only, not as reference for geometry or compositor math.
 - **BZ pre-build soundness gate pending.** `build/bz_check.py` not yet implemented. Build must fail if BZ interval is non-empty.
 
