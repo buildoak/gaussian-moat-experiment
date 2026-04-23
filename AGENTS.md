@@ -9,13 +9,13 @@ Orientation for agents about to build or modify campaigns. Read top-to-bottom be
 | **Paper** | METR 2004-13 | Tsuchimura, 2004 |
 | **k²** | 36 | Step size k = 6 |
 | **Moat boundary** | **80,015,782** | Distance from origin where connectivity terminates |
-| **Interpretation** | R_outer < 80,015,782 → SPANNING expected | R_outer ≥ 80,015,782 → MOAT expected |
+| **Interpretation** | R_outer ≤ 80,015,782 → SPANNING verified | R_outer ≥ 80,015,790 → MOAT verified |
 
-The moat boundary is the **farthest point reachable** from origin via Gaussian prime steps ≤6. Any annulus with R_outer below this value should show SPANNING (connectivity exists). The moat appears somewhere just past 80,015,782.
+The moat boundary is the **farthest point reachable** from origin via Gaussian prime steps ≤6. Any full annulus anchored at the origin-containing side with R_outer at or below this value should show SPANNING (connectivity exists). The moat appears somewhere just past 80,015,782; the CUDA v2 verification brackets the first tested MOAT point at 80,015,790.
 
 **Local reference:** `~/thinking/pratchett-os/centerpiece/research/gaussian-moat/2026-03-15-tsuchimura-baseline-reconstruction.md` (Appendix B reconstruction from paper Section 4 / Table page 9).
 
-**Validation checkpoint:** A correct implementation at k²=36 MUST return SPANNING for R=80M (R_outer=80,008,192) and MOAT for R values past 80,015,782.
+**Validation checkpoint:** A correct implementation at k²=36 MUST return SPANNING for R=80M (R_outer=80,008,192), SPANNING for R_outer=80,015,782, and MOAT for R_outer=80,015,790 when run as a full-annulus test with `R_inner=80,000,000`.
 
 ### ✓ v2 Solver Verification — 2026-04-22
 
@@ -51,7 +51,7 @@ Current throughput is ~45% of legacy. Possible causes: different tile size, R_ou
 - **K1 overflow + K4 visible-remap bugs FIXED.** Commits `92b3c9a`, `20f136e`. All overflow counters now 0 at R=80M.
 - **Moat boundary verified.** Exact bracket (80,015,782, 80,015,790): Tsuchimura's value 80,015,782 returns SPANNING, 80,015,790 returns MOAT. Moat is just past Tsuchimura's value.
 - **Hard-negative sweep voided.** The 2026-04-22 hard-negative sweep used narrow-shell `R_inner` semantics and is invalid for moat detection; see `docs/supportive/2026-04-23-hard-negative-sweep-postmortem.md`. Tsuchimura reproduction remains valid.
-- **campaign-sqrt-36-v2 pending build.** v1 campaigns (`campaign-sqrt-36`, `campaign-sqrt-40`) are stale — use as directory templates only, not as reference for geometry or compositor math.
+- **CUDA campaign v2 validated.** `tiles-maxxing/cuda-campaign-v2-sqrt-36/` is the validated CUDA solver for the k²=36 reproduction. v1 campaigns (`campaign-sqrt-36`, `campaign-sqrt-40`) are stale — use as historical templates only, not as reference for geometry or compositor math.
 - **BZ pre-build soundness gate pending.** `build/bz_check.py` not yet implemented. Build must fail if BZ interval is non-empty.
 
 ## Canonical Math & Engineering
@@ -149,11 +149,11 @@ Tile of side `S = 256` contains **257 × 257 lattice points** (256 segments = 25
 
 ## Build Parameterization
 
-`K_SQ` is a build parameter, not hardcoded. `make K_SQ=36` or `cmake -DK_SQ=36`. All derived constants auto-computed via `constexpr` (`C = floor_isqrt(K_SQ)`, etc.). Separate build directories: `build-k36/`, `build-k40/`. Default `K_SQ=40`.
+`K_SQ` is a build parameter, not hardcoded. Prefer CMake for v2 code: `cmake -S tiles-maxxing/cuda-campaign-v2-sqrt-36 -B build-k36 -DK_SQ=36 -DCMAKE_CUDA_ARCHITECTURES=89`. All derived constants auto-computed via `constexpr` (`C = floor_isqrt(K_SQ)`, etc.). Use separate build directories such as `build-k36/` and `build-k40/`. Legacy Makefile paths may still accept `make K_SQ=36`, but they are not the current campaign workflow.
 
 ## Canonical Status
 
-`tiles-maxxing/` holds all active code. `legacy/` holds first-generation crates; do not treat as reference. Design CUDA kernels from the specs and the blueprint — do not port legacy `.cu` files, they encode pre-snapped-grid assumptions (buffer sizes, phase boundaries, memory layout) that do not survive.
+`tiles-maxxing/` holds all active code. The current validated CUDA path is `tiles-maxxing/cuda-campaign-v2-sqrt-36/`, with `tiles-maxxing/cpp-campaign-v2/` as the C++ reference linked by the CUDA campaign. `legacy/` and v1 campaign trees hold first-generation code; do not treat them as reference. Design CUDA kernels from the specs and the blueprint — do not port legacy `.cu` files, they encode pre-snapped-grid assumptions (buffer sizes, phase boundaries, memory layout) that do not survive.
 
 ## Directory Layout
 
@@ -161,8 +161,10 @@ Tile of side `S = 256` contains **257 × 257 lattice points** (256 segments = 25
 gaussian-moat-cuda/
 ├── tiles-maxxing/                 — All active code
 │   ├── tile-cpp/                  — C++ reference (libtile.a)
-│   ├── tile_cuda_multi_kernel/    — GPU path, 5-kernel pipeline (K1..K5)
-│   ├── tiles-compositor/          — Campaign runner + compositor + grid
+│   ├── cpp-campaign-v2/           — Blueprint v3 C++ reference campaign
+│   ├── cuda-campaign-v2-sqrt-36/  — Validated CUDA v2 k²=36 campaign
+│   ├── campaign-sqrt-36/          — v1 campaign tree; stale for geometry/verdict
+│   ├── campaign-sqrt-40/          — v1 campaign tree; stale for geometry/verdict
 │   ├── tile-compare/              — Python comparison tools
 │   ├── tile-validator/            — Python tile validation
 │   └── vast-ai/                   — Cloud GPU deploy scripts
@@ -193,7 +195,15 @@ refs: [<spec or file this relates to>]
 
 All fields required except `refs` (include when the document targets a specific spec or code file).
 
-## Jetson Interaction Workflow
+Project-level coordination lives in `/Users/otonashi/thinking/pratchett-os/centerpiece/projects/gaussian-moat.md`; update or consult it when a working document changes project status, validated results, or next-session priorities.
+
+## Compute Workflow
+
+Primary CUDA compute is now vast.ai RTX 4090 (`sm_89`). Jetson Orin remains a local fallback for small validation and architecture checks, but it is not the primary campaign-running target.
+
+The Mac Mini has no CUDA compiler. CUDA compilation and execution happen remotely. For current campaign runs, deploy the repo to vast.ai and build `tiles-maxxing/cuda-campaign-v2-sqrt-36/` with `-DCMAKE_CUDA_ARCHITECTURES=89` on RTX 4090. The v2 CUDA campaign depends on `tiles-maxxing/cpp-campaign-v2/`, so preserve the repo-relative layout when syncing.
+
+### Jetson Local Fallback
 
 | Detail | Value |
 |--------|-------|
@@ -202,24 +212,21 @@ All fields required except `refs` (include when the document targets a specific 
 | User | `clifford` |
 | GPU | Orin Nano (sm_87 Ampere) |
 
-The Mac Mini has no CUDA compiler. All compilation and execution happens on Jetson. Code is written locally, pushed via rsync, built and run remotely. Remote layout: `~/tiles-maxxing/{tile-cuda, tile-cpp}/`. Both trees are needed — `tile-cpp` for cross-validation harnesses.
+Use Jetson for small checks only unless explicitly directed. Build with CMake architecture `87` for v2 campaign code.
 
-**Push:** `rsync -avz --delete tiles-maxxing/tile-cuda/ jetson:~/tiles-maxxing/tile-cuda/` (run from repo root).
+**Push v2 campaign + reference:** preserve `tiles-maxxing/{cuda-campaign-v2-sqrt-36,cpp-campaign-v2}/` on the remote.
 
-**Compile:** `ssh jetson "cd ~/tiles-maxxing/tile-cuda && nvcc -arch=sm_87 -O3 -std=c++17 --expt-relaxed-constexpr -lineinfo -o tile_kernel src/main.cu"`
+**Compile:** `cmake -S tiles-maxxing/cuda-campaign-v2-sqrt-36 -B build-k36 -DK_SQ=36 -DCMAKE_CUDA_ARCHITECTURES=87 && cmake --build build-k36 -j`
 
-**Run:** `ssh jetson "cd ~/tiles-maxxing/tile-cuda && ./tile_kernel"`
-
-**Pull results:** `rsync -avz jetson:~/tiles-maxxing/tile-cuda/results/ tile-cuda/results/`
-
-Build flags: `-arch=sm_87 -O3 -std=c++17 --expt-relaxed-constexpr -lineinfo`. Tune `--maxrregcount=N` per kernel. For shared memory configuration, set at launch with `cudaFuncSetAttribute` — Orin Nano supports up to 48 KB per SM.
+Legacy `tiles-maxxing/tile-cuda/` commands and direct `nvcc` examples are obsolete for v2 campaign work.
 
 ## vast.ai Cloud GPU
 
-Operational docs and deploy scripts in `tiles-maxxing/vast-ai/`. Read `vast-ai/README.md` for the full workflow.
+Operational docs and deploy scripts live in `tiles-maxxing/vast-ai/`. Read `tiles-maxxing/vast-ai/README.md` for the current workflow.
 
 1. **tmux for everything.** SSH drops are common. Any command over 5 seconds runs in tmux.
-2. **Do NOT destroy vast.ai instances unless explicitly asked by the user.** If cleanup is needed, use `vastai destroy instance $ID` and verify with `vastai show instances`.
+2. **Cleanup ownership.** If you created the instance for the current task, pull results and destroy it immediately after work. If the instance was already running, do not destroy it unless explicitly asked.
 3. **Pin SSH endpoint once.** Cache port and host at session start. Never re-resolve mid-run.
-4. **Patch `-arch` flag on remote.** Makefile defaults to `sm_87` (Jetson). Change to `sm_86` (3090), `sm_89` (4090), or `sm_80` (A100) on the remote instance. Do not modify the local Makefile.
-5. **Budget awareness.** Track via `vastai show instances`. 3090 ~$0.13/hr, 4090 ~$0.27/hr. Destroy immediately after work.
+4. **Use the right CUDA architecture.** v2 CMake uses `CMAKE_CUDA_ARCHITECTURES`: `89` for 4090, `86` for 3090, `80` for A100, `87` for Jetson. Patch remote Makefiles only when intentionally running legacy v1 code.
+5. **Budget awareness.** Track via `vastai show instances`. 3090 ~$0.13/hr, 4090 ~$0.27/hr. For instances you created for the task, destroy immediately after work.
+6. **Moat sweeps anchor `R_inner`.** For k²=36 boundary checks, use `--r-inner=80000000 --r-outer=<tested radius>`. Narrow-shell runs such as `--r-inner=<R> --r-outer=<R+8192>` are not moat-detection runs and void the verdict for origin reachability.

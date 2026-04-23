@@ -1,158 +1,187 @@
-# vast.ai Operational Guide — tiles-maxxing
+# vast.ai Operational Guide - gaussian-moat CUDA
 
-Operational reference for renting, deploying, and running CUDA tile-processing kernels on vast.ai GPU instances. Lessons learned from prior campaigns (March 2026) are baked in.
+Operational reference for renting, deploying, building, and running the current CUDA campaign on vast.ai. This guide reflects the 2026-04-22/23 audit: the CUDA v2 solver is validated, the Tsuchimura bracket is `(80,015,782, 80,015,790)`, and the hard-negative sweep was voided because it used narrow-shell `R_inner` semantics.
+
+## Current Target
+
+Use `tiles-maxxing/cuda-campaign-v2-sqrt-36/` for validated k^2=36 CUDA moat runs. It depends on `tiles-maxxing/cpp-campaign-v2/` through CMake, so deploy both trees with the same relative layout.
+
+The older `campaign-sqrt-36/` and `campaign-sqrt-40/` trees, including their `tile_cuda_multi_kernel/` subtrees, are useful historical/performance references only. Do not use `tiles-maxxing/vast-ai/sweep-k36-postfix.sh` as a moat-detection template; it targets the stale v1 campaign layout and predates the corrected `R_inner` semantics.
 
 ## Quick Reference
 
 ```bash
-# CLI location (temp venv — reinstall if missing)
+# CLI location, if using the temp venv convention
 VASTAI=/tmp/vastai-env/bin/vastai
 
-# Search for 3090 offers
-$VASTAI search offers 'gpu_name=RTX_3090 cuda_vers>=12.0 disk_space>=20 num_gpus=1 dph<=0.20 reliability>=0.95' -o 'dph'
+# Search for a single RTX 4090. A 3090 also works, but the verified boundary
+# campaign was run on a 4090.
+$VASTAI search offers 'gpu_name=RTX_4090 cuda_vers>=12.0 disk_space>=40 num_gpus=1 dph<=0.35 reliability>=0.95' -o 'dph'
 
 # Rent instance
-$VASTAI create instance $OFFER_ID --image pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel --disk 25 --ssh --onstart-cmd 'apt-get update && apt-get install -y tmux'
+$VASTAI create instance $OFFER_ID \
+  --image pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel \
+  --disk 40 --ssh --onstart-cmd 'apt-get update && apt-get install -y tmux cmake ninja-build rsync'
 
-# Get SSH info
-$VASTAI show instances --raw | python3 -c "import sys,json; d=json.load(sys.stdin); [print(f'ssh -p {i[\"ports\"][\"22/tcp\"][0][\"HostPort\"]} root@{i[\"ssh_host\"]}') for i in d]"
+# Get SSH info once, then pin HOST and PORT for the whole session
+$VASTAI show instances --raw | python3 -c "import sys,json; d=json.load(sys.stdin); [print(f'ID={i[\"id\"]} ssh -p {i[\"ports\"][\"22/tcp\"][0][\"HostPort\"]} root@{i[\"ssh_host\"]}') for i in d]"
 
-# Check cost
+# Check cost and state
 $VASTAI show instances
+```
 
-# DESTROY when done (CRITICAL)
-$VASTAI destroy instance $ID
-$VASTAI show instances  # verify empty
+Pin the SSH endpoint at session start:
+
+```bash
+HOST=sshX.vast.ai
+PORT=12345
+SSH_CMD="ssh -o StrictHostKeyChecking=accept-new -p $PORT root@$HOST"
 ```
 
 ## Architecture Mapping
 
-| GPU | SM | `-arch` flag | Notes |
-|-----|-----|-------------|-------|
-| RTX 3090 | 8.6 | `sm_86` | 82 SMs, 24 GB GDDR6X |
-| Jetson Orin | 8.7 | `sm_87` | 8 SMs, 8 GB unified |
-| RTX 4090 | 8.9 | `sm_89` | 128 SMs, 24 GB GDDR6X |
-| A100 | 8.0 | `sm_80` | 108 SMs, 40/80 GB HBM2e |
+| GPU | SM | CMake architecture | Notes |
+|-----|----|--------------------|-------|
+| RTX 4090 | 8.9 | `89` | Primary validated campaign target |
+| RTX 3090 | 8.6 | `86` | Good lower-cost fallback |
+| A100 | 8.0 | `80` | Also viable |
+| Jetson Orin | 8.7 | `87` | Legacy/local fallback, not primary compute |
 
-## Deploy Workflow
+## Deploy
 
-### 1. Copy code to instance
+Run from the repository root on the Mac:
 
 ```bash
-SSH_CMD="ssh -o StrictHostKeyChecking=accept-new -p $PORT root@$HOST"
+REMOTE=/workspace/gaussian-moat-cuda
+
 rsync -avz --delete \
-    --exclude 'build/' --exclude '.git' \
-    -e "ssh -o StrictHostKeyChecking=accept-new -p $PORT" \
-    tile_cuda_multi_kernel/ \
-    root@$HOST:/root/tile_cuda_multi_kernel/
-
-# Also copy C++ reference for cross-validation
-rsync -avz --delete \
-    --exclude 'build/' --exclude '.git' \
-    -e "ssh -o StrictHostKeyChecking=accept-new -p $PORT" \
-    tile-cpp/ \
-    root@$HOST:/root/tile-cpp/
+  --exclude '.git' \
+  --exclude 'build*/' \
+  --exclude 'artifacts/instance-*/' \
+  -e "ssh -o StrictHostKeyChecking=accept-new -p $PORT" \
+  ./ root@$HOST:$REMOTE/
 ```
 
-### 2. Build on instance
-
-The Makefile must be patched for target GPU. On the instance:
+For long transfers or builds, run inside `tmux` on the remote:
 
 ```bash
-# Change sm_87 -> sm_86 (or sm_89 for 4090)
-cd /root/tile_cuda_multi_kernel
-sed -i 's/sm_87/sm_86/g' Makefile
-make clean && make -j$(nproc)
+$SSH_CMD
+tmux new -s build
+cd /workspace/gaussian-moat-cuda
 ```
 
-### 3. Run
+## Build
+
+Build the validated CUDA campaign:
 
 ```bash
-# ALWAYS use tmux for anything > 5 seconds
-tmux new -s bench
-
-# Smoke test (2 tiles)
-./tile_kernel_multi test
-
-# Benchmark (2000 tiles — matches Jetson baseline)
-./tile_kernel_multi 2000
-
-# Profile run
-./tile_kernel_multi 2000 2>&1 | tee /root/bench-3090.txt
+cd /workspace/gaussian-moat-cuda/tiles-maxxing/cuda-campaign-v2-sqrt-36
+cmake -S . -B build-k36 -DK_SQ=36 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=89
+cmake --build build-k36 -j"$(nproc)"
+ctest --test-dir build-k36 --output-on-failure
 ```
 
-### 4. Copy results back
+Use `-DCMAKE_CUDA_ARCHITECTURES=86` for a 3090, `80` for A100, or `87` for Jetson. The current CMake default is already `89`; do not patch local Makefiles for the v2 campaign.
+
+## Correct Moat-Detection Semantics
+
+MOAT detection is a full-annulus origin-reachability test. Anchor `R_inner` at an origin-containing radius and vary `R_outer`.
+
+Correct:
 
 ```bash
-scp -P $PORT root@$HOST:/root/bench-3090.txt ./results/
+--r-inner=80000000 --r-outer=<tested_outer_radius>
 ```
 
-### 5. DESTROY instance
+Incorrect for moat detection:
+
+```bash
+--r-inner=<tested_radius> --r-outer=<tested_radius + 8192>
+```
+
+The incorrect form only asks whether a narrow shell is self-connected. That invocation caused the 2026-04-22 hard-negative sweep to be voided; see `docs/supportive/2026-04-23-hard-negative-sweep-postmortem.md`.
+
+## Validated Runs
+
+Tsuchimura reproduction checkpoint, k^2=36:
+
+```bash
+cd /workspace/gaussian-moat-cuda/tiles-maxxing/cuda-campaign-v2-sqrt-36
+
+./build-k36/campaign_main_cuda \
+  --k-sq=36 \
+  --r-inner=80000000 \
+  --r-outer=80015782 \
+  --region full-octant \
+  --out /workspace/r80015782.snapshot.bin \
+  --chunk-size=200000
+
+./build-k36/campaign_main_cuda \
+  --k-sq=36 \
+  --r-inner=80000000 \
+  --r-outer=80015790 \
+  --region full-octant \
+  --out /workspace/r80015790.snapshot.bin \
+  --chunk-size=200000
+```
+
+Expected verdicts:
+
+| `R_outer` | Expected verdict |
+|-----------|------------------|
+| 80,015,782 | SPANNING |
+| 80,015,790 | MOAT |
+
+This is the validated bracket `(80,015,782, 80,015,790)`. Tsuchimura's value is the farthest reachable point; the moat begins just past it.
+
+## Sweep Template
+
+Use the same anchored `R_inner` for every point:
+
+```bash
+mkdir -p /workspace/sweeps/boundary/logs
+cd /workspace/gaussian-moat-cuda/tiles-maxxing/cuda-campaign-v2-sqrt-36
+
+for R_OUTER in 80015000 80015700 80015780 80015782 80015790 80015800; do
+  ./build-k36/campaign_main_cuda \
+    --k-sq=36 \
+    --r-inner=80000000 \
+    --r-outer="$R_OUTER" \
+    --region full-octant \
+    --out "/workspace/sweeps/boundary/r${R_OUTER}.snapshot.bin" \
+    --chunk-size=200000 \
+    > "/workspace/sweeps/boundary/logs/r${R_OUTER}.log" 2>&1
+done
+```
+
+Keep each sweep in a timestamped directory and pull logs/snapshots back before destroying the instance.
+
+## Pull Results
+
+```bash
+mkdir -p tiles-maxxing/cuda-campaign-v2-sqrt-36/artifacts/vast-ai-pull
+rsync -avz \
+  -e "ssh -o StrictHostKeyChecking=accept-new -p $PORT" \
+  root@$HOST:/workspace/sweeps/ \
+  tiles-maxxing/cuda-campaign-v2-sqrt-36/artifacts/vast-ai-pull/
+```
+
+## Cost and Cleanup
+
+Use `tmux` for any command over 5 seconds. SSH drops are common; `tmux` keeps builds and sweeps alive.
+
+If you created the instance for the current task, destroy it immediately after pulling results:
 
 ```bash
 $VASTAI destroy instance $ID
-$VASTAI show instances  # must show empty
+$VASTAI show instances
 ```
 
-## Lessons Learned (Prior Campaigns)
+If the instance was already running before your task, do not destroy it unless the user explicitly asks.
 
-### SSH Port Pinning
-Pin the SSH endpoint once at session start. The vast.ai API can return changed bindings mid-run. Cache the port; never re-resolve. (See CLAUDE.md in repo root.)
+## References
 
-### Disk Space
-vast.ai instances often have tight disk. A prior 3090 campaign (March 2026, ID 33123347) died because a 8.4 GB prime file consumed all 20 GB disk. For tile-processing this is not an issue (binary + source < 50 MB), but request >= 20 GB disk to be safe.
-
-### Instance Images
-- `pytorch/pytorch:2.5.1-cuda12.4-cudnn9-devel` — includes nvcc, cuDNN headers, nsys. Reliable.
-- Ensure CUDA version >= 12.0. The multi-kernel code uses C++17 and separate compilation.
-
-### Cost Tracking
-```bash
-# Check accumulated cost
-$VASTAI show instances --raw | python3 -c "import sys,json; d=json.load(sys.stdin); [print(f'ID: {i[\"id\"]}, cost so far: \${i.get(\"total_dph_cost\",0):.4f}') for i in d]"
-```
-
-### tmux Always
-Every long-running command on vast.ai MUST run in tmux. SSH drops are common. If the SSH session dies, tmux keeps the process alive. Non-negotiable.
-
-### Budget Awareness
-Track cost before and after. 3090 instances run ~$0.13-0.20/hr. A 1-hour benchmark session costs < $0.20. Always destroy immediately after work is done.
-
-## Register Cap Considerations by GPU
-
-The multi-kernel architecture uses per-kernel `--maxrregcount` caps. These were tuned for Jetson Orin (8 SMs, 48 KB shared mem/SM, 64K regs/SM). On 3090 (82 SMs, 48 KB shared mem/SM, 64K regs/SM but wider execution), the same caps are a safe starting point. Tuning may unlock further gains.
-
-| Kernel | Jetson Cap | Jetson Actual Regs | Notes |
-|--------|-----------|-------------------|-------|
-| K1 Sieve | 40 | 30 | Headroom for Barrett |
-| K2 MR | uncapped | 46 | Montgomery ILP-critical |
-| K3 Compact | 32 | 21 | Maximize occupancy |
-| K4 UF | 40 | 34 | Balance atomicCAS hiding |
-| K5 FaceEncode | 40 | 40 | Complex control flow |
-
-## Profiling
-
-### Built-in per-kernel timing
-The multi-kernel binary reports per-kernel timing via CUDA events when run in benchmark mode (`./tile_kernel_multi 2000`). This is the primary profiling mechanism.
-
-### nsys (if available)
-```bash
-nsys profile -o /root/profile-3090 ./tile_kernel_multi 2000
-# Copy .nsys-rep back to Mac for GUI analysis
-scp -P $PORT root@$HOST:/root/profile-3090.nsys-rep ./results/
-```
-
-### ncu (if available)
-```bash
-ncu --set full -o /root/ncu-3090 ./tile_kernel_multi 2000
-```
-
-## Correctness Verification
-
-The C++ reference implementation (`tile-cpp/`) is the ground truth. Both the CUDA multi-kernel and C++ implementations must produce byte-identical TileOp output for the same tile coordinates.
-
-Canonical smoke tiles:
-- `(600000000, 600000000)` — prime_count=1978
-- `(699999744, 400000000)` — prime_count=2057
-
-Compare the `tileop_hex` field from both outputs. Must be identical.
+- `docs/supportive/2026-04-22-moat-boundary-final-sweep.md` - validated Tsuchimura bracket
+- `docs/supportive/2026-04-23-hard-negative-sweep-postmortem.md` - voided narrow-shell sweep
+- `docs/supportive/2026-04-22-overflow-diagnostic.md` - R=80M overflow check
+- `methodology/lemmas_v2/campaign-blueprint.md` - engineering SSoT
