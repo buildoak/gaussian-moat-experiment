@@ -1007,7 +1007,7 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
       while (chunk_copied < host_chunk) {
         const std::size_t remaining = host_chunk - chunk_copied;
         const std::size_t slab_tiles =
-            device_slab_tiles_for(config, remaining);
+            std::min(device_slab_capacity, remaining);
         if (slab_tiles > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
           throw std::invalid_argument("device slab exceeds int launch ABI");
         }
