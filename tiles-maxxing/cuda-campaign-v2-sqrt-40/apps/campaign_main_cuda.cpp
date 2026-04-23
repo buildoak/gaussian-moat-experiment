@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <optional>
@@ -231,6 +232,76 @@ std::int64_t elapsed_ms(Clock::time_point start,
       .count();
 }
 
+struct ColumnChunk {
+  std::size_t tile_offset = 0;
+  std::size_t tile_count = 0;
+  std::vector<std::int32_t> columns;
+  std::vector<std::size_t> column_offsets;
+};
+
+std::vector<ColumnChunk> plan_column_chunks(const campaign::Grid& grid,
+                                            std::size_t chunk_size) {
+  if (chunk_size == 0) {
+    throw std::invalid_argument("--chunk-size must be greater than zero");
+  }
+
+  std::vector<ColumnChunk> chunks;
+  ColumnChunk current;
+  std::size_t next_tile_offset = 0;
+  for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+    const auto column_tiles = grid.enumerate_column_tiles(i);
+    if (column_tiles.empty()) continue;
+
+    const std::size_t column_tile_count = column_tiles.size();
+    if (current.tile_count != 0 &&
+        current.tile_count + column_tile_count > chunk_size) {
+      chunks.push_back(std::move(current));
+      current = ColumnChunk{};
+      current.tile_offset = next_tile_offset;
+    }
+    if (current.tile_count == 0) {
+      current.tile_offset = next_tile_offset;
+    }
+    current.columns.push_back(i);
+    current.column_offsets.push_back(current.tile_count);
+    current.tile_count += column_tile_count;
+    next_tile_offset += column_tile_count;
+  }
+
+  if (current.tile_count != 0) {
+    chunks.push_back(std::move(current));
+  }
+  return chunks;
+}
+
+void merge_dispatch_stats(cuda_campaign::DispatchStats& total,
+                          const cuda_campaign::DispatchStats& part) {
+  total.tiles += part.tiles;
+  total.chunks += part.chunks;
+  total.slabs += part.slabs;
+  total.host_chunk_tiles = std::max(total.host_chunk_tiles, part.host_chunk_tiles);
+  total.device_slab_tiles =
+      std::max(total.device_slab_tiles, part.device_slab_tiles);
+  total.phase1_peak_bytes =
+      std::max(total.phase1_peak_bytes, part.phase1_peak_bytes);
+  total.phase2_peak_bytes =
+      std::max(total.phase2_peak_bytes, part.phase2_peak_bytes);
+  total.pinned_host_bytes =
+      std::max(total.pinned_host_bytes, part.pinned_host_bytes);
+  total.stream_count = std::max(total.stream_count, part.stream_count);
+  if (total.device_name.empty()) {
+    total.device_name = part.device_name;
+  }
+  total.k1_cand_overflow_count += part.k1_cand_overflow_count;
+  total.k4_prime_overflow_count += part.k4_prime_overflow_count;
+  total.k4_group_overflow_count += part.k4_group_overflow_count;
+  total.k5_port_overflow_count += part.k5_port_overflow_count;
+  for (const auto& diag : part.first_overflow_tiles) {
+    if (total.first_overflow_tiles.size() >= 10) break;
+    total.first_overflow_tiles.push_back(diag);
+  }
+}
+
 std::vector<campaign::TileOp> process_tiles_cuda(
     const std::vector<campaign::TileCoord>& active_tiles,
     const campaign::CampaignConstants& constants,
@@ -432,39 +503,87 @@ int main(int argc, char** argv) {
               return a.j < b.j;
             });
 
-  const auto encode_start = Clock::now();
-  std::vector<campaign::TileOp> tileops;
-  cuda_campaign::DispatchStats dispatch_stats;
-  try {
-    cuda_campaign::DispatchConfig config;
-    config.host_chunk_tiles = chunk_size;
-    tileops =
-        cuda_campaign::dispatch_tile_batch(active_tiles, constants, config,
-                                           &dispatch_stats);
-  } catch (const std::exception& e) {
-    std::cerr << "Error in CUDA TileOp processing: " << e.what() << "\n";
-    return 5;
-  }
-  const auto encode_end = Clock::now();
-
   campaign::Compositor compositor;
-  const auto comp_start = Clock::now();
   try {
     compositor.init(grid);
-    for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
-      const auto column_tiles = grid.enumerate_column_tiles(i);
-      if (column_tiles.empty()) continue;
-      const std::int64_t offset = grid.flat_index(i, column_tiles.front().j);
-      if (offset < 0) {
-        throw std::runtime_error("active column has no flat-index base");
+  } catch (const std::exception& e) {
+    std::cerr << "Error initializing compositor: " << e.what() << "\n";
+    return 5;
+  }
+
+  const auto encode_start = Clock::now();
+  std::vector<campaign::TileOp> tileops(active_tiles.size());
+  cuda_campaign::DispatchStats dispatch_stats;
+  const std::vector<ColumnChunk> chunks = plan_column_chunks(grid, chunk_size);
+  std::size_t max_chunk_tiles = 0;
+  for (const ColumnChunk& chunk : chunks) {
+    max_chunk_tiles = std::max(max_chunk_tiles, chunk.tile_count);
+  }
+  std::vector<campaign::TileOp> host_buffers[2] = {
+      std::vector<campaign::TileOp>(max_chunk_tiles),
+      std::vector<campaign::TileOp>(max_chunk_tiles),
+  };
+  cuda_campaign::DispatchConfig config;
+  config.host_chunk_tiles = chunk_size;
+
+  auto launch_dispatch =
+      [&](std::size_t chunk_index,
+          int buffer_index) -> std::future<cuda_campaign::DispatchStats> {
+    const ColumnChunk& chunk = chunks[chunk_index];
+    return std::async(std::launch::async, [&, chunk_index, buffer_index, chunk] {
+      cuda_campaign::DispatchStats stats;
+      cuda_campaign::dispatch_tile_batch(
+          active_tiles.data() + static_cast<std::ptrdiff_t>(chunk.tile_offset),
+          chunk.tile_count, constants, host_buffers[buffer_index].data(), config,
+          &stats);
+      return stats;
+    });
+  };
+
+  const auto comp_start = Clock::now();
+  try {
+    if (!chunks.empty()) {
+      std::size_t current_chunk = 0;
+      int current_buffer = 0;
+      auto pending_dispatch = launch_dispatch(current_chunk, current_buffer);
+
+      while (true) {
+        const cuda_campaign::DispatchStats chunk_stats = pending_dispatch.get();
+        merge_dispatch_stats(dispatch_stats, chunk_stats);
+
+        const std::size_t next_chunk = current_chunk + 1;
+        std::optional<std::future<cuda_campaign::DispatchStats>> next_dispatch;
+        int next_buffer = current_buffer;
+        if (next_chunk < chunks.size()) {
+          next_buffer = 1 - current_buffer;
+          next_dispatch.emplace(launch_dispatch(next_chunk, next_buffer));
+        }
+
+        const ColumnChunk& chunk = chunks[current_chunk];
+        std::copy_n(host_buffers[current_buffer].data(), chunk.tile_count,
+                    tileops.data() +
+                        static_cast<std::ptrdiff_t>(chunk.tile_offset));
+        for (std::size_t column_index = 0; column_index < chunk.columns.size();
+             ++column_index) {
+          compositor.ingest_column(
+              chunk.columns[column_index],
+              host_buffers[current_buffer].data() +
+                  static_cast<std::ptrdiff_t>(chunk.column_offsets[column_index]));
+        }
+
+        if (!next_dispatch.has_value()) {
+          break;
+        }
+        pending_dispatch = std::move(*next_dispatch);
+        current_chunk = next_chunk;
+        current_buffer = next_buffer;
       }
-      compositor.ingest_column(
-          i, tileops.data() + static_cast<std::size_t>(offset));
     }
   } catch (const std::exception& e) {
     std::cerr << "Error in compositor: " << e.what() << "\n";
     return 5;
   }
+  const auto encode_end = Clock::now();
   const campaign::Verdict verdict = compositor.finalize();
   const auto comp_end = Clock::now();
 
