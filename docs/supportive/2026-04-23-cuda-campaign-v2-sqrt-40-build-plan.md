@@ -11,7 +11,7 @@ refs: [tiles-maxxing/cuda-campaign-v2-sqrt-36, tiles-maxxing/cpp-campaign-v2, do
 
 ## Summary
 
-Do not port the stale `campaign-sqrt-40/` tree forward. The current v2 CUDA implementation is already parameterized through `-DK_SQ=N` and should become the K=40 solver by building the existing `tiles-maxxing/cuda-campaign-v2-sqrt-36/` source with `-DK_SQ=40`.
+Do not port the stale `campaign-sqrt-40/` tree forward. The current v2 CUDA implementation is already parameterized through `-DK_SQ=N`; the approved K=40 setup is a sibling `tiles-maxxing/cuda-campaign-v2-sqrt-40/` tree copied from the validated v2 CUDA source with only naming/default changes.
 
 One source fix is required before that build is trustworthy: `include/cuda_campaign/constants.cuh` has a wrong K=40 static assertion for `NUM_BACKWARD_OFFSETS`. Under the v3 snapped-grid rules, `C=floor_isqrt(40)=6`, `SIDE_EXP=269`, and the backward half-plane count for `dr^2 + dc^2 <= 40` is 64, not 56. The stale planning note that K=40 "re-derives to 56" is incorrect.
 
@@ -60,7 +60,7 @@ These are reconnaissance signals only. The audit found off-axis geometry and che
 `K_SQ` enters at CMake:
 
 ```bash
-cmake -S tiles-maxxing/cuda-campaign-v2-sqrt-36 -B build-k40 \
+cmake -S tiles-maxxing/cuda-campaign-v2-sqrt-40 -B build-k40 \
   -DK_SQ=40 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=89
 ```
 
@@ -105,9 +105,10 @@ Required code changes:
    - Change the K40 `NUM_BACKWARD_OFFSETS` assertion from 56 to 64.
    - Add or adjust a test/gate that verifies K36=56 and K40=64.
 
-2. Optional naming cleanup only if the coordinator wants a dedicated product path:
-   - A sibling `tiles-maxxing/cuda-campaign-v2-sqrt-40/` can be copied after validation, but it should be a thin duplicate or wrapper of the v2 source, not a forked kernel implementation.
-   - Rename CMake project text from `cuda_campaign_v2_sqrt36` to a neutral `cuda_campaign_v2` if sharing one source tree.
+2. Dedicated K40 product path:
+   - Copy `tiles-maxxing/cuda-campaign-v2-sqrt-36/` to `tiles-maxxing/cuda-campaign-v2-sqrt-40/`.
+   - Make only naming/default changes: default `K_SQ=40`, project name, README/build snippets, artifact paths.
+   - Do not fork algorithmic code.
 
 No planned changes:
 
@@ -130,7 +131,7 @@ No planned changes:
 
 3. Build CUDA v2 for K40 on a CUDA host.
    - Use RTX 4090 CMake architecture `89`.
-   - Keep the source path as `cuda-campaign-v2-sqrt-36` initially, with output directory `build-k40`.
+   - Use source path `tiles-maxxing/cuda-campaign-v2-sqrt-40` with output directory `build-k40`.
    - Run all CUDA tests under `ctest --test-dir build-k40 --output-on-failure`.
 
 4. Run CPU/CUDA byte-parity gates.
@@ -138,15 +139,22 @@ No planned changes:
    - `scripts/run_snapshot_sha_gate.sh --full --k 40 --r-inner 800000000 --r-outer 800010000`.
    - Record constants hash, snapshot hash, and overflow counters.
 
-5. Run first full-annulus K40 sanity points.
+5. Only after cross-validation passes, run first full-annulus K40 sanity points.
    - Connected-side sanity: `--r-inner 800000000 --r-outer 800010000`.
    - Blocked-side reconnaissance: `--r-inner 800000000 --r-outer 850000000`, then `900000000` or `1050000000` if needed.
    - These are exploratory because K40 has no Tsuchimura-style exact boundary in this repo.
 
-6. If a dedicated K40 tree is desired, copy only after gates pass.
-   - Copy `cuda-campaign-v2-sqrt-36/` to `cuda-campaign-v2-sqrt-40/`.
-   - Make only naming/default changes: default `K_SQ=40`, project name, README/build snippets, artifact paths.
-   - Do not fork algorithmic code.
+Moat hunting is explicitly out of scope until the K40 CPU/CUDA cross-validation gates pass.
+
+## First Validation Target
+
+The first target for K40 is cross-checking against the C++ reference, not moat hunting.
+
+- CPU/CUDA TileOp byte parity at K=40 must pass for representative tile batches.
+- Snapshot SHA equality with the `cpp-campaign-v2` K40 goldens must pass, starting with `goldens/5tile-k40.manifest.json` and `goldens/5tile-k40.snapshot.bin`.
+- The full C++ and CUDA test suites must pass for K=40 builds.
+
+Only after these checks pass should K40 campaign runs be used for connected/blocked reconnaissance or moat-boundary searches.
 
 ## Validation Gates
 
@@ -189,7 +197,6 @@ Performance gates:
 
 ## Open Questions
 
-1. Should the final deliverable be a separate `cuda-campaign-v2-sqrt-40/` directory, or is `cuda-campaign-v2` built with `-DK_SQ=40` acceptable?
-2. What is the first proof-grade K40 anchoring policy: `R_inner=800000000` for all exploratory outer radii, or a lower origin-containing anchor?
-3. What K40 verdict should be considered the first acceptance target: reproduce old connected at 800M, find first MOAT by sweeping 800M to 900M, or jump to 1.05B to confirm the blocked regime?
-4. Should K40 campaign outputs be written under the existing `cuda-campaign-v2-sqrt-36/artifacts/` tree or a new K40 artifact root?
+1. R_inner anchoring is deferred and must not be hardcoded into the K40 setup.
+2. What K40 verdict should be considered the first post-validation reconnaissance target: reproduce old connected at 800M, find first MOAT by sweeping 800M to 900M, or jump to 1.05B to confirm the blocked regime?
+3. Should K40 campaign outputs be written under a new K40 artifact root inside `cuda-campaign-v2-sqrt-40/`, or under a separate shared campaign-output location?
