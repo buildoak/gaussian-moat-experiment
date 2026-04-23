@@ -36,6 +36,7 @@ struct K1K4Buffers {
 
 struct K1K4DebugDownload {
   std::vector<std::uint32_t> candidate_count;
+  std::vector<std::uint32_t> bitmap;
   std::vector<std::uint32_t> prime_count;
   std::vector<std::uint32_t> prime_pos;
   std::vector<std::uint16_t> parent;

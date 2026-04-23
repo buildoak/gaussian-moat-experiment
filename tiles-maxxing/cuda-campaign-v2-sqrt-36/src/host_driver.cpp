@@ -548,6 +548,7 @@ K1K4DebugDownload run_k1_to_k4_debug(
     launch_k1_to_k4(buffers, num_tiles, stream);
 
     out.candidate_count.resize(tile_count);
+    out.bitmap.resize(tile_count * BITMAP_WORDS);
     out.prime_count.resize(tile_count);
     out.prime_pos.resize(tile_count * MAX_PRIMES_GPU);
     out.parent.resize(tile_count * MAX_PRIMES_GPU);
@@ -563,6 +564,10 @@ K1K4DebugDownload run_k1_to_k4_debug(
                                    sizeof(std::uint32_t),
                                cudaMemcpyDeviceToHost, stream),
                "cudaMemcpyAsync(candidate_count)");
+    check_cuda(cudaMemcpyAsync(out.bitmap.data(), d_bitmap.get(),
+                               out.bitmap.size() * sizeof(std::uint32_t),
+                               cudaMemcpyDeviceToHost, stream),
+               "cudaMemcpyAsync(bitmap)");
     check_cuda(cudaMemcpyAsync(out.prime_count.data(), d_prime_count.get(),
                                out.prime_count.size() * sizeof(std::uint32_t),
                                cudaMemcpyDeviceToHost, stream),
@@ -716,6 +721,7 @@ K1K5DebugDownload run_k1_to_k5_debug(
     launch_k1_to_k5(buffers, num_tiles, stream);
 
     out.k1k4.candidate_count.resize(tile_count);
+    out.k1k4.bitmap.resize(tile_count * BITMAP_WORDS);
     out.k1k4.prime_count.resize(tile_count);
     out.k1k4.prime_pos.resize(prime_slots);
     out.k1k4.parent.resize(prime_slots);
@@ -737,6 +743,11 @@ K1K5DebugDownload run_k1_to_k5_debug(
                                    sizeof(std::uint32_t),
                                cudaMemcpyDeviceToHost, stream),
                "cudaMemcpyAsync(candidate_count)");
+    check_cuda(cudaMemcpyAsync(out.k1k4.bitmap.data(), d_bitmap.get(),
+                               out.k1k4.bitmap.size() *
+                                   sizeof(std::uint32_t),
+                               cudaMemcpyDeviceToHost, stream),
+               "cudaMemcpyAsync(bitmap)");
     check_cuda(cudaMemcpyAsync(out.k1k4.prime_count.data(),
                                d_prime_count.get(),
                                out.k1k4.prime_count.size() *

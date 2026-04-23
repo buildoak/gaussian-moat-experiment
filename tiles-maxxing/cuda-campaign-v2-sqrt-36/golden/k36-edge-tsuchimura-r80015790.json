@@ -1,0 +1,29 @@
+{
+  "schema": "cuda-golden-v1",
+  "baseline_commit": "c40fbd1",
+  "batch": "k36-edge-tsuchimura-r80015790",
+  "description": "Anchored edge batch at the first validated MOAT radius",
+  "k_sq": 36,
+  "r_inner": 80000000,
+  "r_outer": 80015790,
+  "region": "centered-contiguous-tile-batch",
+  "max_tiles": 1024,
+  "tile_count": 1024,
+  "i_min": 110507,
+  "i_max": 110522,
+  "candidate_count_total": 5735793,
+  "prime_count_total": 2541498,
+  "overflow_tile_count": 0,
+  "verdict": "MOAT",
+  "constants_hash": "dc62b1e3b3123c7e2a1816fbd74642e0390a454dc9bf639f99ea51499880182b",
+  "hashes": {
+    "prime_bitmap_sha256": "3331b8d4a42ed336f54460e6fb1054d6af512aa6d247b4f13cb9fa62dcd980ba",
+    "face_encoding_sha256": "9fcd9f498c32b257623e34db7eca0e7afa5936dfc7b22f183be697c08560928d",
+    "connectivity_labels_sha256": "25dab547cdd9caab0741cc64bd62ec9f036872488815d40e7762f7801eab6b8b",
+    "tileop_sha256": "9382855f6d23a0fb635616c086bab2fd99c4c2438ae71fa1573b7a75014e04c3"
+  },
+  "samples": {
+    "prime_bitmap_nonzero_words": [{"tile":0,"word":1142,"value":"0x00000008"},{"tile":0,"word":1150,"value":"0x00400000"},{"tile":0,"word":1151,"value":"0x00000500"},{"tile":0,"word":1159,"value":"0x00800000"},{"tile":0,"word":1160,"value":"0x00000002"},{"tile":0,"word":1168,"value":"0x05000000"},{"tile":0,"word":1177,"value":"0x00080000"},{"tile":0,"word":1186,"value":"0x00004000"},{"tile":0,"word":1195,"value":"0x00020000"},{"tile":0,"word":1204,"value":"0x00044000"},{"tile":0,"word":1213,"value":"0x08000800"},{"tile":0,"word":1222,"value":"0x04004004"},{"tile":0,"word":1223,"value":"0x00001011"},{"tile":0,"word":1231,"value":"0x00002000"},{"tile":0,"word":1240,"value":"0x00041101"},{"tile":0,"word":1241,"value":"0x00000400"}],
+    "prime_counts": [{"tile":0,"coord":[110507,292308],"prime_count":948},{"tile":1,"coord":[110507,292309],"prime_count":2516},{"tile":2,"coord":[110507,292310],"prime_count":2522},{"tile":3,"coord":[110507,292311],"prime_count":2499},{"tile":4,"coord":[110507,292312],"prime_count":2563},{"tile":5,"coord":[110507,292313],"prime_count":2610},{"tile":6,"coord":[110507,292314],"prime_count":2489},{"tile":7,"coord":[110507,292315],"prime_count":2523},{"tile":8,"coord":[110507,292316],"prime_count":2485},{"tile":9,"coord":[110507,292317],"prime_count":2573},{"tile":10,"coord":[110507,292318],"prime_count":2507},{"tile":11,"coord":[110507,292319],"prime_count":2607},{"tile":12,"coord":[110507,292320],"prime_count":2468},{"tile":13,"coord":[110507,292321],"prime_count":2520},{"tile":14,"coord":[110507,292322],"prime_count":2514},{"tile":15,"coord":[110507,292323],"prime_count":2538}]
+  }
+}

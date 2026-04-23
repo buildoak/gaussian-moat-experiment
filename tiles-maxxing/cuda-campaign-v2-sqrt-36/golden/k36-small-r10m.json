@@ -1,0 +1,29 @@
+{
+  "schema": "cuda-golden-v1",
+  "baseline_commit": "c40fbd1",
+  "batch": "k36-small-r10m",
+  "description": "Small R quick validation centered tile batch",
+  "k_sq": 36,
+  "r_inner": 10000000,
+  "r_outer": 10008192,
+  "region": "centered-contiguous-tile-batch",
+  "max_tiles": 256,
+  "tile_count": 256,
+  "i_min": 13822,
+  "i_max": 13829,
+  "candidate_count_total": 1431825,
+  "prime_count_total": 698890,
+  "overflow_tile_count": 0,
+  "verdict": "SPANNING",
+  "constants_hash": "9756d0f908486a2b6b504b8500265f9cd1a700c921689187338b04188b33ef0d",
+  "hashes": {
+    "prime_bitmap_sha256": "5104d7cb22906554b7c54cf9dd120d0574b191f9fc22d39bb2cc7fc8f416aaf4",
+    "face_encoding_sha256": "4f6013acee59ff67e94306b3014a07c01c676acabe80891b82381847e22e22c9",
+    "connectivity_labels_sha256": "180e7f27b11140c238c348b8a31ff2dfa67ac7dba8f1afdb549de070331764a6",
+    "tileop_sha256": "e753a26258bf70265e5b7a53494804f049f24cb02b7ccd9140aabc710e51365b"
+  },
+  "samples": {
+    "prime_bitmap_nonzero_words": [{"tile":0,"word":2312,"value":"0x00000800"},{"tile":0,"word":2320,"value":"0x10000000"},{"tile":0,"word":2338,"value":"0x05000000"},{"tile":0,"word":2339,"value":"0x00000400"},{"tile":0,"word":2347,"value":"0x00080000"},{"tile":0,"word":2356,"value":"0x00100000"},{"tile":0,"word":2357,"value":"0x00000440"},{"tile":0,"word":2365,"value":"0x02000000"},{"tile":0,"word":2374,"value":"0x00400000"},{"tile":0,"word":2375,"value":"0x00000400"},{"tile":0,"word":2383,"value":"0x80020000"},{"tile":0,"word":2410,"value":"0x40000000"},{"tile":0,"word":2411,"value":"0x00000004"},{"tile":0,"word":2419,"value":"0x00200000"},{"tile":1,"word":8,"value":"0x00000800"},{"tile":1,"word":16,"value":"0x10000000"}],
+    "prime_counts": [{"tile":0,"coord":[13822,36534],"prime_count":17},{"tile":1,"coord":[13822,36535],"prime_count":2325},{"tile":2,"coord":[13822,36536],"prime_count":2844},{"tile":3,"coord":[13822,36537],"prime_count":2897},{"tile":4,"coord":[13822,36538],"prime_count":2761},{"tile":5,"coord":[13822,36539],"prime_count":2798},{"tile":6,"coord":[13822,36540],"prime_count":2905},{"tile":7,"coord":[13822,36541],"prime_count":2831},{"tile":8,"coord":[13822,36542],"prime_count":2783},{"tile":9,"coord":[13822,36543],"prime_count":2854},{"tile":10,"coord":[13822,36544],"prime_count":2723},{"tile":11,"coord":[13822,36545],"prime_count":2862},{"tile":12,"coord":[13822,36546],"prime_count":2829},{"tile":13,"coord":[13822,36547],"prime_count":2911},{"tile":14,"coord":[13822,36548],"prime_count":2823},{"tile":15,"coord":[13822,36549],"prime_count":2892}]
+  }
+}

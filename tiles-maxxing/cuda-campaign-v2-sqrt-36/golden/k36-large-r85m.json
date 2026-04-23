@@ -1,0 +1,29 @@
+{
+  "schema": "cuda-golden-v1",
+  "baseline_commit": "c40fbd1",
+  "batch": "k36-large-r85m",
+  "description": "Large R stress centered tile batch",
+  "k_sq": 36,
+  "r_inner": 85000000,
+  "r_outer": 85008192,
+  "region": "centered-contiguous-tile-batch",
+  "max_tiles": 1024,
+  "tile_count": 1024,
+  "i_min": 117402,
+  "i_max": 117430,
+  "candidate_count_total": 5736158,
+  "prime_count_total": 2486296,
+  "overflow_tile_count": 0,
+  "verdict": "MOAT",
+  "constants_hash": "86e9f7350770551798a0f6ae49ae05cd45bfe4317a7d63a37672601173984e76",
+  "hashes": {
+    "prime_bitmap_sha256": "bf825b2725302c8254a8bb3da1484358f4d9180aa50c43bbeac7151e9ccf860d",
+    "face_encoding_sha256": "eb83e7944f9c25be23bd427bc0b9fa106a1ad27b379a5193d75691b31cad2682",
+    "connectivity_labels_sha256": "c80536eb51f18cd31f3729483982308a8b2edcc5f3e574c9d37b5b25f080b7e0",
+    "tileop_sha256": "1639e40e909b508c9dfe0b93c1213a4ec27a3c76f366e5d9f98c1c4d8a1d8216"
+  },
+  "samples": {
+    "prime_bitmap_nonzero_words": [{"tile":0,"word":485,"value":"0x00000001"},{"tile":0,"word":494,"value":"0x00000008"},{"tile":0,"word":503,"value":"0x00001000"},{"tile":0,"word":529,"value":"0x80020000"},{"tile":0,"word":547,"value":"0x80000000"},{"tile":0,"word":556,"value":"0x00400000"},{"tile":0,"word":557,"value":"0x00001004"},{"tile":0,"word":565,"value":"0x02080000"},{"tile":0,"word":574,"value":"0x40001400"},{"tile":0,"word":592,"value":"0x04000000"},{"tile":0,"word":601,"value":"0x80000000"},{"tile":0,"word":619,"value":"0x02000000"},{"tile":0,"word":620,"value":"0x00000a00"},{"tile":0,"word":628,"value":"0x01000100"},{"tile":0,"word":638,"value":"0x00000200"},{"tile":0,"word":645,"value":"0x00004000"}],
+    "prime_counts": [{"tile":0,"coord":[117402,310582],"prime_count":1580},{"tile":1,"coord":[117402,310583],"prime_count":2606},{"tile":2,"coord":[117402,310584],"prime_count":2520},{"tile":3,"coord":[117402,310585],"prime_count":2492},{"tile":4,"coord":[117402,310586],"prime_count":2468},{"tile":5,"coord":[117402,310587],"prime_count":2580},{"tile":6,"coord":[117402,310588],"prime_count":2482},{"tile":7,"coord":[117402,310589],"prime_count":2553},{"tile":8,"coord":[117402,310590],"prime_count":2536},{"tile":9,"coord":[117402,310591],"prime_count":2465},{"tile":10,"coord":[117402,310592],"prime_count":2482},{"tile":11,"coord":[117402,310593],"prime_count":2516},{"tile":12,"coord":[117402,310594],"prime_count":2568},{"tile":13,"coord":[117402,310595],"prime_count":2504},{"tile":14,"coord":[117402,310596],"prime_count":2526},{"tile":15,"coord":[117402,310597],"prime_count":2482}]
+  }
+}

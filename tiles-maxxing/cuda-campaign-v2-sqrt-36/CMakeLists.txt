@@ -103,6 +103,22 @@ target_compile_definitions(campaign_main_cuda
     K_SQ=${K_SQ}
 )
 
+add_executable(cuda_golden_dump
+  apps/cuda_golden_dump.cpp
+)
+target_include_directories(cuda_golden_dump
+  PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../cpp-campaign-v2/src
+)
+target_link_libraries(cuda_golden_dump
+  PRIVATE
+    campaign_cuda
+)
+target_compile_definitions(cuda_golden_dump
+  PRIVATE
+    K_SQ=${K_SQ}
+)
+
 enable_testing()
 
 add_library(k3k4_parity_support STATIC
