@@ -1108,102 +1108,105 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         check_cuda(cudaEventRecord(slot.compute_done.get(),
                                    streams.compute.get()),
                    "cudaEventRecord(compute_done)");
-        check_cuda(cudaEventSynchronize(slot.compute_done.get()),
-                   "cudaEventSynchronize(compute_done)");
+        if (stats != nullptr) {
+          check_cuda(cudaEventSynchronize(slot.compute_done.get()),
+                     "cudaEventSynchronize(compute_done)");
 
-        std::vector<std::uint32_t> h_raw_total_cands(slab_tiles);
-        std::vector<std::uint32_t> h_k1_overflow(slab_tiles);
-        std::vector<std::uint32_t> h_prime_count(slab_tiles);
-        std::vector<std::uint16_t> h_max_label(slab_tiles);
-        std::vector<std::uint8_t> h_remap_overflow(slab_tiles);
-        std::vector<std::uint16_t> h_face_rep_counts(face_count_slots);
-        check_cuda(cudaMemcpy(h_raw_total_cands.data(),
-                              workspace.d_raw_total_cands.get(),
-                              h_raw_total_cands.size() *
-                                  sizeof(std::uint32_t),
-                              cudaMemcpyDeviceToHost),
-                   "cudaMemcpy(raw_total_cands)");
-        check_cuda(cudaMemcpy(h_k1_overflow.data(),
-                              workspace.d_k1_overflow.get(),
-                              h_k1_overflow.size() * sizeof(std::uint32_t),
-                              cudaMemcpyDeviceToHost),
-                   "cudaMemcpy(k1_overflow)");
-        check_cuda(cudaMemcpy(h_prime_count.data(),
-                              workspace.d_prime_count.get(),
-                              h_prime_count.size() * sizeof(std::uint32_t),
-                              cudaMemcpyDeviceToHost),
-                   "cudaMemcpy(prime_count)");
-        check_cuda(cudaMemcpy(h_max_label.data(),
-                              workspace.d_max_label.get(),
-                              h_max_label.size() * sizeof(std::uint16_t),
-                              cudaMemcpyDeviceToHost),
-                   "cudaMemcpy(max_label)");
-        check_cuda(cudaMemcpy(h_remap_overflow.data(),
-                              workspace.d_overflow.get(),
-                              h_remap_overflow.size() * sizeof(std::uint8_t),
-                              cudaMemcpyDeviceToHost),
-                   "cudaMemcpy(remap_overflow)");
-        check_cuda(cudaMemcpy(h_face_rep_counts.data(),
-                              workspace.d_face_rep_counts.get(),
-                              h_face_rep_counts.size() *
-                                  sizeof(std::uint16_t),
-                              cudaMemcpyDeviceToHost),
-                   "cudaMemcpy(face_rep_counts)");
+          std::vector<std::uint32_t> h_raw_total_cands(slab_tiles);
+          std::vector<std::uint32_t> h_k1_overflow(slab_tiles);
+          std::vector<std::uint32_t> h_prime_count(slab_tiles);
+          std::vector<std::uint16_t> h_max_label(slab_tiles);
+          std::vector<std::uint8_t> h_remap_overflow(slab_tiles);
+          std::vector<std::uint16_t> h_face_rep_counts(face_count_slots);
+          check_cuda(cudaMemcpy(h_raw_total_cands.data(),
+                                workspace.d_raw_total_cands.get(),
+                                h_raw_total_cands.size() *
+                                    sizeof(std::uint32_t),
+                                cudaMemcpyDeviceToHost),
+                     "cudaMemcpy(raw_total_cands)");
+          check_cuda(cudaMemcpy(h_k1_overflow.data(),
+                                workspace.d_k1_overflow.get(),
+                                h_k1_overflow.size() * sizeof(std::uint32_t),
+                                cudaMemcpyDeviceToHost),
+                     "cudaMemcpy(k1_overflow)");
+          check_cuda(cudaMemcpy(h_prime_count.data(),
+                                workspace.d_prime_count.get(),
+                                h_prime_count.size() * sizeof(std::uint32_t),
+                                cudaMemcpyDeviceToHost),
+                     "cudaMemcpy(prime_count)");
+          check_cuda(cudaMemcpy(h_max_label.data(),
+                                workspace.d_max_label.get(),
+                                h_max_label.size() * sizeof(std::uint16_t),
+                                cudaMemcpyDeviceToHost),
+                     "cudaMemcpy(max_label)");
+          check_cuda(cudaMemcpy(h_remap_overflow.data(),
+                                workspace.d_overflow.get(),
+                                h_remap_overflow.size() * sizeof(std::uint8_t),
+                                cudaMemcpyDeviceToHost),
+                     "cudaMemcpy(remap_overflow)");
+          check_cuda(cudaMemcpy(h_face_rep_counts.data(),
+                                workspace.d_face_rep_counts.get(),
+                                h_face_rep_counts.size() *
+                                    sizeof(std::uint16_t),
+                                cudaMemcpyDeviceToHost),
+                     "cudaMemcpy(face_rep_counts)");
 
-        for (std::size_t t = 0; t < slab_tiles; ++t) {
-          const bool k1_cand_overflow = h_k1_overflow[t] != 0;
-          const bool k4_prime_overflow =
-              h_prime_count[t] > static_cast<std::uint32_t>(MAX_PRIMES_GPU);
-          const bool k4_group_overflow =
-              h_remap_overflow[t] != 0 && !k1_cand_overflow &&
-              !k4_prime_overflow;
-          std::uint32_t port_sum = 0;
-          std::uint16_t port_counts[4] = {0, 0, 0, 0};
-          for (int face = 0; face < NUM_FACES; ++face) {
-            const std::uint16_t ports =
-                h_face_rep_counts[t * NUM_FACES + static_cast<std::size_t>(face)];
-            port_counts[face] = ports;
-            port_sum += ports;
-          }
-          const bool k5_port_overflow = port_sum > MAX_PORTS_PER_TILE;
-
-          local_stats.k1_cand_overflow_count += k1_cand_overflow ? 1U : 0U;
-          local_stats.k4_prime_overflow_count += k4_prime_overflow ? 1U : 0U;
-          local_stats.k4_group_overflow_count += k4_group_overflow ? 1U : 0U;
-          local_stats.k5_port_overflow_count += k5_port_overflow ? 1U : 0U;
-
-          if ((k1_cand_overflow || k4_prime_overflow ||
-               k4_group_overflow || k5_port_overflow) &&
-              local_stats.first_overflow_tiles.size() < 10) {
-            DispatchStats::OverflowDiagnostic diag{};
-            diag.coord = tiles[global_offset + t];
-            diag.candidate_count = h_raw_total_cands[t];
-            diag.prime_count = h_prime_count[t];
-            diag.group_count = h_max_label[t];
+          for (std::size_t t = 0; t < slab_tiles; ++t) {
+            const bool k1_cand_overflow = h_k1_overflow[t] != 0;
+            const bool k4_prime_overflow =
+                h_prime_count[t] > static_cast<std::uint32_t>(MAX_PRIMES_GPU);
+            const bool k4_group_overflow =
+                h_remap_overflow[t] != 0 && !k1_cand_overflow &&
+                !k4_prime_overflow;
+            std::uint32_t port_sum = 0;
+            std::uint16_t port_counts[4] = {0, 0, 0, 0};
             for (int face = 0; face < NUM_FACES; ++face) {
-              diag.port_counts[face] = port_counts[face];
+              const std::uint16_t ports =
+                  h_face_rep_counts[t * NUM_FACES +
+                                    static_cast<std::size_t>(face)];
+              port_counts[face] = ports;
+              port_sum += ports;
             }
-            diag.k1_cand_overflow = k1_cand_overflow;
-            diag.k4_prime_overflow = k4_prime_overflow;
-            diag.k4_group_overflow = k4_group_overflow;
-            diag.k5_port_overflow = k5_port_overflow;
-            local_stats.first_overflow_tiles.push_back(diag);
-          }
+            const bool k5_port_overflow = port_sum > MAX_PORTS_PER_TILE;
 
-          if (k4_group_overflow && group_dump_path != nullptr &&
-              !group_dump_written) {
-            dump_group_overflow_tile_csv(
-                group_dump_path, tiles[global_offset + t],
-                h_raw_total_cands[t], h_prime_count[t], h_max_label[t],
-                workspace.d_prime_pos.get() + t * MAX_PRIMES_GPU,
-                workspace.d_parent.get() + t * MAX_PRIMES_GPU,
-                workspace.d_wire_label_by_raw_root.get() +
-                    t * MAX_PRIMES_GPU);
-            group_dump_written = true;
-            if (group_dump_abort) {
-              throw std::runtime_error(
-                  std::string("captured K4 group overflow dump at ") +
-                  group_dump_path);
+            local_stats.k1_cand_overflow_count += k1_cand_overflow ? 1U : 0U;
+            local_stats.k4_prime_overflow_count += k4_prime_overflow ? 1U : 0U;
+            local_stats.k4_group_overflow_count += k4_group_overflow ? 1U : 0U;
+            local_stats.k5_port_overflow_count += k5_port_overflow ? 1U : 0U;
+
+            if ((k1_cand_overflow || k4_prime_overflow ||
+                 k4_group_overflow || k5_port_overflow) &&
+                local_stats.first_overflow_tiles.size() < 10) {
+              DispatchStats::OverflowDiagnostic diag{};
+              diag.coord = tiles[global_offset + t];
+              diag.candidate_count = h_raw_total_cands[t];
+              diag.prime_count = h_prime_count[t];
+              diag.group_count = h_max_label[t];
+              for (int face = 0; face < NUM_FACES; ++face) {
+                diag.port_counts[face] = port_counts[face];
+              }
+              diag.k1_cand_overflow = k1_cand_overflow;
+              diag.k4_prime_overflow = k4_prime_overflow;
+              diag.k4_group_overflow = k4_group_overflow;
+              diag.k5_port_overflow = k5_port_overflow;
+              local_stats.first_overflow_tiles.push_back(diag);
+            }
+
+            if (k4_group_overflow && group_dump_path != nullptr &&
+                !group_dump_written) {
+              dump_group_overflow_tile_csv(
+                  group_dump_path, tiles[global_offset + t],
+                  h_raw_total_cands[t], h_prime_count[t], h_max_label[t],
+                  workspace.d_prime_pos.get() + t * MAX_PRIMES_GPU,
+                  workspace.d_parent.get() + t * MAX_PRIMES_GPU,
+                  workspace.d_wire_label_by_raw_root.get() +
+                      t * MAX_PRIMES_GPU);
+              group_dump_written = true;
+              if (group_dump_abort) {
+                throw std::runtime_error(
+                    std::string("captured K4 group overflow dump at ") +
+                    group_dump_path);
+              }
             }
           }
         }
