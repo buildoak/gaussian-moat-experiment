@@ -211,6 +211,54 @@ std::size_t checked_bytes(std::size_t count,
   return count * bytes_per_item;
 }
 
+std::size_t checked_add(std::size_t lhs,
+                        std::size_t rhs,
+                        const char* what) {
+  if (rhs > std::numeric_limits<std::size_t>::max() - lhs) {
+    throw std::overflow_error(std::string(what) + " byte count overflow");
+  }
+  return lhs + rhs;
+}
+
+std::size_t pooled_device_bytes_for_tiles(std::size_t tiles, int ring_slots) {
+  std::size_t total = 0;
+  const auto add = [&](std::size_t count, std::size_t item_size,
+                       const char* what) {
+    total = checked_add(total, checked_bytes(count, item_size, what), what);
+  };
+
+  const std::size_t prime_slots = tiles * MAX_PRIMES_GPU;
+  const std::size_t face_slots = tiles * NUM_FACES * MAX_PRIMES_GPU;
+  const std::size_t face_count_slots = tiles * NUM_FACES;
+
+  add(tiles, sizeof(campaign::TileCoord), "pooled d_coords");
+  add(tiles * MAX_CANDIDATES_GPU, sizeof(std::uint32_t),
+      "pooled d_cand_list");
+  add(tiles, sizeof(std::uint32_t), "pooled d_total_cands");
+  add(tiles, sizeof(std::uint32_t), "pooled d_raw_total_cands");
+  add(tiles, sizeof(std::uint32_t), "pooled d_k1_overflow");
+  add(tiles * BITMAP_WORDS, sizeof(std::uint32_t), "pooled d_bitmap");
+  add(tiles * ROW_PREFIX_ENTRIES, sizeof(std::uint16_t),
+      "pooled d_row_prefix");
+  add(prime_slots, sizeof(std::uint32_t), "pooled d_prime_pos");
+  add(tiles, sizeof(std::uint32_t), "pooled d_prime_count");
+  add(prime_slots, sizeof(std::uint16_t), "pooled d_parent");
+  add(prime_slots, sizeof(std::uint8_t), "pooled d_prime_geo_bits");
+  add(prime_slots, sizeof(std::uint16_t),
+      "pooled d_wire_label_by_raw_root");
+  add(tiles, sizeof(std::uint16_t), "pooled d_max_label");
+  add(tiles, sizeof(std::uint8_t), "pooled d_overflow");
+  add(tiles * 256U, sizeof(std::uint8_t), "pooled d_group_flags");
+  add(face_slots, sizeof(std::uint16_t), "pooled d_face_indices");
+  add(face_count_slots, sizeof(std::uint16_t), "pooled d_face_counts");
+  add(face_slots, sizeof(std::uint16_t), "pooled d_face_roots");
+  add(face_slots, sizeof(FaceRepresentative), "pooled d_face_reps");
+  add(face_count_slots, sizeof(std::uint16_t), "pooled d_face_rep_counts");
+  add(tiles * static_cast<std::size_t>(ring_slots), sizeof(TileOp),
+      "pooled d_tileops");
+  return total;
+}
+
 std::size_t device_slab_tiles_for(const DispatchConfig& config,
                                   std::size_t remaining_tiles) {
   if (remaining_tiles == 0) return 0;
@@ -228,7 +276,7 @@ std::size_t device_slab_tiles_for(const DispatchConfig& config,
     budget = std::min(budget, free_bytes - config.device_safety_bytes);
   }
   const std::size_t per_tile =
-      std::max(phase1_bytes_for_tiles(1), phase2_bytes_for_tiles(1));
+      pooled_device_bytes_for_tiles(1, config.ring_slots);
   if (per_tile == 0 || budget < per_tile) {
     throw std::runtime_error("CUDA dispatch budget cannot fit one device slab");
   }
@@ -301,19 +349,21 @@ void dump_group_overflow_tile_csv(
 struct HostRingSlot {
   PinnedBuffer<campaign::TileCoord> coords;
   PinnedBuffer<campaign::TileOp> tileops;
+  DeviceBuffer<TileOp> d_tileops;
   Event h2d_done;
   Event compute_done;
   Event d2h_done;
 
-  explicit HostRingSlot(std::size_t host_chunk_tiles)
-      : coords(host_chunk_tiles), tileops(host_chunk_tiles) {}
+  HostRingSlot(std::size_t host_chunk_tiles, std::size_t device_slab_tiles)
+      : coords(host_chunk_tiles),
+        tileops(host_chunk_tiles),
+        d_tileops(device_slab_tiles) {}
 };
 
 struct PendingD2H {
   bool active = false;
   std::size_t global_offset = 0;
   std::size_t tiles = 0;
-  std::unique_ptr<DeviceBuffer<TileOp>> d_tileops;
 };
 
 struct Streams {
@@ -330,9 +380,55 @@ void drain_pending_d2h(HostRingSlot& slot,
              "cudaEventSynchronize(d2h_done)");
   std::memcpy(output_tileops + pending.global_offset, slot.tileops.get(),
               pending.tiles * sizeof(campaign::TileOp));
-  pending.d_tileops.reset();
   pending = PendingD2H{};
 }
+
+struct DeviceWorkspace {
+  explicit DeviceWorkspace(std::size_t capacity)
+      : capacity_tiles(capacity),
+        d_coords(capacity),
+        d_cand_list(capacity * MAX_CANDIDATES_GPU),
+        d_total_cands(capacity),
+        d_raw_total_cands(capacity),
+        d_k1_overflow(capacity),
+        d_bitmap(capacity * BITMAP_WORDS),
+        d_row_prefix(capacity * ROW_PREFIX_ENTRIES),
+        d_prime_pos(capacity * MAX_PRIMES_GPU),
+        d_prime_count(capacity),
+        d_parent(capacity * MAX_PRIMES_GPU),
+        d_prime_geo_bits(capacity * MAX_PRIMES_GPU),
+        d_wire_label_by_raw_root(capacity * MAX_PRIMES_GPU),
+        d_max_label(capacity),
+        d_overflow(capacity),
+        d_group_flags(capacity * 256U),
+        d_face_indices(capacity * NUM_FACES * MAX_PRIMES_GPU),
+        d_face_counts(capacity * NUM_FACES),
+        d_face_roots(capacity * NUM_FACES * MAX_PRIMES_GPU),
+        d_face_reps(capacity * NUM_FACES * MAX_PRIMES_GPU),
+        d_face_rep_counts(capacity * NUM_FACES) {}
+
+  std::size_t capacity_tiles = 0;
+  DeviceBuffer<campaign::TileCoord> d_coords;
+  DeviceBuffer<std::uint32_t> d_cand_list;
+  DeviceBuffer<std::uint32_t> d_total_cands;
+  DeviceBuffer<std::uint32_t> d_raw_total_cands;
+  DeviceBuffer<std::uint32_t> d_k1_overflow;
+  DeviceBuffer<std::uint32_t> d_bitmap;
+  DeviceBuffer<std::uint16_t> d_row_prefix;
+  DeviceBuffer<std::uint32_t> d_prime_pos;
+  DeviceBuffer<std::uint32_t> d_prime_count;
+  DeviceBuffer<std::uint16_t> d_parent;
+  DeviceBuffer<std::uint8_t> d_prime_geo_bits;
+  DeviceBuffer<std::uint16_t> d_wire_label_by_raw_root;
+  DeviceBuffer<std::uint16_t> d_max_label;
+  DeviceBuffer<std::uint8_t> d_overflow;
+  DeviceBuffer<std::uint8_t> d_group_flags;
+  DeviceBuffer<std::uint16_t> d_face_indices;
+  DeviceBuffer<std::uint16_t> d_face_counts;
+  DeviceBuffer<std::uint16_t> d_face_roots;
+  DeviceBuffer<FaceRepresentative> d_face_reps;
+  DeviceBuffer<std::uint16_t> d_face_rep_counts;
+};
 
 void fill_k1k4_buffers(K1K4Buffers* buffers,
                        campaign::TileCoord* d_coords,
@@ -857,13 +953,19 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
 
   try {
     Streams streams;
+    const std::size_t max_requested_slab =
+        std::min(config.host_chunk_tiles, count);
+    const std::size_t device_slab_capacity =
+        device_slab_tiles_for(config, max_requested_slab);
     std::vector<std::unique_ptr<HostRingSlot>> ring;
     std::vector<PendingD2H> pending(
         static_cast<std::size_t>(config.ring_slots));
     ring.reserve(static_cast<std::size_t>(config.ring_slots));
     for (int slot = 0; slot < config.ring_slots; ++slot) {
-      ring.emplace_back(std::make_unique<HostRingSlot>(config.host_chunk_tiles));
+      ring.emplace_back(std::make_unique<HostRingSlot>(config.host_chunk_tiles,
+                                                       device_slab_capacity));
     }
+    DeviceWorkspace workspace(device_slab_capacity);
 
     DispatchStats local_stats{};
     local_stats.tiles = count;
@@ -919,15 +1021,7 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         std::memcpy(slot.coords.get(), tiles + global_offset,
                     slab_tiles * sizeof(campaign::TileCoord));
 
-        DeviceBuffer<campaign::TileCoord> d_coords(slab_tiles);
-        DeviceBuffer<std::uint32_t> d_cand_list(
-            slab_tiles * MAX_CANDIDATES_GPU);
-        DeviceBuffer<std::uint32_t> d_total_cands(slab_tiles);
-        DeviceBuffer<std::uint32_t> d_raw_total_cands(slab_tiles);
-        DeviceBuffer<std::uint32_t> d_k1_overflow(slab_tiles);
-        DeviceBuffer<std::uint32_t> d_bitmap(slab_tiles * BITMAP_WORDS);
-
-        check_cuda(cudaMemcpyAsync(d_coords.get(), slot.coords.get(),
+        check_cuda(cudaMemcpyAsync(workspace.d_coords.get(), slot.coords.get(),
                                    slab_tiles * sizeof(campaign::TileCoord),
                                    cudaMemcpyHostToDevice, streams.h2d.get()),
                    "cudaMemcpyAsync(dispatch coords H2D)");
@@ -938,65 +1032,55 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
                    "cudaStreamWaitEvent(h2d_done)");
 
         const int num_tiles = static_cast<int>(slab_tiles);
-        launch_kernel_sieve(d_coords.get(), d_cand_list.get(),
-                            d_total_cands.get(), d_raw_total_cands.get(),
-                            d_k1_overflow.get(), num_tiles, MAX_CANDIDATES_GPU,
-                            streams.compute.get());
+        launch_kernel_sieve(workspace.d_coords.get(),
+                            workspace.d_cand_list.get(),
+                            workspace.d_total_cands.get(),
+                            workspace.d_raw_total_cands.get(),
+                            workspace.d_k1_overflow.get(), num_tiles,
+                            MAX_CANDIDATES_GPU, streams.compute.get());
         check_last_launch("dispatch launch_kernel_sieve");
-        launch_kernel_mr(d_coords.get(), d_cand_list.get(),
-                         d_total_cands.get(), d_bitmap.get(), d_fj64_table,
-                         num_tiles, streams.compute.get());
+        launch_kernel_mr(workspace.d_coords.get(),
+                         workspace.d_cand_list.get(),
+                         workspace.d_total_cands.get(),
+                         workspace.d_bitmap.get(), d_fj64_table, num_tiles,
+                         streams.compute.get());
         check_last_launch("dispatch launch_kernel_mr");
-
-        check_cuda(cudaStreamSynchronize(streams.compute.get()),
-                   "cudaStreamSynchronize(dispatch K2)");
-        d_cand_list.reset();
 
         const std::size_t prime_slots = slab_tiles * MAX_PRIMES_GPU;
         const std::size_t face_slots =
             slab_tiles * NUM_FACES * MAX_PRIMES_GPU;
         const std::size_t face_count_slots = slab_tiles * NUM_FACES;
-
-        DeviceBuffer<std::uint16_t> d_row_prefix(
-            slab_tiles * ROW_PREFIX_ENTRIES);
-        DeviceBuffer<std::uint32_t> d_prime_pos(prime_slots);
-        DeviceBuffer<std::uint32_t> d_prime_count(slab_tiles);
-        DeviceBuffer<std::uint16_t> d_parent(prime_slots);
-        DeviceBuffer<std::uint8_t> d_prime_geo_bits(prime_slots);
-        DeviceBuffer<std::uint16_t> d_wire_label_by_raw_root(prime_slots);
-        DeviceBuffer<std::uint16_t> d_max_label(slab_tiles);
-        DeviceBuffer<std::uint8_t> d_overflow(slab_tiles);
-        DeviceBuffer<std::uint8_t> d_group_flags(slab_tiles * 256U);
-        auto d_tileops = std::make_unique<DeviceBuffer<TileOp>>(slab_tiles);
-        DeviceBuffer<std::uint16_t> d_face_indices(face_slots);
-        DeviceBuffer<std::uint16_t> d_face_counts(face_count_slots);
-        DeviceBuffer<std::uint16_t> d_face_roots(face_slots);
-        DeviceBuffer<FaceRepresentative> d_face_reps(face_slots);
-        DeviceBuffer<std::uint16_t> d_face_rep_counts(face_count_slots);
+        (void)prime_slots;
+        (void)face_slots;
+        (void)face_count_slots;
 
         K1K4Buffers k1k4{};
         fill_k1k4_buffers(
-            &k1k4, d_coords.get(), nullptr, nullptr, d_raw_total_cands.get(),
-            d_k1_overflow.get(),
-            d_bitmap.get(), d_fj64_table, d_row_prefix.get(),
-            d_prime_pos.get(), d_prime_count.get(), d_parent.get(),
-            d_prime_geo_bits.get(), d_wire_label_by_raw_root.get(),
-            d_max_label.get(), d_overflow.get(), d_group_flags.get());
+            &k1k4, workspace.d_coords.get(), nullptr, nullptr,
+            workspace.d_raw_total_cands.get(), workspace.d_k1_overflow.get(),
+            workspace.d_bitmap.get(), d_fj64_table,
+            workspace.d_row_prefix.get(), workspace.d_prime_pos.get(),
+            workspace.d_prime_count.get(), workspace.d_parent.get(),
+            workspace.d_prime_geo_bits.get(),
+            workspace.d_wire_label_by_raw_root.get(),
+            workspace.d_max_label.get(), workspace.d_overflow.get(),
+            workspace.d_group_flags.get());
 
-        launch_kernel_compact(d_bitmap.get(), k1k4.compact, num_tiles,
-                              streams.compute.get());
+        launch_kernel_compact(workspace.d_bitmap.get(), k1k4.compact,
+                              num_tiles, streams.compute.get());
         check_last_launch("dispatch launch_kernel_compact");
         launch_kernel_uf_v2(k1k4.uf, num_tiles, streams.compute.get());
         check_last_launch("dispatch launch_kernel_uf_v2");
 
         K1K5Buffers k1k5{};
         k1k5.k1k4 = k1k4;
-        k1k5.d_tileops = d_tileops->get();
-        k1k5.face_debug.d_face_indices = d_face_indices.get();
-        k1k5.face_debug.d_face_counts = d_face_counts.get();
-        k1k5.face_debug.d_face_roots = d_face_roots.get();
-        k1k5.face_debug.d_face_reps = d_face_reps.get();
-        k1k5.face_debug.d_face_rep_counts = d_face_rep_counts.get();
+        k1k5.d_tileops = slot.d_tileops.get();
+        k1k5.face_debug.d_face_indices = workspace.d_face_indices.get();
+        k1k5.face_debug.d_face_counts = workspace.d_face_counts.get();
+        k1k5.face_debug.d_face_roots = workspace.d_face_roots.get();
+        k1k5.face_debug.d_face_reps = workspace.d_face_reps.get();
+        k1k5.face_debug.d_face_rep_counts =
+            workspace.d_face_rep_counts.get();
 
         FaceEncodeBuffers face_encode{};
         face_encode.in.d_coords = k1k5.k1k4.d_coords;
@@ -1034,29 +1118,33 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         std::vector<std::uint8_t> h_remap_overflow(slab_tiles);
         std::vector<std::uint16_t> h_face_rep_counts(face_count_slots);
         check_cuda(cudaMemcpy(h_raw_total_cands.data(),
-                              d_raw_total_cands.get(),
+                              workspace.d_raw_total_cands.get(),
                               h_raw_total_cands.size() *
                                   sizeof(std::uint32_t),
                               cudaMemcpyDeviceToHost),
                    "cudaMemcpy(raw_total_cands)");
-        check_cuda(cudaMemcpy(h_k1_overflow.data(), d_k1_overflow.get(),
+        check_cuda(cudaMemcpy(h_k1_overflow.data(),
+                              workspace.d_k1_overflow.get(),
                               h_k1_overflow.size() * sizeof(std::uint32_t),
                               cudaMemcpyDeviceToHost),
                    "cudaMemcpy(k1_overflow)");
-        check_cuda(cudaMemcpy(h_prime_count.data(), d_prime_count.get(),
+        check_cuda(cudaMemcpy(h_prime_count.data(),
+                              workspace.d_prime_count.get(),
                               h_prime_count.size() * sizeof(std::uint32_t),
                               cudaMemcpyDeviceToHost),
                    "cudaMemcpy(prime_count)");
-        check_cuda(cudaMemcpy(h_max_label.data(), d_max_label.get(),
+        check_cuda(cudaMemcpy(h_max_label.data(),
+                              workspace.d_max_label.get(),
                               h_max_label.size() * sizeof(std::uint16_t),
                               cudaMemcpyDeviceToHost),
                    "cudaMemcpy(max_label)");
-        check_cuda(cudaMemcpy(h_remap_overflow.data(), d_overflow.get(),
+        check_cuda(cudaMemcpy(h_remap_overflow.data(),
+                              workspace.d_overflow.get(),
                               h_remap_overflow.size() * sizeof(std::uint8_t),
                               cudaMemcpyDeviceToHost),
                    "cudaMemcpy(remap_overflow)");
         check_cuda(cudaMemcpy(h_face_rep_counts.data(),
-                              d_face_rep_counts.get(),
+                              workspace.d_face_rep_counts.get(),
                               h_face_rep_counts.size() *
                                   sizeof(std::uint16_t),
                               cudaMemcpyDeviceToHost),
@@ -1107,9 +1195,10 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
             dump_group_overflow_tile_csv(
                 group_dump_path, tiles[global_offset + t],
                 h_raw_total_cands[t], h_prime_count[t], h_max_label[t],
-                d_prime_pos.get() + t * MAX_PRIMES_GPU,
-                d_parent.get() + t * MAX_PRIMES_GPU,
-                d_wire_label_by_raw_root.get() + t * MAX_PRIMES_GPU);
+                workspace.d_prime_pos.get() + t * MAX_PRIMES_GPU,
+                workspace.d_parent.get() + t * MAX_PRIMES_GPU,
+                workspace.d_wire_label_by_raw_root.get() +
+                    t * MAX_PRIMES_GPU);
             group_dump_written = true;
             if (group_dump_abort) {
               throw std::runtime_error(
@@ -1122,7 +1211,7 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         check_cuda(cudaStreamWaitEvent(streams.d2h.get(),
                                        slot.compute_done.get(), 0),
                    "cudaStreamWaitEvent(compute_done)");
-        check_cuda(cudaMemcpyAsync(slot.tileops.get(), d_tileops->get(),
+        check_cuda(cudaMemcpyAsync(slot.tileops.get(), slot.d_tileops.get(),
                                    slab_tiles * sizeof(campaign::TileOp),
                                    cudaMemcpyDeviceToHost,
                                    streams.d2h.get()),
@@ -1132,7 +1221,6 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         slot_pending.active = true;
         slot_pending.global_offset = global_offset;
         slot_pending.tiles = slab_tiles;
-        slot_pending.d_tileops = std::move(d_tileops);
 
         chunk_copied += slab_tiles;
         ++slab_index;
