@@ -2,6 +2,8 @@
 
 Orientation for agents about to build or modify campaigns. Read top-to-bottom before touching code. Every section earns its space.
 
+> **Trust boundary:** Documentation and research notes dated **before 2026-04-05** are reference material only — not trustworthy for correctness claims. The K1 overflow and K4 visible-group remap bugs were discovered and fixed in April 2026; earlier docs may reflect buggy solver outputs. Always verify against post-fix results or the original Tsuchimura paper (`pratchett-os/data/papers/2026-04-23-METR04-13-tsuchimura.pdf`).
+
 ## Ground Truth — Tsuchimura's Moat (k²=36)
 
 | Parameter | Value | Notes |
