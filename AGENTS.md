@@ -24,6 +24,7 @@ The project is restarting from the mathematical methodology plus a heavily revie
 |------|------|
 | `methodology/tile-operator-definition-v-claude.md` | Strongest TileOp/connectivity canon. Start here for math, semantics, and proof obligations. |
 | `methodology/BACKLOG.md` | Math and spec backlog. Useful, not stronger than the main methodology file. |
+| `methodology/supportive/` | Canonical staging area for timestamped audit, explainer, poster-source, and understanding-improvement artifacts. Name files `YYYY-MM-DD-slug.md`. |
 | `tiles-maxxing/cpp-campaign-v2/` | Current C++ reference implementation surface. Derived from canon; review before trusting. |
 | `tiles-maxxing/cuda-campaign-v2-sqrt-36/` | Current CUDA implementation surface. Derived from canon; review before trusting. |
 | `tiles-maxxing/vast-ai/` | Remote GPU deployment helpers. Operational only. |
