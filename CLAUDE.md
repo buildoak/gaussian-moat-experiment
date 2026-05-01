@@ -1,3 +1,3 @@
 # gaussian-moat-cuda
 
-Read `AGENTS.md` before any work. It defines canonical status, spec authority, and testing requirements. Code lives in `tiles-maxxing/`. Specs, results, and artifacts live at repo root.
+Read `AGENTS.md` before any work. Current math canon lives in `methodology/tile-operator-definition-v-claude.md`; active derived code lives in `tiles-maxxing/`; tracked prior art lives in `legacy/`; `_archive/` is local-only and must not be staged.

@@ -1,7 +1,19 @@
 build/
 build-k*/
+target/
+_archive/
+artifacts/
+results/
+**/artifacts/
+**/results/
 *.o
 *.d
+*.a
+*.rlib
+*.dylib
+*.so
+*.exe
+*.dSYM/
 *.nsys-rep
 *.ncu-rep
 reference/
@@ -24,3 +36,14 @@ __pycache__/
 data/
 build-3090/
 build-fresh/
+
+# Curated prior art under legacy/ is tracked, but generated outputs are not.
+legacy/**/target/
+legacy/**/build/
+legacy/**/build-*/
+legacy/**/_archive/
+legacy/**/*.dSYM/
+legacy/**/census_output/
+legacy/campaign-sqrt-40/tile-cpp/test_compact_uf
+legacy/campaign-sqrt-40/tile-cpp/test_sieve
+legacy/campaign-sqrt-40/tile-cpp/test_sieve_asan

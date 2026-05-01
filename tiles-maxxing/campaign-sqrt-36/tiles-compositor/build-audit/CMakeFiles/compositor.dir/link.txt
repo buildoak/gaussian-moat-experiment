@@ -1,2 +1,0 @@
-/usr/bin/ar qc libcompositor.a CMakeFiles/compositor.dir/src/grid.cpp.o CMakeFiles/compositor.dir/src/tileop_parse.cpp.o CMakeFiles/compositor.dir/src/compositor.cpp.o
-/usr/bin/ranlib libcompositor.a

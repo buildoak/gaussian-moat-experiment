@@ -1,1 +1,0 @@
-/usr/bin/c++ -O3 -DNDEBUG -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/campaign.dir/src/campaign.cpp.o -o campaign  libcompositor.a /Users/otonashi/thinking/building/gaussian-moat-cuda/tiles-maxxing/campaign-sqrt-36/tiles-compositor/../tile-cpp/build-k40/libtile.a

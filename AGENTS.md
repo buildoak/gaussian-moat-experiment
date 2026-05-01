@@ -1,235 +1,81 @@
-# AGENTS.md — gaussian-moat-cuda
+# AGENTS.md - gaussian-moat-cuda
 
-Orientation for agents about to build or modify campaigns. Read top-to-bottom before touching code. Every section earns its space.
+Read this before touching Gaussian Moat code. This repo is back in a clean-start mode: preserve useful prior work, but do not let old execution become authority.
 
-> **Trust boundary:** Documentation and research notes dated **before 2026-04-05** are reference material only — not trustworthy for correctness claims. The K1 overflow and K4 visible-group remap bugs were discovered and fixed in April 2026; earlier docs may reflect buggy solver outputs. Always verify against post-fix results or the original Tsuchimura paper (`pratchett-os/data/papers/2026-04-23-METR04-13-tsuchimura.pdf`).
+## Authority Chain
 
-## Ground Truth — Tsuchimura's Moat (k²=36)
+1. **User direction in the current session** - especially corrections about canon, archive, and scope.
+2. **Strongest math canon:** `methodology/tile-operator-definition-v-claude.md`.
+3. **Current derived implementation:** `tiles-maxxing/`, treated as a high-signal implementation hypothesis, about 95% trusted, not proof.
+4. **Tracked prior art:** `legacy/`, educational and occasionally useful for engineering ideas.
+5. **Local archive:** `_archive/`, untracked/local-only archaeology. Do not use unless explicitly asked or unless you are doing a named archaeology task.
 
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| **Paper** | METR 2004-13 | Tsuchimura, 2004 |
-| **k²** | 36 | Step size k = 6 |
-| **Moat boundary** | **80,015,782** | Distance from origin where connectivity terminates |
-| **Interpretation** | R_outer ≤ 80,015,782 → SPANNING verified | R_outer ≥ 80,015,790 → MOAT verified |
+If these disagree, follow the stronger layer and report the conflict. Code is evidence, not canon.
 
-The moat boundary is the **farthest point reachable** from origin via Gaussian prime steps ≤6. Any full annulus anchored at the origin-containing side with R_outer at or below this value should show SPANNING (connectivity exists). The moat appears somewhere just past 80,015,782; the CUDA v2 verification brackets the first tested MOAT point at 80,015,790.
+## Current Project Posture
 
-**Local reference:** `~/thinking/pratchett-os/centerpiece/research/gaussian-moat/2026-03-15-tsuchimura-baseline-reconstruction.md` (Appendix B reconstruction from paper Section 4 / Table page 9).
+The project is restarting from the mathematical methodology plus a heavily reviewed current implementation surface. The old CUDA v1 documents and campaigns were technically serious, but mathematically incomplete or unsound. They can inspire optimizations and implementation patterns; they cannot justify correctness claims.
 
-**Validation checkpoint:** A correct implementation at k²=36 MUST return SPANNING for R=80M (R_outer=80,008,192), SPANNING for R_outer=80,015,782, and MOAT for R_outer=80,015,790 when run as a full-annulus test with `R_inner=80,000,000`.
+`tiles-maxxing/` is the active code surface derived from the methodology. It may have operational drift and unlikely-but-possible logic drift. Before extending it, read the relevant methodology section and audit the code path against the definitions and lemmas.
 
-### ✓ v2 Solver Verification — 2026-04-22
+## Directory Roles
 
-**CUDA v2 solver independently confirmed the Tsuchimura result.**
+| Path | Role |
+|------|------|
+| `methodology/tile-operator-definition-v-claude.md` | Strongest TileOp/connectivity canon. Start here for math, semantics, and proof obligations. |
+| `methodology/BACKLOG.md` | Math and spec backlog. Useful, not stronger than the main methodology file. |
+| `tiles-maxxing/cpp-campaign-v2/` | Current C++ reference implementation surface. Derived from canon; review before trusting. |
+| `tiles-maxxing/cuda-campaign-v2-sqrt-36/` | Current CUDA implementation surface. Derived from canon; review before trusting. |
+| `tiles-maxxing/vast-ai/` | Remote GPU deployment helpers. Operational only. |
+| `legacy/docs-cuda-v1/` | Tracked CUDA v1 engineering documents. Technically useful, mathematically unsound/incomplete. |
+| `legacy/campaign-sqrt-40/` | Tracked CUDA v1-era implementation corresponding to `docs-cuda-v1`. Engineering compass only. |
+| `_archive/` | Local-only archive dump. Must stay untracked. |
 
-| | Value |
-|---|---|
-| Transition found | R_outer ∈ **(80,015,782, 80,015,790)** |
-| Tsuchimura's exact value (80,015,782) | **SPANNING** |
-| 80,015,790 | **MOAT** |
-| Tsuchimura (2004) | **80,015,782** |
-| Match | **YES — moat is just past Tsuchimura's value** |
+Do not recreate root-level `docs/`, `artifacts/`, `results/`, or old campaign folders as authority surfaces. If a new durable document is needed, first decide whether it belongs in `methodology/`, beside the code it audits, or in the Pratchett project document.
 
-Fix commits: `92b3c9a` (K1 overflow), `20f136e` (K4 visible-group remap). Session: `agent-a1b92e62ba5592ec3`. Knowledge base note: `centerpiece/research/gaussian-moat/2026-04-22-v2-solver-moat-verification.md`.
+## Ground Truth Gate - Tsuchimura k^2=36
 
----
+Tsuchimura's published `k^2=36` boundary remains the known-answer gate:
 
-## Throughput (2026-04-22, RTX 4090)
+| R_outer | Expected verdict | Semantics |
+|---------|------------------|-----------|
+| `80,015,782` | `SPANNING` | Full annulus anchored with `R_inner=80,000,000` |
+| `80,015,790` | `MOAT` | Full annulus anchored with `R_inner=80,000,000` |
 
-| Metric | Value | Notes |
-|--------|------:|-------|
-| CUDA kernels (K1-K5) | **69K tiles/s** | Pure GPU time |
-| Total pipeline | **63K tiles/s** | +compositor +snapshot |
-| Legacy benchmark | ~155K tiles/s | From earlier docs |
+This gate is evidence that an implementation is on the right track. It does not make the implementation the source of truth. A passing known-answer gate plus methodology alignment is the minimum trust package.
 
-Current throughput is ~45% of legacy. Possible causes: different tile size, R_outer scale, added per-tile work (geo flags, visible-root remap, overflow checks). **TODO:** Investigate perf gap if it matters for larger campaigns.
+Never confuse narrow-shell runs with moat-detection runs. `--r-inner=R --r-outer=R+8192` asks a shell self-connectivity question. Moat detection must anchor `R_inner` on the origin-containing side and vary `R_outer`.
 
----
+## Implementation Rules
 
-## Current State (2026-04-23)
+- Read `methodology/tile-operator-definition-v-claude.md` before changing grid, TileOp, port, stitching, boundary, or verdict logic.
+- Treat `tiles-maxxing/` as reviewable derived code, not scripture.
+- Preserve closed tile boundaries: a side `S` tile contains `S+1` lattice points per axis.
+- Preserve snapped-grid assumptions unless the methodology is updated first.
+- Preserve face/port ordering determinism; any optimization must keep byte-stable semantics where tests expect it.
+- Performance changes require correctness gates first, then scoped benchmarks that name hardware, command, commit, and measurement scope.
+- CUDA profiling is sequential. Do not run multiple performance-sensitive CUDA workloads on one GPU at the same time.
 
-- **Blueprint v3 canonical.** `methodology/lemmas_v2/campaign-blueprint.md` supersedes the sqrt-36/40 pipelines.
-- **K1 overflow + K4 visible-remap bugs FIXED.** Commits `92b3c9a`, `20f136e`. All overflow counters now 0 at R=80M.
-- **Moat boundary verified.** Exact bracket (80,015,782, 80,015,790): Tsuchimura's value 80,015,782 returns SPANNING, 80,015,790 returns MOAT. Moat is just past Tsuchimura's value.
-- **Hard-negative sweep voided.** The 2026-04-22 hard-negative sweep used narrow-shell `R_inner` semantics and is invalid for moat detection; see `docs/supportive/2026-04-23-hard-negative-sweep-postmortem.md`. Tsuchimura reproduction remains valid.
-- **CUDA campaign v2 validated.** `tiles-maxxing/cuda-campaign-v2-sqrt-36/` is the validated CUDA solver for the k²=36 reproduction. v1 campaigns (`campaign-sqrt-36`, `campaign-sqrt-40`) are stale — use as historical templates only, not as reference for geometry or compositor math.
-- **BZ pre-build soundness gate pending.** `build/bz_check.py` not yet implemented. Build must fail if BZ interval is non-empty.
+## Legacy Use
 
-## Canonical Math & Engineering
+Use `legacy/` as prior art:
 
-| Role | File | Scope |
-|------|------|-------|
-| **Math SSoT** | `methodology/lemmas_v2/tile-operator-definition-v-claude.md` | Soundness/completeness. Lemmas 3, 4, 6, 10, Theorems 9, 11, 12, grid invariants I1/I2/I4, norm-form `geo_I`/`geo_O`, reflection closure. |
-| **Engineering SSoT** | `methodology/lemmas_v2/campaign-blueprint.md` | Snapped grid, TileOp v3 (256 B), K4 geo-tests, flag-driven compositor, I/O protocol, test plan, delta plan. |
-| Math backlog | `methodology/lemmas_v2/BACKLOG.md` | Non-blocking B1–B10 items. |
-| CUDA tuning reference | `docs/tile_internals_cuda.md`, `docs/tile_operations.md` §4–§8 | Montgomery, MR witnesses, shared-mem budgets, kernel launch tuning. **Ignore their geometry and compositor sections** — superseded. |
+- Good uses: optimization ideas, CUDA implementation patterns, deployment lessons, historical bug clues.
+- Bad uses: proof claims, geometry authority, moat verdict authority, source of direct porting without review.
 
-**Authority chain:** User input > `methodology/lemmas_v2/` > `docs/` (CUDA-only) > code.
+When borrowing from `legacy/`, say what was borrowed and which methodology obligation it satisfies. If it only improves performance, prove that semantics did not move.
 
-Blueprint bakes in three prerequisites from earlier pivots: `C = ⌊√K⌋`, no dead-end pruning, strict I/O port-count equality on shared faces.
+## Git Hygiene
 
-Read the math doc before writing proofs or challenging the verdict. Read the blueprint before touching grid, kernel, TileOp, or compositor code.
-
-## Before You Code — Checklist
-
-1. **Grid is snapped** — uniform `S = 256` sub-lattice, offset `(1, 1)`. See §Grid Architecture.
-2. **TileOp v3 is 256 B fixed** — per-group inner/outer flags, not per-prime. See §TileOp v3 Format.
-3. **K4 emits per-prime `is_inner`/`is_outer`** via the norm-form test; flags aggregate to UF roots. See §Geo-test Integration.
-4. **Verdict is flag-driven** — no staircase geometry, no `h1`, no delta. See §Verdict Logic.
-5. **Overflow is conservative SPANNING-biased** — sound but potentially false-positive. See §Overflow.
-
-## Grid Architecture (snapped grid)
-
-Uniform sub-lattice at offset `(o_x, o_y) = (1, 1)`, spacing `S = 256`. All tile boundaries fall on global lattice lines; adjacent towers have delta `= k·S`. All faces face-to-face aligned, zero fractional offset. The `(1, 1)` offset is load-bearing, not cosmetic: it keeps the reflection axes `x = 0` and `y = x` strictly inside halo rather than on tile boundaries, sidestepping BACKLOG B1's axis-ownership ambiguity. See `docs/supportive/2026-04-20-codex-axis-tower-analysis.md`. Under snapped grid, Lemma 4 (identical ordered ports on shared faces) holds trivially; all stitching is positional.
-
-- **Collar / face-strip depth:** `C = ⌊√K⌋ = 6` for both `K = 36` and `K = 40`. Load-bearing for edge completeness. Use `floor_isqrt`, never `ceil_isqrt`, for `C`.
-- **Halo extension:** `HALO = C = 6`.
-- **Pre-filter bound:** `2·R·⌈√K⌉ + 1` — use **ceiling** here, not `C`. A floor-based bound would reject candidate-band primes with `|ε| ∈ (2·R·C, 2·R·√K]` that satisfy the canonical `ε² ≤ 4·R²·K` test, yielding an unflagged `geo_I` component and a potential false MOAT.
-- **Octant folding (Theorem 12, D₄).** Pipeline runs on the octant `R`; reflection closure guarantees the octant verdict equals the full-annulus verdict. Side-exposed `face_L` at `i = i_min` and `face_R` at `i = i_max` are not stitched. Defense-in-depth assertion: `R_inner > √(2K)` at campaign init.
-- **I1/I2/I4 asserted at build time.** I4 is structurally proven (math doc §Geometric invariants); an empirical one-pass scan is optional defense-in-depth.
-
-## TileOp v3 Format
-
-256 B fixed. Single format — no dual 128/256 B dispatch:
-
-| Offset | Size | Field | Notes |
-|--------|------|-------|-------|
-| 0 | 4 B | `n[4]` | Port counts `N_I, N_O, N_L, N_R` (face order I, O, L, R) |
-| 4 | 192 B | `face_groups[192]` | Concatenated per-port group labels, 48 B per face |
-| 196 | 16 B | `inner_flags` | Bit-packed **per-group** inner flag, 128 groups × 1 bit |
-| 212 | 16 B | `outer_flags` | Bit-packed **per-group** outer flag, 128 groups × 1 bit |
-| 228 | 1 B | `tile_flags` | bit0 OVERFLOW, bit1 EMPTY, bit2 TOWER_CLOSING |
-| 229 | 27 B | `reserved` | Alignment / future extension |
-
-Budgets: `sum(n) ≤ 192` ports (observed max ~75 at K=36; 2.5× headroom). `max_label ≤ 128` groups (observed max ~9; extreme headroom). `inner_flags` and `outer_flags` are **per-UF-group**, not per-prime — K4 aggregates per-prime tests by bitwise OR into the group's root.
-
-Port ordinals are assigned by canonical lex sort `(h, p⊥)` of port representatives per face, tie-break `(p⊥, h)`; byte-for-byte deterministic.
-
-## Geo-test Integration (K4)
-
-K4 extends the final UF pass with per-prime norm-form tests. For prime `p = (a, b)` with `‖p‖² = a² + b²`:
-
-```
-is_inner_prime(p) iff (‖p‖² − R_inner² − K)² ≤ 4·R_inner²·K
-is_outer_prime(p) iff (R_outer² − ‖p‖² + K)² ≤ 4·R_outer²·K
-```
-
-Two-stage: int64 `|ε| ≤ 2·R·⌈√K⌉ + 1` pre-filter, then i128 squared comparison as defense-in-depth. Per-prime flags aggregate into the prime's UF-root bits via `atomicOr` on a shared-mem `smem_flags_by_root` buffer; K5 reads and packs into the TileOp's `inner_flags`/`outer_flags`. Estimated cost: `< 5%` K4 slowdown, `< 1.5%` campaign slowdown.
-
-Compositor propagates flags on inter-tile merge: each UF root accumulates `REACH_INNER | REACH_OUTER` bits as tiles ingest.
-
-## Verdict Logic
-
-The campaign is `MOAT` iff no UF root in the grid-wide port graph ever carries both `REACH_INNER` and `REACH_OUTER`; else `SPANNING`. Incremental check: on every union, the merged root's reach bitmask is ORed; if both bits coincide, `spanning_detected_` latches true and the campaign short-circuits. Preserves the O(1)-per-union fix that replaced the O(N²) recompute-from-scratch bug.
-
-No staircase geometry, no side-exposed heuristics. The Exit Lemma (Lemma 10) + Theorem 11 guarantee every `geo_I`/`geo_O` prime is represented through a port of its UF component, so flag-driven port marking is sufficient for the octant verdict. Theorem 12 lifts the octant verdict to the full annulus.
-
-## Overflow & Conservative Spanning
-
-Two overflow modes set `tile_flags |= OVERFLOW_BIT`:
-
-1. **Port-count overflow:** `sum(n) > 192`.
-2. **Group-count overflow:** `max_label > 128`.
-
-Compositor response: `mark_tile_as_spanning_conservative` — force the tile's root to `REACH_INNER | REACH_OUTER`, latching SPANNING. **Sound** (a false MOAT is impossible), potentially false SPANNING. Observed rate `< 10⁻⁴` at sqrt-40 operating parameters — acceptable as-is. Monitor in v3; if observed rate exceeds 0.1%, escalate to the 512 B extended-format re-encode path (wired but not implemented).
-
-## Face Convention (HARD RULE)
-
-| Face | Enum | Position | Direction |
-|------|------|----------|-----------|
-| FACE_I | 0 | Bottom of tile (low b) | Within-tower |
-| FACE_O | 1 | Top of tile (high b) | Within-tower |
-| FACE_L | 2 | Left side (low a) | Between-tower |
-| FACE_R | 3 | Right side (high a) | Between-tower |
-
-Port matching is **strict positional ordinal**: port `i` of `face_O` on tile `T_{i,j}` matches port `i` of `face_I` on tile `T_{i,j+1}`; port `i` of `face_R` on `T_{i,j}` matches port `i` of `face_L` on `T_{i+1,j}`. Port counts on shared faces must be equal (Lemma 4); mismatch = bug (panic in debug, log-and-treat-as-spanning in release). No `h1`. No delta. No q/f decomposition.
-
-## Tile Boundary Convention (HARD RULE)
-
-Tile of side `S = 256` contains **257 × 257 lattice points** (256 segments = 257 endpoints per axis). Tile proper covers closed interval `[0, S]` per axis. Adjacent tiles SHARE boundary lattice points — the column/row at `a_lo + S` belongs to both tile A (`[a_lo, a_lo + S]`) and tile B (`[a_lo + S, a_lo + 2S]`). Half-open `[0, S)` ownership is UNSOUND for moat proofs. Any in-tile check must use `<= S` or `< S+1`. Non-negotiable. See blueprint §4.1.
-
-## Build Parameterization
-
-`K_SQ` is a build parameter, not hardcoded. Prefer CMake for v2 code: `cmake -S tiles-maxxing/cuda-campaign-v2-sqrt-36 -B build-k36 -DK_SQ=36 -DCMAKE_CUDA_ARCHITECTURES=89`. All derived constants auto-computed via `constexpr` (`C = floor_isqrt(K_SQ)`, etc.). Use separate build directories such as `build-k36/` and `build-k40/`. Legacy Makefile paths may still accept `make K_SQ=36`, but they are not the current campaign workflow.
-
-## Canonical Status
-
-`tiles-maxxing/` holds all active code. The current validated CUDA path is `tiles-maxxing/cuda-campaign-v2-sqrt-36/`, with `tiles-maxxing/cpp-campaign-v2/` as the C++ reference linked by the CUDA campaign. `legacy/` and v1 campaign trees hold first-generation code; do not treat them as reference. Design CUDA kernels from the specs and the blueprint — do not port legacy `.cu` files, they encode pre-snapped-grid assumptions (buffer sizes, phase boundaries, memory layout) that do not survive.
-
-## Directory Layout
-
-```
-gaussian-moat-cuda/
-├── tiles-maxxing/                 — All active code
-│   ├── tile-cpp/                  — C++ reference (libtile.a)
-│   ├── cpp-campaign-v2/           — Blueprint v3 C++ reference campaign
-│   ├── cuda-campaign-v2-sqrt-36/  — Validated CUDA v2 k²=36 campaign
-│   ├── campaign-sqrt-36/          — v1 campaign tree; stale for geometry/verdict
-│   ├── campaign-sqrt-40/          — v1 campaign tree; stale for geometry/verdict
-│   ├── tile-compare/              — Python comparison tools
-│   ├── tile-validator/            — Python tile validation
-│   └── vast-ai/                   — Cloud GPU deploy scripts
-├── methodology/lemmas_v2/         — Math SSoT + engineering blueprint + backlog
-├── docs/                          — CUDA kernel tuning reference (geometry/compositor obsolete)
-├── legacy/                        — First-generation code; not reference material
-├── AGENTS.md                      — This file
-└── CLAUDE.md                      — Agent instructions
-```
-
-## Working Documents
-
-All working documents (audits, analyses, benchmarks, investigations, design notes) go to `docs/supportive/`. No exceptions.
-
-**Naming:** `YYYY-MM-DD-slug.md`
-
-**Frontmatter:**
-```yaml
----
-title: <descriptive title>
-date: YYYY-MM-DD
-engine: <codex|claude|gemini|coordinator|human>
-type: <audit|analysis|benchmark|investigation|design-note|report>
-status: <complete|partial|superseded>
-refs: [<spec or file this relates to>]
----
-```
-
-All fields required except `refs` (include when the document targets a specific spec or code file).
-
-Project-level coordination lives in `/Users/otonashi/thinking/pratchett-os/centerpiece/projects/gaussian-moat.md`; update or consult it when a working document changes project status, validated results, or next-session priorities.
+- `_archive/` is local-only and ignored. Do not stage it.
+- Do not add generated binaries, build directories, CUDA profiles, snapshots, `.bin`, `.gprf`, `target/`, or `census_output/`.
+- Goldens under `tiles-maxxing/cpp-campaign-v2/goldens/*.bin` are intentionally tracked.
+- Before staging, run `git status --short --untracked-files=all` and inspect untracked roots.
+- Prefer exact-path staging. Avoid broad staging until `_archive/` and generated output are confirmed ignored.
+- Before committing, run a staged large-file check. New large artifacts need an explicit reason.
 
 ## Compute Workflow
 
-Primary CUDA compute is now vast.ai RTX 4090 (`sm_89`). Jetson Orin remains a local fallback for small validation and architecture checks, but it is not the primary campaign-running target.
+The Mac Mini has no CUDA compiler. CUDA build/run work happens on remote CUDA hosts such as vast.ai or Jetson, depending on task size. Any command over a few seconds on remote compute should run in `tmux`, and performance runs must be isolated.
 
-The Mac Mini has no CUDA compiler. CUDA compilation and execution happen remotely. For current campaign runs, deploy the repo to vast.ai and build `tiles-maxxing/cuda-campaign-v2-sqrt-36/` with `-DCMAKE_CUDA_ARCHITECTURES=89` on RTX 4090. The v2 CUDA campaign depends on `tiles-maxxing/cpp-campaign-v2/`, so preserve the repo-relative layout when syncing.
-
-### Jetson Local Fallback
-
-| Detail | Value |
-|--------|-------|
-| SSH alias | `ssh jetson` |
-| Host | `169.254.24.100` |
-| User | `clifford` |
-| GPU | Orin Nano (sm_87 Ampere) |
-
-Use Jetson for small checks only unless explicitly directed. Build with CMake architecture `87` for v2 campaign code.
-
-**Push v2 campaign + reference:** preserve `tiles-maxxing/{cuda-campaign-v2-sqrt-36,cpp-campaign-v2}/` on the remote.
-
-**Compile:** `cmake -S tiles-maxxing/cuda-campaign-v2-sqrt-36 -B build-k36 -DK_SQ=36 -DCMAKE_CUDA_ARCHITECTURES=87 && cmake --build build-k36 -j`
-
-Legacy `tiles-maxxing/tile-cuda/` commands and direct `nvcc` examples are obsolete for v2 campaign work.
-
-## vast.ai Cloud GPU
-
-Operational docs and deploy scripts live in `tiles-maxxing/vast-ai/`. Read `tiles-maxxing/vast-ai/README.md` for the current workflow.
-
-1. **tmux for everything.** SSH drops are common. Any command over 5 seconds runs in tmux.
-2. **Cleanup ownership.** If you created the instance for the current task, pull results and destroy it immediately after work. If the instance was already running, do not destroy it unless explicitly asked.
-3. **Pin SSH endpoint once.** Cache port and host at session start. Never re-resolve mid-run.
-4. **Use the right CUDA architecture.** v2 CMake uses `CMAKE_CUDA_ARCHITECTURES`: `89` for 4090, `86` for 3090, `80` for A100, `87` for Jetson. Patch remote Makefiles only when intentionally running legacy v1 code.
-5. **Budget awareness.** Track via `vastai show instances`. 3090 ~$0.13/hr, 4090 ~$0.27/hr. For instances you created for the task, destroy immediately after work.
-6. **Moat sweeps anchor `R_inner`.** For k²=36 boundary checks, use `--r-inner=80000000 --r-outer=<tested radius>`. Narrow-shell runs such as `--r-inner=<R> --r-outer=<R+8192>` are not moat-detection runs and void the verdict for origin reachability.
-7. **CUDA profiling/benchmarking is ALWAYS sequential.** Never run multiple CUDA workloads in parallel on the same GPU — not in background, not in separate tmux panes, not via `&`. Parallel GPU jobs contaminate throughput measurements (kernel scheduling interference, memory bandwidth competition, thermal throttling). Run each profiling case to completion before starting the next. This applies to all performance-sensitive runs: `nsys` profiles, `time` benchmarks, throughput measurements. Correctness-only runs (CTest, golden validation) may parallelize if needed, but any run that reports tiles/s or wall-clock time must be isolated.
+Do not destroy cloud instances, push branches, publish results, or mutate remote services unless explicitly asked.

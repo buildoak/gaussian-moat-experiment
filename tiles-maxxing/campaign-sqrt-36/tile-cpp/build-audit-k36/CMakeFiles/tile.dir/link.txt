@@ -1,2 +1,0 @@
-/usr/bin/ar qc libtile.a CMakeFiles/tile.dir/src/sieve.cpp.o CMakeFiles/tile.dir/src/compact.cpp.o CMakeFiles/tile.dir/src/union_find.cpp.o CMakeFiles/tile.dir/src/face_extract.cpp.o CMakeFiles/tile.dir/src/prune.cpp.o CMakeFiles/tile.dir/src/encode.cpp.o CMakeFiles/tile.dir/src/process_tile.cpp.o
-/usr/bin/ranlib libtile.a
