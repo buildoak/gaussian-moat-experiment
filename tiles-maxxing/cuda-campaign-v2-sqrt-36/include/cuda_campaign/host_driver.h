@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -18,6 +19,8 @@ struct DispatchConfig {
                                     512ULL * 1024ULL * 1024ULL;
   std::size_t device_safety_bytes = 1024ULL * 1024ULL * 1024ULL;
   int ring_slots = 3;
+  bool overflow_diagnostics = false;
+  std::size_t max_overflow_diagnostics = 10;
 };
 
 struct DispatchStats {
@@ -48,6 +51,25 @@ struct DispatchStats {
     bool k5_port_overflow = false;
   };
   std::vector<OverflowDiagnostic> first_overflow_tiles;
+};
+
+class TileBatchDispatcher {
+ public:
+  TileBatchDispatcher(const campaign::CampaignConstants& constants,
+                      const DispatchConfig& config = DispatchConfig{});
+  ~TileBatchDispatcher();
+
+  TileBatchDispatcher(const TileBatchDispatcher&) = delete;
+  TileBatchDispatcher& operator=(const TileBatchDispatcher&) = delete;
+
+  void dispatch(const campaign::TileCoord* tiles,
+                std::size_t count,
+                campaign::TileOp* output_tileops,
+                DispatchStats* stats = nullptr);
+
+ private:
+  class Impl;
+  std::unique_ptr<Impl> impl_;
 };
 
 std::size_t phase1_bytes_for_tiles(std::size_t tiles);

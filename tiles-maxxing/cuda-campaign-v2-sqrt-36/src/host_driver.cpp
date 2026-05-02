@@ -926,12 +926,35 @@ K1K5DebugDownload run_k1_to_k5_debug(
   return out;
 }
 
-void dispatch_tile_batch(const campaign::TileCoord* tiles,
-                         std::size_t count,
-                         const campaign::CampaignConstants& constants,
-                         campaign::TileOp* output_tileops,
-                         const DispatchConfig& config,
-                         DispatchStats* stats) {
+class TileBatchDispatcher::Impl {
+ public:
+  Impl(const campaign::CampaignConstants& constants,
+       const DispatchConfig& config)
+      : config_(config) {
+    upload_cuda_constants(constants);
+    upload_fj64_table(&d_fj64_table_);
+  }
+
+  ~Impl() {
+    if (d_fj64_table_ != nullptr) {
+      cudaFree(d_fj64_table_);
+    }
+  }
+
+  void dispatch(const campaign::TileCoord* tiles,
+                std::size_t count,
+                campaign::TileOp* output_tileops,
+                DispatchStats* stats);
+
+ private:
+  DispatchConfig config_;
+  std::uint16_t* d_fj64_table_ = nullptr;
+};
+
+void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
+                                         std::size_t count,
+                                         campaign::TileOp* output_tileops,
+                                         DispatchStats* stats) {
   if (count == 0) {
     if (stats != nullptr) {
       *stats = DispatchStats{};
@@ -944,10 +967,10 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
   if (output_tileops == nullptr) {
     throw std::invalid_argument("dispatch_tile_batch output pointer is null");
   }
-  if (config.host_chunk_tiles == 0) {
+  if (config_.host_chunk_tiles == 0) {
     throw std::invalid_argument("host_chunk_tiles must be positive");
   }
-  if (config.ring_slots <= 0) {
+  if (config_.ring_slots <= 0) {
     throw std::invalid_argument("ring_slots must be positive");
   }
   if (count > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
@@ -957,37 +980,35 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
   static_assert(sizeof(campaign::TileOp) == sizeof(TileOp),
                 "CPU and CUDA TileOp layouts must remain byte-identical");
 
-  upload_cuda_constants(constants);
-
-  std::uint16_t* d_fj64_table = nullptr;
-  upload_fj64_table(&d_fj64_table);
-
-  try {
     Streams streams;
     const std::size_t max_requested_slab =
-        std::min(config.host_chunk_tiles, count);
+        std::min(config_.host_chunk_tiles, count);
     const std::size_t device_slab_capacity =
-        device_slab_tiles_for(config, max_requested_slab);
+        device_slab_tiles_for(config_, max_requested_slab);
     std::vector<std::unique_ptr<HostRingSlot>> ring;
     std::vector<PendingD2H> pending(
-        static_cast<std::size_t>(config.ring_slots));
-    ring.reserve(static_cast<std::size_t>(config.ring_slots));
-    for (int slot = 0; slot < config.ring_slots; ++slot) {
-      ring.emplace_back(std::make_unique<HostRingSlot>(config.host_chunk_tiles,
+        static_cast<std::size_t>(config_.ring_slots));
+    ring.reserve(static_cast<std::size_t>(config_.ring_slots));
+    for (int slot = 0; slot < config_.ring_slots; ++slot) {
+      ring.emplace_back(std::make_unique<HostRingSlot>(config_.host_chunk_tiles,
                                                        device_slab_capacity));
     }
     DeviceWorkspace workspace(device_slab_capacity);
 
     DispatchStats local_stats{};
     local_stats.tiles = count;
-    local_stats.host_chunk_tiles = config.host_chunk_tiles;
+    local_stats.host_chunk_tiles = config_.host_chunk_tiles;
     local_stats.pinned_host_bytes =
-        pinned_bytes_for_tiles(config.host_chunk_tiles, config.ring_slots);
+        pinned_bytes_for_tiles(config_.host_chunk_tiles, config_.ring_slots);
     local_stats.stream_count = 3;
     const char* group_dump_path = std::getenv("CUDA_CAMPAIGN_GROUP_DUMP");
     const bool group_dump_abort =
         std::getenv("CUDA_CAMPAIGN_GROUP_DUMP_ABORT") != nullptr;
     bool group_dump_written = false;
+    const bool collect_overflow_diagnostics =
+        config_.overflow_diagnostics || group_dump_path != nullptr;
+    const std::size_t max_overflow_diagnostics =
+        collect_overflow_diagnostics ? config_.max_overflow_diagnostics : 0;
 
     int device = 0;
     cudaDeviceProp prop{};
@@ -1000,7 +1021,7 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
     std::size_t slab_index = 0;
     while (copied < count) {
       const std::size_t host_chunk =
-          std::min(config.host_chunk_tiles, count - copied);
+          std::min(config_.host_chunk_tiles, count - copied);
       local_stats.chunks += 1;
 
       std::size_t chunk_copied = 0;
@@ -1023,10 +1044,14 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         local_stats.slabs += 1;
 
         HostRingSlot& slot =
-            *ring[slab_index % static_cast<std::size_t>(config.ring_slots)];
+            *ring[slab_index % static_cast<std::size_t>(config_.ring_slots)];
         PendingD2H& slot_pending =
-            pending[slab_index % static_cast<std::size_t>(config.ring_slots)];
+            pending[slab_index % static_cast<std::size_t>(config_.ring_slots)];
         drain_pending_d2h(slot, slot_pending, output_tileops);
+        if (slab_index != 0) {
+          check_cuda(cudaStreamSynchronize(streams.compute.get()),
+                     "cudaStreamSynchronize(compute workspace reuse)");
+        }
 
         const std::size_t global_offset = copied + chunk_copied;
         std::memcpy(slot.coords.get(), tiles + global_offset,
@@ -1053,7 +1078,7 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         launch_kernel_mr(workspace.d_coords.get(),
                          workspace.d_cand_list.get(),
                          workspace.d_total_cands.get(),
-                         workspace.d_bitmap.get(), d_fj64_table, num_tiles,
+                         workspace.d_bitmap.get(), d_fj64_table_, num_tiles,
                          streams.compute.get());
         check_last_launch("dispatch launch_kernel_mr");
 
@@ -1069,7 +1094,7 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
         fill_k1k4_buffers(
             &k1k4, workspace.d_coords.get(), nullptr, nullptr,
             workspace.d_raw_total_cands.get(), workspace.d_k1_overflow.get(),
-            workspace.d_bitmap.get(), d_fj64_table,
+            workspace.d_bitmap.get(), d_fj64_table_,
             workspace.d_row_prefix.get(), workspace.d_prime_pos.get(),
             workspace.d_prime_count.get(), workspace.d_parent.get(),
             workspace.d_prime_geo_bits.get(),
@@ -1123,18 +1148,10 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
           check_cuda(cudaEventSynchronize(slot.compute_done.get()),
                      "cudaEventSynchronize(compute_done)");
 
-          std::vector<std::uint32_t> h_raw_total_cands(slab_tiles);
           std::vector<std::uint32_t> h_k1_overflow(slab_tiles);
           std::vector<std::uint32_t> h_prime_count(slab_tiles);
-          std::vector<std::uint16_t> h_max_label(slab_tiles);
           std::vector<std::uint8_t> h_remap_overflow(slab_tiles);
           std::vector<std::uint16_t> h_face_rep_counts(face_count_slots);
-          check_cuda(cudaMemcpy(h_raw_total_cands.data(),
-                                workspace.d_raw_total_cands.get(),
-                                h_raw_total_cands.size() *
-                                    sizeof(std::uint32_t),
-                                cudaMemcpyDeviceToHost),
-                     "cudaMemcpy(raw_total_cands)");
           check_cuda(cudaMemcpy(h_k1_overflow.data(),
                                 workspace.d_k1_overflow.get(),
                                 h_k1_overflow.size() * sizeof(std::uint32_t),
@@ -1145,11 +1162,6 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
                                 h_prime_count.size() * sizeof(std::uint32_t),
                                 cudaMemcpyDeviceToHost),
                      "cudaMemcpy(prime_count)");
-          check_cuda(cudaMemcpy(h_max_label.data(),
-                                workspace.d_max_label.get(),
-                                h_max_label.size() * sizeof(std::uint16_t),
-                                cudaMemcpyDeviceToHost),
-                     "cudaMemcpy(max_label)");
           check_cuda(cudaMemcpy(h_remap_overflow.data(),
                                 workspace.d_overflow.get(),
                                 h_remap_overflow.size() * sizeof(std::uint8_t),
@@ -1161,6 +1173,25 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
                                     sizeof(std::uint16_t),
                                 cudaMemcpyDeviceToHost),
                      "cudaMemcpy(face_rep_counts)");
+
+          std::vector<std::uint32_t> h_raw_total_cands;
+          std::vector<std::uint16_t> h_max_label;
+          if (collect_overflow_diagnostics) {
+            h_raw_total_cands.resize(slab_tiles);
+            h_max_label.resize(slab_tiles);
+            check_cuda(cudaMemcpy(h_raw_total_cands.data(),
+                                  workspace.d_raw_total_cands.get(),
+                                  h_raw_total_cands.size() *
+                                      sizeof(std::uint32_t),
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy(raw_total_cands)");
+            check_cuda(cudaMemcpy(h_max_label.data(),
+                                  workspace.d_max_label.get(),
+                                  h_max_label.size() *
+                                      sizeof(std::uint16_t),
+                                  cudaMemcpyDeviceToHost),
+                       "cudaMemcpy(max_label)");
+          }
 
           for (std::size_t t = 0; t < slab_tiles; ++t) {
             const bool k1_cand_overflow = h_k1_overflow[t] != 0;
@@ -1187,7 +1218,8 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
 
             if ((k1_cand_overflow || k4_prime_overflow ||
                  k4_group_overflow || k5_port_overflow) &&
-                local_stats.first_overflow_tiles.size() < 10) {
+                local_stats.first_overflow_tiles.size() <
+                    max_overflow_diagnostics) {
               DispatchStats::OverflowDiagnostic diag{};
               diag.coord = tiles[global_offset + t];
               diag.candidate_count = h_raw_total_cands[t];
@@ -1257,12 +1289,30 @@ void dispatch_tile_batch(const campaign::TileCoord* tiles,
     if (stats != nullptr) {
       *stats = local_stats;
     }
-  } catch (...) {
-    free_fj64_table(d_fj64_table);
-    throw;
-  }
+}
 
-  free_fj64_table(d_fj64_table);
+TileBatchDispatcher::TileBatchDispatcher(
+    const campaign::CampaignConstants& constants,
+    const DispatchConfig& config)
+    : impl_(std::make_unique<Impl>(constants, config)) {}
+
+TileBatchDispatcher::~TileBatchDispatcher() = default;
+
+void TileBatchDispatcher::dispatch(const campaign::TileCoord* tiles,
+                                   std::size_t count,
+                                   campaign::TileOp* output_tileops,
+                                   DispatchStats* stats) {
+  impl_->dispatch(tiles, count, output_tileops, stats);
+}
+
+void dispatch_tile_batch(const campaign::TileCoord* tiles,
+                         std::size_t count,
+                         const campaign::CampaignConstants& constants,
+                         campaign::TileOp* output_tileops,
+                         const DispatchConfig& config,
+                         DispatchStats* stats) {
+  TileBatchDispatcher dispatcher(constants, config);
+  dispatcher.dispatch(tiles, count, output_tileops, stats);
 }
 
 std::vector<campaign::TileOp> dispatch_tile_batch(

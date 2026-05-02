@@ -209,6 +209,20 @@ target_compile_definitions(test_k1_overflow_spanning
 )
 add_test(NAME test_k1_overflow_spanning COMMAND test_k1_overflow_spanning)
 
+add_executable(test_dispatch_multi_slab_no_stats
+  tests/test_dispatch_multi_slab_no_stats.cpp
+)
+target_link_libraries(test_dispatch_multi_slab_no_stats
+  PRIVATE
+    campaign_cuda
+)
+target_compile_definitions(test_dispatch_multi_slab_no_stats
+  PRIVATE
+    K_SQ=${K_SQ}
+)
+add_test(NAME test_dispatch_multi_slab_no_stats
+  COMMAND test_dispatch_multi_slab_no_stats)
+
 foreach(k3k4_test
     test_k3k4_parent_parity
     test_dense_remap_adversarial
