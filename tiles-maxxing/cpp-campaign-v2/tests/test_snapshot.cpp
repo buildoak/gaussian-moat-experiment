@@ -203,6 +203,83 @@ TEST(Snapshot, RoundtripWritesHeaderManifestAndPayload) {
   EXPECT_TRUE(manifest.at("generated_at").get<std::string>().ends_with("Z"));
 }
 
+TEST(Snapshot, GridParamsHashMatchesHeader) {
+  const auto dir = temp_dir_for("grid_hash");
+  const auto path = dir / "snapshot.bin";
+  const auto grid = synthetic_grid();
+  const auto constants = synthetic_constants();
+  std::vector<campaign::TileOp> tileops;
+  for (std::uint8_t i = 0; i < 5; ++i) tileops.push_back(make_tile(i));
+
+  campaign::write_snapshot(path, grid, tileops, constants);
+
+  const auto header = campaign::read_snapshot_header(path);
+  const auto hash = campaign::grid_params_hash(grid);
+  ASSERT_EQ(hash.size(), 64u);
+  for (std::size_t i = 0; i < 32; ++i) {
+    const auto byte_hex = hash.substr(i * 2, 2);
+    const auto byte = static_cast<std::uint8_t>(
+        std::stoul(byte_hex, nullptr, 16));
+    EXPECT_EQ(header.grid_params_hash[i], byte);
+  }
+}
+
+TEST(Snapshot, WriterMatchesVectorSnapshotWithFrozenTimestamp) {
+  const auto dir = temp_dir_for("writer_identity");
+  const auto vector_path = dir / "vector.bin";
+  const auto writer_path = dir / "writer.bin";
+  const auto grid = synthetic_grid();
+  const auto constants = synthetic_constants();
+  const campaign::SnapshotOptions options{
+      .generated_at_utc = "2026-05-02T00:00:00Z"};
+  std::vector<campaign::TileOp> tileops;
+  for (std::uint8_t i = 0; i < 5; ++i) tileops.push_back(make_tile(i));
+
+  campaign::write_snapshot(vector_path, grid, tileops, constants, options);
+  campaign::SnapshotWriter writer(writer_path, grid, constants, options);
+  for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+    const auto column = grid.enumerate_column_tiles(i);
+    const std::int64_t offset = grid.flat_index(i, column.front().j);
+    ASSERT_GE(offset, 0);
+    writer.append_column(
+        i, std::span<const campaign::TileOp>(
+               tileops.data() + static_cast<std::size_t>(offset),
+               column.size()));
+  }
+  writer.close();
+
+  EXPECT_EQ(read_bytes(vector_path), read_bytes(writer_path));
+  EXPECT_EQ(read_text(manifest_path_for(vector_path)),
+            read_text(manifest_path_for(writer_path)));
+}
+
+TEST(Snapshot, ManifestTimestampCanBeFrozenByEnvironment) {
+  const auto dir = temp_dir_for("env_timestamp");
+  const auto path = dir / "snapshot.bin";
+  const auto grid = synthetic_grid();
+  const auto constants = synthetic_constants();
+  std::vector<campaign::TileOp> tileops;
+  for (std::uint8_t i = 0; i < 5; ++i) tileops.push_back(make_tile(i));
+
+  const char* prior = std::getenv(campaign::kSnapshotTimestampEnv);
+  const bool had_prior = prior != nullptr;
+  const std::string prior_value = had_prior ? std::string(prior) : "";
+
+  const std::string frozen = "2026-05-02T12:34:56Z";
+  setenv(campaign::kSnapshotTimestampEnv, frozen.c_str(), 1);
+  campaign::write_snapshot(path, grid, tileops, constants);
+  if (had_prior) {
+    setenv(campaign::kSnapshotTimestampEnv, prior_value.c_str(), 1);
+  } else {
+    unsetenv(campaign::kSnapshotTimestampEnv);
+  }
+
+  std::ifstream manifest_in(manifest_path_for(path));
+  nlohmann::json manifest;
+  manifest_in >> manifest;
+  EXPECT_EQ(manifest.at("generated_at"), frozen);
+}
+
 TEST(Snapshot, ManifestUsesStemConventionAndCompareFindsIt) {
   const auto dir = temp_dir_for("stem_manifest");
   const auto a = dir / "a.snapshot.bin";

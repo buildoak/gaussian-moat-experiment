@@ -81,6 +81,7 @@ set(CAMPAIGN_SRC
   src/geo_tests.cpp
   src/tileop.cpp
   src/compositor.cpp
+  src/streaming_compositor.cpp
   src/snapshot.cpp
   src/process_tile.cpp
 )

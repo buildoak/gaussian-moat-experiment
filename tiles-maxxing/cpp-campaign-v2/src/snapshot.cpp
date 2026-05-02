@@ -9,12 +9,14 @@
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include <nlohmann/json.hpp>
@@ -125,6 +127,9 @@ std::array<std::uint8_t, kHashBytes> digest_from_hex(const std::string& hex,
 }
 
 std::string utc_timestamp() {
+  if (const char* frozen = std::getenv(kSnapshotTimestampEnv)) {
+    return frozen;
+  }
   const auto now = std::chrono::system_clock::now();
   const std::time_t t = std::chrono::system_clock::to_time_t(now);
   std::tm tm{};
@@ -136,6 +141,13 @@ std::string utc_timestamp() {
   std::ostringstream ss;
   ss << std::put_time(&tm, "%Y-%m-%dT%H:%M:%SZ");
   return ss.str();
+}
+
+std::string generated_at(const SnapshotOptions& options) {
+  if (options.generated_at_utc.has_value()) {
+    return *options.generated_at_utc;
+  }
+  return utc_timestamp();
 }
 
 void write_hash(std::ostream& out, const std::array<std::uint8_t, kHashBytes>& h) {
@@ -154,10 +166,121 @@ void write_tileop(std::ostream& out, const TileOp& op) {
 
 }  // namespace
 
+std::string grid_params_hash(const Grid& grid) {
+  return detail::sha256_hex(grid_canonical_string(grid));
+}
+
+SnapshotWriter::SnapshotWriter(const std::filesystem::path& path,
+                               const Grid& grid,
+                               const CampaignConstants& constants,
+                               SnapshotOptions options)
+    : path_(path),
+      grid_(&grid),
+      constants_(&constants),
+      options_(std::move(options)),
+      next_i_(grid.i_min) {
+  if (grid.total_tiles < 0) {
+    throw std::runtime_error("SnapshotWriter: grid.total_tiles is negative");
+  }
+  tile_count_ = static_cast<std::uint64_t>(grid.total_tiles);
+
+  grid_hash_hex_ = grid_params_hash(grid);
+  constants_hash_hex_ = constants.canonical_hash();
+  mr_hash_hex_ = CampaignConstants::mr_witness_set_sha256();
+  const auto grid_hash = digest_from_hex(grid_hash_hex_, "grid_params_hash");
+  const auto constants_hash = digest_from_hex(constants_hash_hex_, "constants_hash");
+  const auto mr_hash = digest_from_hex(mr_hash_hex_, "mr_witness_set_sha256");
+
+  out_.open(path_, std::ios::binary | std::ios::trunc);
+  if (!out_.is_open()) {
+    throw std::runtime_error("SnapshotWriter: could not open output file " +
+                             path_.string());
+  }
+
+  out_.write(kSnapshotMagic, sizeof(kSnapshotMagic));
+  write_u32_le(out_, kSnapshotVersion);
+  write_hash(out_, grid_hash);
+  write_hash(out_, constants_hash);
+  write_hash(out_, mr_hash);
+  write_u64_le(out_, tile_count_);
+  write_u32_le(out_, static_cast<std::uint32_t>(TILEOP_SIZE));
+  write_u32_le(out_, 0);
+}
+
+void SnapshotWriter::append_column(std::int32_t i,
+                                   std::span<const TileOp> tileops) {
+  if (closed_) {
+    throw std::runtime_error("SnapshotWriter::append_column: writer is closed");
+  }
+  if (i < next_i_) {
+    throw std::runtime_error("SnapshotWriter::append_column: non-canonical column order");
+  }
+  while (next_i_ < i) {
+    if (!grid_->enumerate_column_tiles(next_i_).empty()) {
+      throw std::runtime_error(
+          "SnapshotWriter::append_column: skipped non-empty column");
+    }
+    ++next_i_;
+  }
+
+  const auto column_tiles = grid_->enumerate_column_tiles(i);
+  if (tileops.size() != column_tiles.size()) {
+    throw std::runtime_error("SnapshotWriter::append_column: tile count does not match column");
+  }
+
+  for (const TileOp& op : tileops) {
+    write_tileop(out_, op);
+  }
+  written_tiles_ += static_cast<std::uint64_t>(tileops.size());
+  ++next_i_;
+}
+
+void SnapshotWriter::close() {
+  if (closed_) return;
+  if (written_tiles_ != tile_count_) {
+    throw std::runtime_error("SnapshotWriter::close: wrote wrong tile count");
+  }
+  if (!out_.good()) {
+    throw std::runtime_error("SnapshotWriter::close: failed while writing " +
+                             path_.string());
+  }
+  out_.close();
+  if (!out_) {
+    throw std::runtime_error("SnapshotWriter::close: failed to close " +
+                             path_.string());
+  }
+
+  nlohmann::json manifest;
+  manifest["schema_version"] = 1;
+  manifest["grid_params_hash"] = grid_hash_hex_;
+  manifest["constants_hash"] = constants_hash_hex_;
+  manifest["mr_witness_set_sha256"] = mr_hash_hex_;
+  manifest["tile_count"] = tile_count_;
+  manifest["bytes_per_tile"] = TILEOP_SIZE;
+  manifest["k_sq"] = constants_->K_SQ_value;
+  manifest["r_inner"] = constants_->R_inner;
+  manifest["r_outer"] = constants_->R_outer;
+  manifest["generated_at"] = generated_at(options_);
+
+  const auto manifest_path = manifest_path_for(path_);
+  std::ofstream manifest_out(manifest_path, std::ios::binary | std::ios::trunc);
+  if (!manifest_out.is_open()) {
+    throw std::runtime_error("SnapshotWriter::close: could not open manifest " +
+                             manifest_path.string());
+  }
+  manifest_out << manifest.dump(2) << '\n';
+  if (!manifest_out.good()) {
+    throw std::runtime_error("SnapshotWriter::close: failed while writing manifest " +
+                             manifest_path.string());
+  }
+  closed_ = true;
+}
+
 void write_snapshot(const std::filesystem::path& path,
                     const Grid& grid,
                     const std::vector<TileOp>& tileops,
-                    const CampaignConstants& constants) {
+                    const CampaignConstants& constants,
+                    SnapshotOptions options) {
   if (grid.total_tiles < 0) {
     throw std::runtime_error("write_snapshot: grid.total_tiles is negative");
   }
@@ -166,71 +289,27 @@ void write_snapshot(const std::filesystem::path& path,
     throw std::runtime_error("write_snapshot: tileops.size() != grid.total_tiles");
   }
 
-  const auto grid_hash_hex = detail::sha256_hex(grid_canonical_string(grid));
-  const auto constants_hash_hex = constants.canonical_hash();
-  const auto mr_hash_hex = CampaignConstants::mr_witness_set_sha256();
-  const auto grid_hash = digest_from_hex(grid_hash_hex, "grid_params_hash");
-  const auto constants_hash = digest_from_hex(constants_hash_hex, "constants_hash");
-  const auto mr_hash = digest_from_hex(mr_hash_hex, "mr_witness_set_sha256");
-
-  std::ofstream out(path, std::ios::binary | std::ios::trunc);
-  if (!out.is_open()) {
-    throw std::runtime_error("write_snapshot: could not open output file " +
-                             path.string());
-  }
-
-  out.write(kSnapshotMagic, sizeof(kSnapshotMagic));
-  write_u32_le(out, kSnapshotVersion);
-  write_hash(out, grid_hash);
-  write_hash(out, constants_hash);
-  write_hash(out, mr_hash);
-  write_u64_le(out, tile_count);
-  write_u32_le(out, static_cast<std::uint32_t>(TILEOP_SIZE));
-  write_u32_le(out, 0);
-
-  auto coords = grid.enumerate_active_tiles();
-  std::sort(coords.begin(), coords.end(), [](const TileCoord& a, const TileCoord& b) {
-    if (a.i != b.i) return a.i < b.i;
-    return a.j < b.j;
-  });
-  for (const TileCoord& coord : coords) {
-    const std::int64_t idx = grid.flat_index(coord.i, coord.j);
-    if (idx < 0 || static_cast<std::uint64_t>(idx) >= tile_count) {
-      throw std::runtime_error("write_snapshot: grid.flat_index out of range");
+  SnapshotWriter writer(path, grid, constants, std::move(options));
+  for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+    auto column_tiles = grid.enumerate_column_tiles(i);
+    std::sort(column_tiles.begin(), column_tiles.end(),
+              [](const TileCoord& a, const TileCoord& b) {
+                if (a.i != b.i) return a.i < b.i;
+                return a.j < b.j;
+              });
+    std::vector<TileOp> column_ops;
+    column_ops.reserve(column_tiles.size());
+    for (const TileCoord& coord : column_tiles) {
+      const std::int64_t idx = grid.flat_index(coord.i, coord.j);
+      if (idx < 0 || static_cast<std::uint64_t>(idx) >= tile_count) {
+        throw std::runtime_error("write_snapshot: grid.flat_index out of range");
+      }
+      column_ops.push_back(tileops[static_cast<std::size_t>(idx)]);
     }
-    write_tileop(out, tileops[static_cast<std::size_t>(idx)]);
+    writer.append_column(i, std::span<const TileOp>(column_ops.data(),
+                                                    column_ops.size()));
   }
-  if (!out.good()) {
-    throw std::runtime_error("write_snapshot: failed while writing " + path.string());
-  }
-  out.close();
-  if (!out) {
-    throw std::runtime_error("write_snapshot: failed to close " + path.string());
-  }
-
-  nlohmann::json manifest;
-  manifest["schema_version"] = 1;
-  manifest["grid_params_hash"] = grid_hash_hex;
-  manifest["constants_hash"] = constants_hash_hex;
-  manifest["mr_witness_set_sha256"] = mr_hash_hex;
-  manifest["tile_count"] = tile_count;
-  manifest["bytes_per_tile"] = TILEOP_SIZE;
-  manifest["k_sq"] = constants.K_SQ_value;
-  manifest["r_inner"] = constants.R_inner;
-  manifest["r_outer"] = constants.R_outer;
-  manifest["generated_at"] = utc_timestamp();
-
-  const auto manifest_path = manifest_path_for(path);
-  std::ofstream manifest_out(manifest_path, std::ios::binary | std::ios::trunc);
-  if (!manifest_out.is_open()) {
-    throw std::runtime_error("write_snapshot: could not open manifest " +
-                             manifest_path.string());
-  }
-  manifest_out << manifest.dump(2) << '\n';
-  if (!manifest_out.good()) {
-    throw std::runtime_error("write_snapshot: failed while writing manifest " +
-                             manifest_path.string());
-  }
+  writer.close();
 }
 
 SnapshotHeader read_snapshot_header(const std::filesystem::path& path) {

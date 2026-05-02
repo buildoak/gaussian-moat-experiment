@@ -43,6 +43,9 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
+#include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -57,6 +60,49 @@ inline constexpr char kSnapshotMagic[4] = {'C', 'M', 'V', '2'};
 inline constexpr std::uint32_t kSnapshotMagicLe = 0x32564d43u;
 inline constexpr std::uint32_t kSnapshotVersion = 1u;
 inline constexpr std::uint32_t kSnapshotHeaderSize = 120u;
+inline constexpr const char* kSnapshotTimestampEnv =
+    "CAMPAIGN_SNAPSHOT_TIMESTAMP_UTC";
+
+// Snapshot sidecar options. `generated_at_utc`, when set, is copied directly
+// into the manifest so tests can freeze timestamps without changing payload
+// bytes. If unset, `CAMPAIGN_SNAPSHOT_TIMESTAMP_UTC` is honored before falling
+// back to the current UTC time.
+struct SnapshotOptions {
+  std::optional<std::string> generated_at_utc;
+};
+
+// SHA-256 hex digest of the canonical grid fields carried in the snapshot
+// header.
+std::string grid_params_hash(const Grid& grid);
+
+class SnapshotWriter {
+ public:
+  SnapshotWriter(const std::filesystem::path& path,
+                 const Grid& grid,
+                 const CampaignConstants& constants,
+                 SnapshotOptions options = {});
+  SnapshotWriter(const SnapshotWriter&) = delete;
+  SnapshotWriter& operator=(const SnapshotWriter&) = delete;
+  SnapshotWriter(SnapshotWriter&&) = delete;
+  SnapshotWriter& operator=(SnapshotWriter&&) = delete;
+
+  void append_column(std::int32_t i, std::span<const TileOp> tileops);
+  void close();
+
+ private:
+  std::filesystem::path path_;
+  std::ofstream out_;
+  const Grid* grid_ = nullptr;
+  const CampaignConstants* constants_ = nullptr;
+  SnapshotOptions options_;
+  std::uint64_t tile_count_ = 0;
+  std::uint64_t written_tiles_ = 0;
+  std::int32_t next_i_ = 0;
+  std::string grid_hash_hex_;
+  std::string constants_hash_hex_;
+  std::string mr_hash_hex_;
+  bool closed_ = false;
+};
 
 // Write snapshot.bin + `<path>.manifest.json`.
 //
@@ -70,7 +116,8 @@ inline constexpr std::uint32_t kSnapshotHeaderSize = 120u;
 void write_snapshot(const std::filesystem::path& path,
                     const Grid& grid,
                     const std::vector<TileOp>& tileops,
-                    const CampaignConstants& constants);
+                    const CampaignConstants& constants,
+                    SnapshotOptions options = {});
 
 // Snapshot header view (read-only). Used by `compare_snapshots`.
 struct SnapshotHeader {

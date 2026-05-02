@@ -119,6 +119,18 @@ std::string campaign_cmd(const std::filesystem::path& out,
   return cmd.str();
 }
 
+std::string campaign_cmd_no_snapshot(const std::filesystem::path& region,
+                                     int threads) {
+  std::ostringstream cmd;
+  cmd << "OMP_NUM_THREADS=" << threads << " "
+      << shell_quote(CAMPAIGN_MAIN_PATH)
+      << " --k-sq=" << campaign::k_sq_value
+      << " --r-inner=1000"
+      << " --r-outer=1600"
+      << " --region " << shell_quote(region);
+  return cmd.str();
+}
+
 CommandResult run_compare(const std::filesystem::path& a,
                           const std::filesystem::path& b,
                           const std::filesystem::path& dir,
@@ -149,6 +161,70 @@ TEST(CampaignMain, TinyEndToEndWritesSnapshotManifestAndVerdict) {
   EXPECT_EQ(manifest.at("tile_count"), 3);
   EXPECT_EQ(manifest.at("bytes_per_tile"), campaign::TILEOP_SIZE);
   EXPECT_EQ(manifest.at("k_sq"), campaign::k_sq_value);
+}
+
+TEST(CampaignMain, DefaultDoesNotWriteSnapshot) {
+  const auto dir = temp_dir_for("default_no_snapshot");
+  const auto region = write_region3(dir);
+
+  const auto result =
+      run_command(campaign_cmd_no_snapshot(region, 2), dir, "run");
+
+  EXPECT_EQ(result.exit_code, 0) << result.err;
+  EXPECT_NE(result.out.find("VERDICT: "), std::string::npos);
+  EXPECT_NE(result.out.find("snapshot:      disabled"), std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(dir / "snapshot.bin"));
+  EXPECT_FALSE(std::filesystem::exists(dir / "snapshot.manifest.json"));
+}
+
+TEST(CampaignMain, SnapshotOutWritesSnapshot) {
+  const auto dir = temp_dir_for("snapshot_out");
+  const auto region = write_region3(dir);
+  const auto snapshot = dir / "snapshot.bin";
+  std::ostringstream cmd;
+  cmd << campaign_cmd_no_snapshot(region, 2)
+      << " --snapshot-out " << shell_quote(snapshot);
+
+  const auto result = run_command(cmd.str(), dir, "run");
+
+  EXPECT_EQ(result.exit_code, 0) << result.err;
+  EXPECT_NE(result.out.find("VERDICT: "), std::string::npos);
+  EXPECT_TRUE(std::filesystem::exists(snapshot));
+  EXPECT_TRUE(std::filesystem::exists(manifest_path_for(snapshot)));
+}
+
+TEST(CampaignMain, OutAliasMayMatchSnapshotOut) {
+  const auto dir = temp_dir_for("matching_alias");
+  const auto region = write_region3(dir);
+  const auto snapshot = dir / "snapshot.bin";
+  std::ostringstream cmd;
+  cmd << campaign_cmd_no_snapshot(region, 2)
+      << " --out " << shell_quote(snapshot)
+      << " --snapshot-out " << shell_quote(snapshot);
+
+  const auto result = run_command(cmd.str(), dir, "run");
+
+  EXPECT_EQ(result.exit_code, 0) << result.err;
+  EXPECT_TRUE(std::filesystem::exists(snapshot));
+}
+
+TEST(CampaignMain, OutAndSnapshotOutConflictFails) {
+  const auto dir = temp_dir_for("conflict_alias");
+  const auto region = write_region3(dir);
+  const auto out = dir / "out.bin";
+  const auto snapshot = dir / "snapshot.bin";
+  std::ostringstream cmd;
+  cmd << campaign_cmd_no_snapshot(region, 2)
+      << " --out " << shell_quote(out)
+      << " --snapshot-out " << shell_quote(snapshot);
+
+  const auto result = run_command(cmd.str(), dir, "run");
+
+  EXPECT_EQ(result.exit_code, 2);
+  EXPECT_NE(result.err.find("--out and --snapshot-out differ"),
+            std::string::npos);
+  EXPECT_FALSE(std::filesystem::exists(out));
+  EXPECT_FALSE(std::filesystem::exists(snapshot));
 }
 
 TEST(CampaignMain, ThicknessFailExitsOneWithClearError) {

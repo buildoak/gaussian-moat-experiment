@@ -4,7 +4,7 @@
 //
 // Usage:
 //   campaign_main --help
-//   campaign_main --k-sq=N --r-inner=R1 --r-outer=R2 --region <spec> --out <path>
+//   campaign_main --k-sq=N --r-inner=R1 --r-outer=R2 --region <spec>
 //
 // `--region full-octant` is a CLI shortcut for the JSON { "full_octant": true }.
 // Any other `--region <path>` argument is treated as a JSON file path and
@@ -49,7 +49,8 @@ void print_help(const char* prog) {
       << "  --r-inner=R            Inner radius of the annulus (positive integer)\n"
       << "  --r-outer=R            Outer radius of the annulus (> R_inner)\n"
       << "  --region <spec>        'full-octant' or a path to a region JSON file\n"
-      << "  --out <path>           Output snapshot.bin path\n"
+      << "  --snapshot-out <path>  Optional output snapshot.bin path\n"
+      << "  --out <path>           Alias for --snapshot-out\n"
       << "  --threads=N            OpenMP worker count (ignored when OMP_NUM_THREADS is set)\n"
       << "\n"
       << "Compile-time constants (baked in at build):\n"
@@ -61,7 +62,7 @@ void print_help(const char* prog) {
       << campaign::OFFSET_Y << ")\n"
       << "\n"
       << "Runs grid enumeration, per-tile TileOp processing, sequential compositor\n"
-      << "ingestion, verdict production, and snapshot emission.\n";
+      << "ingestion, and verdict production. Snapshot emission is optional.\n";
 }
 
 // Accept --k-sq=N, --k-sq N, --r-inner=N, etc. Returns (key, value) or empty.
@@ -244,6 +245,13 @@ std::int64_t elapsed_ms(Clock::time_point start,
       .count();
 }
 
+std::string elapsed_ms_text(Clock::time_point start,
+                            Clock::time_point end) {
+  std::ostringstream ss;
+  ss << std::setw(6) << elapsed_ms(start, end) << " ms";
+  return ss.str();
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -254,7 +262,8 @@ int main(int argc, char** argv) {
   std::optional<std::uint64_t> r_inner;
   std::optional<std::uint64_t> r_outer;
   std::optional<std::string> region_spec;
-  std::optional<std::string> out_path;
+  std::optional<std::string> snapshot_out_path;
+  std::optional<std::string> out_alias_path;
   std::optional<std::uint64_t> threads;
 
   for (int i = 1; i < argc; ++i) {
@@ -305,8 +314,10 @@ int main(int argc, char** argv) {
       r_outer = v;
     } else if (take_val("--region", val)) {
       region_spec = val;
+    } else if (take_val("--snapshot-out", val)) {
+      snapshot_out_path = val;
     } else if (take_val("--out", val)) {
-      out_path = val;
+      out_alias_path = val;
     } else if (take_val("--threads", val)) {
       std::uint64_t v;
       if (!parse_uint64(val, v) || v == 0) {
@@ -323,7 +334,8 @@ int main(int argc, char** argv) {
 
   // No core args? Show help and exit success (CI smoke test uses --help).
   if (!k_sq.has_value() && !r_inner.has_value() && !r_outer.has_value() &&
-      !region_spec.has_value()) {
+      !region_spec.has_value() && !snapshot_out_path.has_value() &&
+      !out_alias_path.has_value()) {
     print_help(argv[0]);
     return 0;
   }
@@ -344,10 +356,14 @@ int main(int argc, char** argv) {
     std::cerr << "Error: --region is required\n";
     return 2;
   }
-  if (!out_path.has_value()) {
-    std::cerr << "Error: --out is required\n";
+
+  if (snapshot_out_path.has_value() && out_alias_path.has_value() &&
+      *snapshot_out_path != *out_alias_path) {
+    std::cerr << "Error: --out and --snapshot-out differ\n";
     return 2;
   }
+  const std::optional<std::string> snapshot_path =
+      snapshot_out_path.has_value() ? snapshot_out_path : out_alias_path;
 
   if (static_cast<std::uint32_t>(*k_sq) !=
       static_cast<std::uint32_t>(campaign::k_sq_value)) {
@@ -454,12 +470,14 @@ int main(int argc, char** argv) {
   const auto comp_end = Clock::now();
 
   const auto snapshot_start = Clock::now();
-  try {
-    campaign::write_snapshot(std::filesystem::path(*out_path), grid, tileops,
-                             constants);
-  } catch (const std::exception& e) {
-    std::cerr << "Error writing snapshot: " << e.what() << "\n";
-    return 6;
+  if (snapshot_path.has_value()) {
+    try {
+      campaign::write_snapshot(std::filesystem::path(*snapshot_path), grid,
+                               tileops, constants);
+    } catch (const std::exception& e) {
+      std::cerr << "Error writing snapshot: " << e.what() << "\n";
+      return 6;
+    }
   }
   const auto snapshot_end = Clock::now();
   const auto total_end = Clock::now();
@@ -480,8 +498,10 @@ int main(int argc, char** argv) {
             << elapsed_ms(encode_start, encode_end) << " ms\n"
             << "  compositor:    " << std::setw(6)
             << elapsed_ms(comp_start, comp_end) << " ms\n"
-            << "  snapshot:      " << std::setw(6)
-            << elapsed_ms(snapshot_start, snapshot_end) << " ms\n"
+            << "  snapshot:      "
+            << (snapshot_path.has_value()
+                    ? elapsed_ms_text(snapshot_start, snapshot_end)
+                    : std::string("disabled")) << "\n"
             << "  total:         " << std::setw(6)
             << elapsed_ms(total_start, total_end) << " ms\n"
             << "TIMING: t_grid=" << (elapsed_ms(grid_start, grid_end) / 1000.0)
