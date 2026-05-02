@@ -14,9 +14,9 @@
 int main() {
   try {
     const auto constants = campaign::CampaignConstants::from_radii(
-        100, 500, static_cast<std::uint32_t>(campaign::k_sq_value));
+        100, 600, static_cast<std::uint32_t>(campaign::k_sq_value));
     const auto grid = campaign::Grid::build(
-        100, 500, static_cast<std::uint32_t>(campaign::k_sq_value));
+        100, 600, static_cast<std::uint32_t>(campaign::k_sq_value));
     std::vector<campaign::TileCoord> coords = grid.enumerate_active_tiles();
     std::sort(coords.begin(), coords.end(),
               [](const campaign::TileCoord& a,
