@@ -17,7 +17,6 @@ results/
 *.dSYM/
 *.nsys-rep
 *.ncu-rep
-reference/
 output/
 profiles/
 thermal/

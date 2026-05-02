@@ -3,8 +3,8 @@
 // Cross-tile UF + moat verdict engine for the cpp-campaign-v2 reference
 // build.
 //
-// API surface is the blueprint §7.5 "frozen surface". Phase 2 implements
-// the methods; Phase 1 provides stubs only.
+// API surface is the blueprint §7.5 "frozen surface". The implementation in
+// src/compositor.cpp is the full CPU reference compositor.
 //
 // Flow (blueprint §7):
 //   1) init(grid)  — allocate parent_ / root_reach_ for the global group
@@ -52,7 +52,6 @@ class Compositor {
   // Preconditions:
   //   * grid.total_tiles <= (2^32 / 128) — blueprint §7.1 (33.5 M cap).
   //
-  // STUB in Phase 1.
   void init(const Grid& grid);
 
   // Ingest one column's worth of TileOps (column i). `column_tileops` has
@@ -61,7 +60,6 @@ class Compositor {
   // After this call, `has_spanning()` reflects any REACH_INNER ∩ REACH_OUTER
   // collisions encountered so far (incremental check).
   //
-  // STUB in Phase 1.
   void ingest_column(std::int32_t i, const TileOp* column_tileops);
 
   // True iff any DSU root has both REACH_INNER and REACH_OUTER set.
@@ -70,7 +68,6 @@ class Compositor {
 
   // Emit final verdict. Call only after all columns have been ingested.
   //
-  // STUB in Phase 1: returns kUnknown.
   Verdict finalize();
 
  private:

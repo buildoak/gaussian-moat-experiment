@@ -57,7 +57,14 @@ REMOTE=/workspace/gaussian-moat-cuda
 rsync -avz --delete \
   --exclude '.git' \
   --exclude 'build*/' \
-  --exclude 'artifacts/instance-*/' \
+  --exclude '**/build*/' \
+  --exclude '**/artifacts/' \
+  --exclude '**/results/' \
+  --exclude '**/profiles/' \
+  --exclude '**/runs/' \
+  --exclude '**/tmp/' \
+  --exclude '**/*.bin' \
+  --exclude '**/*.log' \
   -e "ssh -o StrictHostKeyChecking=accept-new -p $PORT" \
   ./ root@$HOST:$REMOTE/
 ```
@@ -108,21 +115,11 @@ Tsuchimura reproduction checkpoint, k^2=36:
 ```bash
 cd /workspace/gaussian-moat-cuda/tiles-maxxing/cuda-campaign-v2-sqrt-36
 
-./build-k36/campaign_main_cuda \
-  --k-sq=36 \
-  --r-inner=80000000 \
-  --r-outer=80015782 \
-  --region full-octant \
-  --out /workspace/r80015782.snapshot.bin \
-  --chunk-size=200000
-
-./build-k36/campaign_main_cuda \
-  --k-sq=36 \
-  --r-inner=80000000 \
-  --r-outer=80015790 \
-  --region full-octant \
-  --out /workspace/r80015790.snapshot.bin \
-  --chunk-size=200000
+scripts/run_tsuchimura_gate.sh \
+  --cuda-bin ./build-k36/campaign_main_cuda \
+  --chunk-size 200000 \
+  --timing \
+  --profile-dir /workspace/profiles
 ```
 
 Expected verdicts:
@@ -133,6 +130,10 @@ Expected verdicts:
 | 80,015,790 | MOAT |
 
 This is the validated bracket `(80,015,782, 80,015,790)`. Tsuchimura's value is the farthest reachable point; the moat begins just past it.
+
+The CUDA campaign default is verdict-only. Use `--snapshot-out` only when
+snapshot parity is the objective; snapshot mode intentionally disables early
+exit and writes every TileOp.
 
 ## Sweep Template
 
@@ -148,13 +149,14 @@ for R_OUTER in 80015000 80015700 80015780 80015782 80015790 80015800; do
     --r-inner=80000000 \
     --r-outer="$R_OUTER" \
     --region full-octant \
-    --out "/workspace/sweeps/boundary/r${R_OUTER}.snapshot.bin" \
     --chunk-size=200000 \
+    --timing \
+    --profile "/workspace/sweeps/boundary/r${R_OUTER}.profile.json" \
     > "/workspace/sweeps/boundary/logs/r${R_OUTER}.log" 2>&1
 done
 ```
 
-Keep each sweep in a timestamped directory and pull logs/snapshots back before destroying the instance.
+Keep each sweep in a timestamped directory and pull logs/profiles back before destroying the instance.
 
 ## Pull Results
 
@@ -170,7 +172,8 @@ rsync -avz \
 
 Use `tmux` for any command over 5 seconds. SSH drops are common; `tmux` keeps builds and sweeps alive.
 
-If you created the instance for the current task, destroy it immediately after pulling results:
+If the task explicitly includes cleanup or the user asks you to stop billing,
+destroy the instance immediately after pulling results:
 
 ```bash
 $VASTAI destroy instance $ID

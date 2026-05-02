@@ -24,6 +24,13 @@ The project is restarting from the mathematical methodology plus a heavily revie
 |------|------|
 | `agents-directives/` | Single home for operational instructions created for agents. Every file here must be referenced from this `AGENTS.md`. |
 | `agents-directives/experiment-contract.md` | Operational contract for CUDA experiments, validation gates, golden usage, and performance reports. |
+| `reference/` | Current operational reference docs for gates, optimization workflow, pre-push checks, and history cleanup. Every durable workflow doc here should be named from the job it gates. |
+| `reference/current-gate-board.md` | Current baseline/verified commits, exact required gates, Tsuchimura commands, and baseline performance numbers. Read before optimization work. |
+| `reference/agentic-optimization-workflow.md` | Long-running agent workflow for optimization branches: preflight, post-correctness, and post-performance reporting. |
+| `reference/optimization-safety-checklist.md` | Do-not-break checklist for math/TileOp/port/verdict semantics during optimization. |
+| `reference/performance-report-template.md` | Required report shape for before/after profile JSON and timing evidence. |
+| `reference/pre-push-secret-check.md` | Pre-push credential scan commands for current tree and history. |
+| `reference/heavy-history-cleanup-plan.md` | Minimal safe plan for removing historical blobs over GitHub's file-size limit, with backup and bundle steps. |
 | `methodology/tile-operator-definition-v-claude.md` | Strongest TileOp/connectivity canon. Start here for math, semantics, and proof obligations. |
 | `methodology/BACKLOG.md` | Math and spec backlog. Useful, not stronger than the main methodology file. |
 | `methodology/supportive/` | Canonical staging area for timestamped audit, explainer, poster-source, and understanding-improvement artifacts. Name files `YYYY-MM-DD-slug.md`. |
@@ -35,6 +42,13 @@ The project is restarting from the mathematical methodology plus a heavily revie
 | `_archive/` | Local-only archive dump. Must stay untracked. |
 
 Do not recreate root-level `docs/`, `artifacts/`, `results/`, or old campaign folders as authority surfaces. If a new durable document is needed, first decide whether it belongs in `methodology/`, beside the code it audits, or in the Pratchett project document.
+
+## Current Gate Board
+
+Before any optimization branch, read `reference/current-gate-board.md`.
+It records the current verified baseline, the exact CPU/CUDA/Tsuchimura gates,
+and the RTX 4090 performance baseline. If it disagrees with a newer verified
+run, update the gate board in the same commit as the new verification note.
 
 ## Ground Truth Gate - Tsuchimura k^2=36
 
@@ -57,6 +71,17 @@ Use this order when judging campaign correctness:
 4. **Regression tripwires:** CUDA golden JSON batches are cheap smoke checks. They are not mathematical proof, and because they are generated from CUDA debug output they must not outrank CPU parity, Tsuchimura, or the methodology.
 
 If these layers disagree, stop and resolve the stronger layer first. Do not refresh goldens to bless a failing stronger gate.
+
+## Optimization Workflow
+
+For long-running optimization work, use:
+
+1. `reference/agentic-optimization-workflow.md` for branch shape and reporting.
+2. `reference/optimization-safety-checklist.md` before changing any CUDA/CPU hot path.
+3. `reference/performance-report-template.md` for before/after evidence.
+
+Optimization acceptance requires correctness first, performance second. A speedup
+without Tsuchimura and CPU/CUDA parity evidence is not accepted.
 
 ## Default Shell-Probe Contract
 
@@ -117,6 +142,8 @@ When borrowing from `legacy/`, say what was borrowed and which methodology oblig
 - Before staging, run `git status --short --untracked-files=all` and inspect untracked roots.
 - Prefer exact-path staging. Avoid broad staging until `_archive/` and generated output are confirmed ignored.
 - Before committing, run a staged large-file check. New large artifacts need an explicit reason.
+- Before pushing or publishing rewritten history, run `reference/pre-push-secret-check.md`.
+- GitHub currently rejects the local history because old commits contain large generated blobs. Do not attempt history surgery casually; follow `reference/heavy-history-cleanup-plan.md` only after explicit approval.
 
 ## Compute Workflow
 
