@@ -233,8 +233,22 @@ struct StreamingCompositor::State {
     }
   }
 
-  NodeId frontier_node_for(std::int32_t j, std::uint8_t port_ordinal) const {
-    for (const FrontierNode& entry : frontier) {
+  static bool frontier_key_less(const FrontierNode& entry,
+                                std::int32_t j,
+                                std::uint8_t port_ordinal) noexcept {
+    return entry.j < j ||
+           (entry.j == j && entry.port_ordinal < port_ordinal);
+  }
+
+  NodeId frontier_node_for(std::size_t& frontier_cursor,
+                           std::int32_t j,
+                           std::uint8_t port_ordinal) const {
+    while (frontier_cursor < frontier.size() &&
+           frontier_key_less(frontier[frontier_cursor], j, port_ordinal)) {
+      ++frontier_cursor;
+    }
+    if (frontier_cursor < frontier.size()) {
+      const FrontierNode& entry = frontier[frontier_cursor];
       if (entry.j == j && entry.port_ordinal == port_ordinal) {
         return entry.node;
       }
@@ -246,7 +260,8 @@ struct StreamingCompositor::State {
                 const TileCoord& b_coord,
                 std::int64_t b_idx,
                 const TileOp& a,
-                const TileOp& b) {
+                const TileOp& b,
+                std::size_t& frontier_cursor) {
     assert_not_side_exposed_lr_input(grid, a_coord, Face::R);
     assert_not_side_exposed_lr_input(grid, b_coord, Face::L);
     if ((a.tile_flags & OVERFLOW_BIT) || (b.tile_flags & OVERFLOW_BIT)) {
@@ -257,7 +272,9 @@ struct StreamingCompositor::State {
     require_port_count_equal(a.n[face_r], b.n[face_l], "L/R");
     const int b_off = face_offset(b, Face::L);
     for (int p = 0; p < a.n[face_r]; ++p) {
-      unite(frontier_node_for(a_coord.j, static_cast<std::uint8_t>(p + 1)),
+      unite(frontier_node_for(frontier_cursor,
+                              a_coord.j,
+                              static_cast<std::uint8_t>(p + 1)),
             node_for_group(b_idx, b.face_groups[b_off + p]));
     }
   }
@@ -318,19 +335,6 @@ struct StreamingCompositor::State {
     frontier = std::move(next_frontier);
   }
 
-  const TileOp* prev_op_for_j(std::int32_t j) const {
-    for (std::size_t pos = 0; pos < prev_coords.size(); ++pos) {
-      if (prev_coords[pos].j == j) return &prev_column[pos];
-    }
-    return nullptr;
-  }
-
-  TileCoord prev_coord_for_j(std::int32_t j) const {
-    for (const TileCoord& coord : prev_coords) {
-      if (coord.j == j) return coord;
-    }
-    throw std::runtime_error("previous frontier coordinate missing");
-  }
 };
 
 StreamingCompositor::StreamingCompositor() : state_(new State{}) {}
@@ -390,13 +394,27 @@ void StreamingCompositor::ingest_column(
 
   if (!state_->prev_coords.empty() &&
       state_->last_frontier_i == static_cast<std::int32_t>(i - 1)) {
+    std::size_t prev_pos = 0;
+    std::size_t frontier_cursor = 0;
     for (std::size_t local = 0; local < current_coords.size(); ++local) {
       const TileCoord& coord = current_coords[local];
-      const TileOp* left_op = state_->prev_op_for_j(coord.j);
-      if (!left_op) continue;
-      const TileCoord left_coord = state_->prev_coord_for_j(coord.j);
+      while (prev_pos < state_->prev_coords.size() &&
+             state_->prev_coords[prev_pos].j < coord.j) {
+        ++prev_pos;
+      }
+      if (prev_pos == state_->prev_coords.size() ||
+          state_->prev_coords[prev_pos].j != coord.j) {
+        continue;
+      }
+      const TileCoord& left_coord = state_->prev_coords[prev_pos];
+      const TileOp& left_op = state_->prev_column[prev_pos];
       const std::int64_t idx = state_->checked_tile_index(coord.i, coord.j);
-      state_->match_lr(left_coord, coord, idx, *left_op, current_column[local]);
+      state_->match_lr(left_coord,
+                       coord,
+                       idx,
+                       left_op,
+                       current_column[local],
+                       frontier_cursor);
     }
   }
 
