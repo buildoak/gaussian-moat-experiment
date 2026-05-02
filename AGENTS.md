@@ -47,6 +47,17 @@ Tsuchimura's published `k^2=36` boundary remains the known-answer gate:
 
 This gate is evidence that an implementation is on the right track. It does not make the implementation the source of truth. A passing known-answer gate plus methodology alignment is the minimum trust package.
 
+## Verification Stack
+
+Use this order when judging campaign correctness:
+
+1. **External truth:** Tsuchimura's two-case K36 known-answer gate above.
+2. **Implementation equivalence:** CPU/CUDA snapshot parity for the same full-octant inputs, because verdict equality alone can hide wrong TileOps.
+3. **Fault localization:** `cuda_vs_cpu_diff --m4 --verbose` and `cuda_vs_cpu_diff --k5 --verbose` to find the first divergent internal surface, tile, or byte.
+4. **Regression tripwires:** CUDA golden JSON batches are cheap smoke checks. They are not mathematical proof, and because they are generated from CUDA debug output they must not outrank CPU parity, Tsuchimura, or the methodology.
+
+If these layers disagree, stop and resolve the stronger layer first. Do not refresh goldens to bless a failing stronger gate.
+
 ## Vanilla Campaign Probe Contract
 
 The current user-specified vanilla campaign probe is:
@@ -57,7 +68,27 @@ The current user-specified vanilla campaign probe is:
 4. Compute the full octant spanning from the vertical Y axis right/down to the `y = x` diagonal.
 5. Produce the verdict for that full-octant shell.
 
-Do not silently substitute a partial region, centered sample batch, wedge, or differently anchored run when the user asks for the vanilla campaign. If current code behavior differs from this contract, report the mismatch before trusting results.
+Keep the CLI explicit: do not add a `--vanilla` shortcut unless the user asks.
+Use explicit `--r-inner`, `--r-outer`, and `--region full-octant` so custom
+annular widths remain first-class experiment inputs.
+
+Do not silently substitute a partial region, centered sample batch, wedge, or differently anchored run when the user asks for the default shell probe. If current code behavior differs from this contract, report the mismatch before trusting results.
+
+## Streaming Early-Exit Semantics
+
+Streaming early exit is allowed only for `SPANNING`. Once the compositor has a
+component carrying both inner and outer reach bits, later tiles can add edges but
+cannot disconnect that witness. `MOAT` remains a whole-region verdict and cannot
+be returned until all required tiles for the region have been ingested.
+
+The safe implementation shape is column-complete ingestion: GPU may process
+batches internally, but the CPU compositor should ingest a column only after all
+TileOps for that column are available, then check `has_spanning()`. Arbitrary
+partial-tile ingestion needs a separate proof/implementation that missing
+neighbor stitches are deferred correctly.
+
+Snapshot parity runs must still compute and write all TileOps. Early-exit mode
+is a verdict mode, not a full-snapshot mode.
 
 ## Implementation Rules
 
@@ -98,6 +129,6 @@ Do not destroy cloud instances, push branches, publish results, or mutate remote
 Keep this list succinct and update it as work lands.
 
 1. Audit `cpp-campaign-v2` and `cuda-campaign-v2-sqrt-36` campaign-running semantics against the Vanilla Campaign Probe Contract above: tile width, `R_outer = R_inner + 8192`, full-octant region, and verdict meaning.
-2. Re-establish correctness gates for the current `main`: targeted parity, CTest, golden validation, snapshot SHA, and Tsuchimura known-answer checks on the appropriate CUDA host.
-3. Reintroduce streaming early-exit campaign execution from the legacy CUDA campaign: GPU emits TileOp batches, CPU compositor ingests as batches arrive, and the run exits as soon as the spanning verdict is determined.
+2. Re-establish correctness gates for the current `main`: Tsuchimura two-case known-answer checks, full-octant CPU/CUDA snapshot parity, targeted fault localization, CTest, and only then golden smoke validation on the appropriate CUDA host.
+3. Reintroduce streaming early-exit campaign execution from the legacy CUDA campaign: GPU emits TileOps in batches, CPU compositor ingests complete columns as soon as available, and the run exits as soon as a `SPANNING` witness is latched.
 4. After correctness and streaming semantics are stable, profile bottlenecks under the experiment contract and only then optimize MR, face encoding, memory layout, or host overlap.
