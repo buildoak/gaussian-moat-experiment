@@ -22,6 +22,8 @@ The project is restarting from the mathematical methodology plus a heavily revie
 
 | Path | Role |
 |------|------|
+| `agents-directives/` | Single home for operational instructions created for agents. Every file here must be referenced from this `AGENTS.md`. |
+| `agents-directives/experiment-contract.md` | Operational contract for CUDA experiments, validation gates, golden usage, and performance reports. |
 | `methodology/tile-operator-definition-v-claude.md` | Strongest TileOp/connectivity canon. Start here for math, semantics, and proof obligations. |
 | `methodology/BACKLOG.md` | Math and spec backlog. Useful, not stronger than the main methodology file. |
 | `methodology/supportive/` | Canonical staging area for timestamped audit, explainer, poster-source, and understanding-improvement artifacts. Name files `YYYY-MM-DD-slug.md`. |
@@ -45,7 +47,17 @@ Tsuchimura's published `k^2=36` boundary remains the known-answer gate:
 
 This gate is evidence that an implementation is on the right track. It does not make the implementation the source of truth. A passing known-answer gate plus methodology alignment is the minimum trust package.
 
-Never confuse narrow-shell runs with moat-detection runs. `--r-inner=R --r-outer=R+8192` asks a shell self-connectivity question. Moat detection must anchor `R_inner` on the origin-containing side and vary `R_outer`.
+## Vanilla Campaign Probe Contract
+
+The current user-specified vanilla campaign probe is:
+
+1. Agree on tile construction width before the job; the preferred width is `256 * 32 = 8192`.
+2. Select `R_inner`.
+3. Set `R_outer = R_inner + 8192`.
+4. Compute the full octant spanning from the vertical Y axis right/down to the `y = x` diagonal.
+5. Produce the verdict for that full-octant shell.
+
+Do not silently substitute a partial region, centered sample batch, wedge, or differently anchored run when the user asks for the vanilla campaign. If current code behavior differs from this contract, report the mismatch before trusting results.
 
 ## Implementation Rules
 
@@ -80,3 +92,12 @@ When borrowing from `legacy/`, say what was borrowed and which methodology oblig
 The Mac Mini has no CUDA compiler. CUDA build/run work happens on remote CUDA hosts such as vast.ai or Jetson, depending on task size. Any command over a few seconds on remote compute should run in `tmux`, and performance runs must be isolated.
 
 Do not destroy cloud instances, push branches, publish results, or mutate remote services unless explicitly asked.
+
+## Backlog
+
+Keep this list succinct and update it as work lands.
+
+1. Audit `cpp-campaign-v2` and `cuda-campaign-v2-sqrt-36` campaign-running semantics against the Vanilla Campaign Probe Contract above: tile width, `R_outer = R_inner + 8192`, full-octant region, and verdict meaning.
+2. Re-establish correctness gates for the current `main`: targeted parity, CTest, golden validation, snapshot SHA, and Tsuchimura known-answer checks on the appropriate CUDA host.
+3. Reintroduce streaming early-exit campaign execution from the legacy CUDA campaign: GPU emits TileOp batches, CPU compositor ingests as batches arrive, and the run exits as soon as the spanning verdict is determined.
+4. After correctness and streaming semantics are stable, profile bottlenecks under the experiment contract and only then optimize MR, face encoding, memory layout, or host overlap.
