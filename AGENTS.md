@@ -58,9 +58,9 @@ Use this order when judging campaign correctness:
 
 If these layers disagree, stop and resolve the stronger layer first. Do not refresh goldens to bless a failing stronger gate.
 
-## Vanilla Campaign Probe Contract
+## Default Shell-Probe Contract
 
-The current user-specified vanilla campaign probe is:
+The current default shell-probe convention is:
 
 1. Agree on tile construction width before the job; the preferred width is `256 * 32 = 8192`.
 2. Select `R_inner`.
@@ -128,7 +128,7 @@ Do not destroy cloud instances, push branches, publish results, or mutate remote
 
 Keep this list succinct and update it as work lands.
 
-1. Audit `cpp-campaign-v2` and `cuda-campaign-v2-sqrt-36` campaign-running semantics against the Vanilla Campaign Probe Contract above: tile width, `R_outer = R_inner + 8192`, full-octant region, and verdict meaning.
+1. Audit `cpp-campaign-v2` and `cuda-campaign-v2-sqrt-36` campaign-running semantics against the Default Shell-Probe Contract above: tile width, `R_outer = R_inner + 8192`, full-octant region, and verdict meaning.
 2. Re-establish correctness gates for the current `main`: Tsuchimura two-case known-answer checks, full-octant CPU/CUDA snapshot parity, targeted fault localization, CTest, and only then golden smoke validation on the appropriate CUDA host.
 3. Reintroduce streaming early-exit campaign execution from the legacy CUDA campaign: GPU emits TileOps in batches, CPU compositor ingests complete columns as soon as available, and the run exits as soon as a `SPANNING` witness is latched.
 4. After correctness and streaming semantics are stable, profile bottlenecks under the experiment contract and only then optimize MR, face encoding, memory layout, or host overlap.
