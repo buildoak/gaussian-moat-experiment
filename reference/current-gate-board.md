@@ -1,17 +1,19 @@
 # Current Gate Board
 
-Updated: 2026-05-02.
+Updated: 2026-05-02 after large-history cleanup.
 
 ## Baseline
 
-- Current local main: `3eda964 Record Vast 4090 verification results`.
-- Verified implementation commit: `51b0975 Fix dispatcher reuse test fixture size`.
-- Verification record: `tiles-maxxing/cuda-campaign-v2-sqrt-36/planning/2026-05-02-vast-4090-verification.md`.
+- Current local main: the commit containing this gate-board update.
+- Verified implementation commit after history rewrite: `bdb4b0a Fix dispatcher reuse test fixture size`.
+- Verification record after history rewrite: `952bd3e Record Vast 4090 verification results`.
+- Verification note: `tiles-maxxing/cuda-campaign-v2-sqrt-36/planning/2026-05-02-vast-4090-verification.md`.
 - Verified hardware: Vast contract `36017558`, RTX 4090, driver `580.126.09`, CUDA `12.4.131`.
 
-`3eda964` only records the verification result. The code verified on Vast was
-`51b0975`; later branches should treat the verification note as provenance, not
-as a code change.
+`952bd3e` only records the verification result. The code verified on Vast was
+`bdb4b0a`; later branches should treat the verification note as provenance, not
+as a code change. These hashes are post-filter-repo hashes; the backup bundle
+preserves the original pre-filter hashes.
 
 ## Required Gates
 

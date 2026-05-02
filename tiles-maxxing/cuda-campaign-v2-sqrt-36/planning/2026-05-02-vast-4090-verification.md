@@ -8,7 +8,7 @@ Instance:
 - Realized cost: `$0.3197777778/hr`
 
 Committed code verified:
-- `51b0975 Fix dispatcher reuse test fixture size`
+- `bdb4b0a Fix dispatcher reuse test fixture size`
 - Includes streaming CUDA verdict mode, optional snapshots, timing/profile output, streaming CPU compositor, dispatcher reuse safety, and verification scripts.
 
 Build gates:
@@ -40,4 +40,4 @@ Grid-only scratch benchmark:
 - `R_inner=1100000000`, `R_outer=1100015790`: `3,038,394` columns, `212,453,469` tiles, `19.947s`, `48.6MB` tower arrays.
 
 Local raw artifacts:
-- Ignored raw logs/profiles copied to `tiles-maxxing/cuda-campaign-v2-sqrt-36/artifacts/vast-36017558-2026-05-02/`.
+- Ignored raw logs/profiles were copied to `tiles-maxxing/cuda-campaign-v2-sqrt-36/artifacts/vast-36017558-2026-05-02/` before history cleanup. They remain in the pre-filter backup, not in pushable git history.

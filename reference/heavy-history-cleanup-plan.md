@@ -11,14 +11,14 @@ Top offenders observed on 2026-05-02:
 | Size | Path |
 |---:|---|
 | `2.09GB` | `tiles-maxxing/cuda-campaign-v2-sqrt-36/artifacts/instance-35425891-final/snapshots/20260422T224733Z/r80m-visible.snapshot.bin` |
-| `802MB` | `legacy/_archive/research-historical/results/moat-calibration-2026-03-23/w3-k32-R1500K-control-comp.json` |
-| `780MB` | `legacy/_archive/research-historical/results/moat-calibration-2026-03-23/w4-k32-R2823K-moat-comp.json` |
-| `662MB` | `legacy/_archive/research-historical/results/k36-ensemble-cal-2026-03-23/w2-k36-50M-control-wide.json` |
-| `652MB` | `legacy/_archive/research-historical/results/k36-ensemble-cal-2026-03-23/w4-k36-80.4M-moat-wide.json` |
-| `580MB` | `legacy/_archive/research-historical/results/moat-calibration-2026-03-23/w2-k26-R1016K-moat-comp.json` |
-| `287MB` | `legacy/_archive/research-historical/results/moat-calibration-2026-03-23/w1-k26-R500K-control-comp.json` |
-| `165MB` | `legacy/_archive/research-historical/results/k36-ensemble-cal-2026-03-23/w1-k36-50M-control-tight.json` |
-| `162MB` | `legacy/_archive/research-historical/results/k36-ensemble-cal-2026-03-23/w3-k36-80.4M-moat-tight.json` |
+| `802MB` | `_archive/research-historical/results/moat-calibration-2026-03-23/w3-k32-R1500K-control-comp.json` |
+| `780MB` | `_archive/research-historical/results/moat-calibration-2026-03-23/w4-k32-R2823K-moat-comp.json` |
+| `662MB` | `_archive/research-historical/results/k36-ensemble-cal-2026-03-23/w2-k36-50M-control-wide.json` |
+| `652MB` | `_archive/research-historical/results/k36-ensemble-cal-2026-03-23/w4-k36-80.4M-moat-wide.json` |
+| `580MB` | `_archive/research-historical/results/moat-calibration-2026-03-23/w2-k26-R1016K-moat-comp.json` |
+| `287MB` | `_archive/research-historical/results/moat-calibration-2026-03-23/w1-k26-R500K-control-comp.json` |
+| `165MB` | `_archive/research-historical/results/k36-ensemble-cal-2026-03-23/w1-k36-50M-control-tight.json` |
+| `162MB` | `_archive/research-historical/results/k36-ensemble-cal-2026-03-23/w3-k36-80.4M-moat-tight.json` |
 
 ## Minimal Safe Course
 
@@ -66,10 +66,13 @@ git filter-repo --version
 ```bash
 git filter-repo \
   --path tiles-maxxing/cuda-campaign-v2-sqrt-36/artifacts/ \
+  --path _archive/research-historical/results/ \
   --path legacy/_archive/research-historical/results/ \
+  --path target/ \
   --path legacy/target/ \
   --path legacy/tile-probe/target/ \
   --path tiles-maxxing/campaign-sqrt-36/tile-cpp/census_output/ \
+  --path tiles-maxxing/campaign-sqrt-40/tile-cpp/census_output/ \
   --path tiles-maxxing/tile-cpp/census_output/ \
   --invert-paths
 ```
