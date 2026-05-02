@@ -164,6 +164,21 @@ first_executable() {
   return 1
 }
 
+supports_flag() {
+  local bin="$1"
+  local flag="$2"
+  "$bin" --help 2>&1 | grep -Eq -- "(^|[[:space:]])${flag}([=[:space:]]|$)"
+}
+
+snapshot_flag_for() {
+  local bin="$1"
+  if supports_flag "$bin" "--snapshot-out"; then
+    printf '%s\n' "--snapshot-out"
+  else
+    printf '%s\n' "--out"
+  fi
+}
+
 if [[ -z "$cpu_bin" ]]; then
   cpu_bin="$(first_executable \
     "$repo_root/../cpp-campaign-v2/build-k${k_sq}/campaign_main" \
@@ -210,6 +225,7 @@ cxx="${CXX:-c++}"
 
 cpu_snapshot="$work_dir/cpu.snapshot.bin"
 cuda_snapshot="$work_dir/cuda.snapshot.bin"
+cuda_snapshot_flag="$(snapshot_flag_for "$cuda_bin")"
 
 echo "snapshot-sha-gate: mode=$mode K=$k_sq R_inner=$r_inner R_outer=$r_outer region=$region"
 echo "snapshot-sha-gate: work_dir=$work_dir"
@@ -229,7 +245,7 @@ echo "snapshot-sha-gate: generating CUDA snapshot"
   --r-inner="$r_inner" \
   --r-outer="$r_outer" \
   --region "$region" \
-  --out "$cuda_snapshot" \
+  "$cuda_snapshot_flag" "$cuda_snapshot" \
   --chunk-size="$chunk_size" \
   --threads "$threads"
 
@@ -253,8 +269,15 @@ echo "snapshot-sha-gate: CPU snapshot:  $cpu_snapshot" >&2
 echo "snapshot-sha-gate: CUDA snapshot: $cuda_snapshot" >&2
 
 if is_executable "$diff_bin"; then
-  echo "snapshot-sha-gate: running cuda_vs_cpu_diff --verbose for first divergence" >&2
-  "$diff_bin" --r-inner "$r_inner" --r-outer "$r_outer" --limit 16 --k5 --verbose || true
+  if "$diff_bin" --self-test-parse --sample 2 >/dev/null 2>&1; then
+    echo "snapshot-sha-gate: running sampled cuda_vs_cpu_diff --k5 --verbose for divergence" >&2
+    "$diff_bin" --r-inner "$r_inner" --r-outer "$r_outer" --sample 32 --k5 --verbose || true
+    echo "snapshot-sha-gate: running sampled cuda_vs_cpu_diff --m4 --verbose for divergence" >&2
+    "$diff_bin" --r-inner "$r_inner" --r-outer "$r_outer" --sample 32 --m4 --verbose || true
+  else
+    echo "snapshot-sha-gate: running legacy cuda_vs_cpu_diff --verbose for first divergence" >&2
+    "$diff_bin" --r-inner "$r_inner" --r-outer "$r_outer" --limit 16 --k5 --verbose || true
+  fi
 else
   echo "snapshot-sha-gate: cuda_vs_cpu_diff not found; skipping verbose divergence probe" >&2
 fi

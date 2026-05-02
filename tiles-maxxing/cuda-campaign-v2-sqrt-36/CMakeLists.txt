@@ -187,13 +187,33 @@ endforeach()
 
 add_test(NAME test_stub_roundtrip COMMAND test_stub_roundtrip)
 add_test(NAME cuda_vs_cpu_diff_one_tile COMMAND cuda_vs_cpu_diff --r-inner 100 --r-outer 500 --limit 1)
+add_test(NAME cuda_vs_cpu_diff_parse_options
+  COMMAND cuda_vs_cpu_diff
+    --self-test-parse
+    --r-inner 100
+    --r-outer 500
+    --start-index 3
+    --limit 2
+    --sample 4
+    --tile 0,0
+    --m4
+    --k5
+    --verbose)
 add_test(NAME campaign_main_cuda_small_octant
   COMMAND campaign_main_cuda
     --k-sq=${K_SQ}
     --r-inner 100
     --r-outer 500
     --region full-octant
-    --out /tmp/campaign_main_cuda_small_octant.bin
+    --timing
+    --chunk-size 64)
+add_test(NAME campaign_main_cuda_small_octant_snapshot
+  COMMAND campaign_main_cuda
+    --k-sq=${K_SQ}
+    --r-inner 100
+    --r-outer 500
+    --region full-octant
+    --snapshot-out /tmp/campaign_main_cuda_small_octant.bin
     --chunk-size 64)
 
 add_executable(test_k1_overflow_spanning

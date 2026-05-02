@@ -6,6 +6,8 @@
 #include <exception>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -26,10 +28,14 @@ namespace {
 struct Options {
   std::uint64_t r_inner = 100;
   std::uint64_t r_outer = 500;
+  std::size_t start_index = 0;
   std::size_t limit = 1;
+  std::optional<std::size_t> sample;
+  std::optional<std::pair<int, int>> tile;
   bool m4 = false;
   bool k5 = false;
   bool verbose = false;
+  bool self_test_parse = false;
   bool self_test_verbose_mismatch = false;
 };
 
@@ -43,7 +49,8 @@ struct M4ExpectedTile {
 
 void print_usage(const char* argv0) {
   std::cerr << "usage: " << argv0
-            << " [--r-inner N] [--r-outer N] [--limit N] [--m4] [--k5]"
+            << " [--r-inner N] [--r-outer N] [--start-index N]"
+            << " [--limit N] [--sample N] [--tile i,j] [--m4] [--k5]"
             << " [--verbose]\n";
 }
 
@@ -62,7 +69,41 @@ bool parse_u64(const char* text, std::uint64_t* out) {
 bool parse_size(const char* text, std::size_t* out) {
   std::uint64_t value = 0;
   if (!parse_u64(text, &value)) return false;
+  if (value > static_cast<std::uint64_t>(
+                  std::numeric_limits<std::size_t>::max())) {
+    return false;
+  }
   *out = static_cast<std::size_t>(value);
+  return true;
+}
+
+bool parse_int32(const char* text, int* out) {
+  try {
+    std::size_t consumed = 0;
+    const long long value = std::stoll(text, &consumed, 10);
+    if (text[consumed] != '\0') return false;
+    if (value < static_cast<long long>(std::numeric_limits<int>::min()) ||
+        value > static_cast<long long>(std::numeric_limits<int>::max())) {
+      return false;
+    }
+    *out = static_cast<int>(value);
+    return true;
+  } catch (const std::exception&) {
+    return false;
+  }
+}
+
+bool parse_tile_coord(const char* text, std::pair<int, int>* out) {
+  const char* comma = std::strchr(text, ',');
+  if (comma == nullptr || comma == text || comma[1] == '\0') return false;
+  const std::string lhs(text, comma - text);
+  const std::string rhs(comma + 1);
+  int i = 0;
+  int j = 0;
+  if (!parse_int32(lhs.c_str(), &i) || !parse_int32(rhs.c_str(), &j)) {
+    return false;
+  }
+  *out = {i, j};
   return true;
 }
 
@@ -85,6 +126,10 @@ bool parse_args(int argc, char** argv, Options* options) {
       options->verbose = true;
       continue;
     }
+    if (arg == "--self-test-parse") {
+      options->self_test_parse = true;
+      continue;
+    }
     if (arg == "--self-test-verbose-mismatch") {
       options->self_test_verbose_mismatch = true;
       continue;
@@ -94,13 +139,77 @@ bool parse_args(int argc, char** argv, Options* options) {
       if (!parse_u64(argv[++i], &options->r_inner)) return false;
     } else if (arg == "--r-outer") {
       if (!parse_u64(argv[++i], &options->r_outer)) return false;
+    } else if (arg == "--start-index") {
+      if (!parse_size(argv[++i], &options->start_index)) return false;
     } else if (arg == "--limit") {
       if (!parse_size(argv[++i], &options->limit)) return false;
+    } else if (arg == "--sample") {
+      std::size_t sample = 0;
+      if (!parse_size(argv[++i], &sample)) return false;
+      options->sample = sample;
+    } else if (arg == "--tile") {
+      std::pair<int, int> tile;
+      if (!parse_tile_coord(argv[++i], &tile)) return false;
+      options->tile = tile;
     } else {
       return false;
     }
   }
   return true;
+}
+
+std::vector<std::size_t> select_tile_indices(
+    const Options& options,
+    const std::vector<campaign::TileCoord>& coords) {
+  if (coords.empty()) return {};
+
+  if (options.tile.has_value()) {
+    const auto [needle_i, needle_j] = *options.tile;
+    for (std::size_t idx = 0; idx < coords.size(); ++idx) {
+      if (coords[idx].i == needle_i && coords[idx].j == needle_j) {
+        return {idx};
+      }
+    }
+    throw std::out_of_range("--tile coordinate is not active in this grid");
+  }
+
+  if (options.sample.has_value()) {
+    if (*options.sample == 0) {
+      throw std::invalid_argument("--sample must be greater than zero");
+    }
+    const std::size_t count = std::min(*options.sample, coords.size());
+    std::vector<std::size_t> selected;
+    selected.reserve(count);
+    if (count == 1) {
+      selected.push_back((coords.size() - 1) / 2);
+      return selected;
+    }
+    for (std::size_t rank = 0; rank < count; ++rank) {
+      const auto numerator =
+          static_cast<unsigned __int128>(rank) *
+              static_cast<unsigned __int128>(coords.size() - 1) +
+          static_cast<unsigned __int128>((count - 1) / 2);
+      const std::size_t idx =
+          static_cast<std::size_t>(numerator / (count - 1));
+      if (selected.empty() || selected.back() != idx) {
+        selected.push_back(idx);
+      }
+    }
+    return selected;
+  }
+
+  if (options.start_index >= coords.size()) {
+    throw std::out_of_range("--start-index is outside the active tile range");
+  }
+
+  const std::size_t available = coords.size() - options.start_index;
+  const std::size_t count = std::min(options.limit, available);
+  std::vector<std::size_t> selected;
+  selected.reserve(count);
+  for (std::size_t offset = 0; offset < count; ++offset) {
+    selected.push_back(options.start_index + offset);
+  }
+  return selected;
 }
 
 bool same_tileop_bytes(const campaign::TileOp& lhs,
@@ -359,6 +468,9 @@ int main(int argc, char** argv) {
   }
 
   try {
+    if (options.self_test_parse) {
+      return 0;
+    }
     if (options.self_test_verbose_mismatch) {
       return run_self_test_verbose_mismatch(options.verbose);
     }
@@ -376,25 +488,36 @@ int main(int argc, char** argv) {
       return 2;
     }
 
-    const std::size_t limit = std::min(options.limit, coords.size());
-    std::vector<campaign::TileCoord> batch(coords.begin(), coords.begin() + limit);
+    const std::vector<std::size_t> selected_indices =
+        select_tile_indices(options, coords);
+    std::vector<campaign::TileCoord> batch;
+    batch.reserve(selected_indices.size());
+    for (const std::size_t global_idx : selected_indices) {
+      batch.push_back(coords[global_idx]);
+    }
+
+    if (batch.empty()) {
+      std::cout << "cuda_vs_cpu_diff: 0 tile(s) selected\n";
+      return 0;
+    }
 
     if (options.k5) {
       const cuda_campaign::K1K5DebugDownload gpu =
           cuda_campaign::run_k1_to_k5_debug(batch, constants);
 
-      for (std::size_t tile_idx = 0; tile_idx < limit; ++tile_idx) {
-        const campaign::TileCoord& coord = coords[tile_idx];
+      for (std::size_t batch_idx = 0; batch_idx < batch.size(); ++batch_idx) {
+        const std::size_t global_idx = selected_indices[batch_idx];
+        const campaign::TileCoord& coord = batch[batch_idx];
         const campaign::TileOp cpu = build_k5_cpu_tileop_from_gpu_order(
-            coord, constants, gpu.k1k4, tile_idx);
-        const campaign::TileOp& cuda = gpu.tileops[tile_idx];
+            coord, constants, gpu.k1k4, batch_idx);
+        const campaign::TileOp& cuda = gpu.tileops[batch_idx];
         if (!same_tileop_bytes(cpu, cuda)) {
-          return print_tileop_diff(cpu, cuda, tile_idx, coord,
+          return print_tileop_diff(cpu, cuda, global_idx, coord,
                                    options.verbose);
         }
       }
 
-      std::cout << "cuda_vs_cpu_diff: " << limit
+      std::cout << "cuda_vs_cpu_diff: " << batch.size()
                 << " tile(s) matched K1-K5 full TileOp parity\n";
       return 0;
     }
@@ -402,15 +525,16 @@ int main(int argc, char** argv) {
     const cuda_campaign::K1K4DebugDownload gpu =
         cuda_campaign::run_k1_to_k4_debug(batch, constants);
 
-    for (std::size_t tile_idx = 0; tile_idx < limit; ++tile_idx) {
-      const campaign::TileCoord& coord = coords[tile_idx];
+    for (std::size_t batch_idx = 0; batch_idx < batch.size(); ++batch_idx) {
+      const std::size_t global_idx = selected_indices[batch_idx];
+      const campaign::TileCoord& coord = batch[batch_idx];
       const std::vector<campaign::Prime> primes =
           campaign::sieve_tile(coord, constants);
       const std::vector<std::int32_t> cpu_parent = cpu_parent_roots(primes);
 
-      const std::uint32_t gpu_count = gpu.prime_count[tile_idx];
+      const std::uint32_t gpu_count = gpu.prime_count[batch_idx];
       if (gpu_count != cpu_parent.size()) {
-        std::cerr << "diff at tile " << tile_idx << " (i=" << coord.i
+        std::cerr << "diff at tile " << global_idx << " (i=" << coord.i
                   << ", j=" << coord.j << "), prime count: cpu="
                   << cpu_parent.size() << " cuda=" << gpu_count << "\n";
         return 1;
@@ -418,39 +542,43 @@ int main(int argc, char** argv) {
 
       if (options.m4) {
         const std::vector<campaign::Prime> gpu_ordered_primes =
-            gpu_compact_primes(coord, gpu, tile_idx, gpu_count);
+            gpu_compact_primes(coord, gpu, batch_idx, gpu_count);
         const std::vector<std::int32_t> gpu_ordered_cpu_parent =
             cpu_parent_roots(gpu_ordered_primes);
         const M4ExpectedTile expected =
             build_m4_expected_tile(gpu_ordered_primes, gpu_ordered_cpu_parent,
                                    constants);
         const std::size_t prime_offset =
-            tile_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU);
-        const std::size_t group_offset = tile_idx * 256U;
+            batch_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU);
+        const std::size_t group_offset = batch_idx * 256U;
 
         if (print_array_diff("prime_geo_bits", expected.prime_geo_bits,
                              gpu.prime_geo_bits, prime_offset,
-                             expected.prime_geo_bits.size(), tile_idx, coord) != 0) {
+                             expected.prime_geo_bits.size(), global_idx,
+                             coord) != 0) {
           return 1;
         }
         if (print_array_diff("wire_label_by_raw_root",
                              expected.wire_label_by_raw_root,
                              gpu.wire_label_by_raw_root, prime_offset,
-                             expected.wire_label_by_raw_root.size(), tile_idx,
-                             coord) != 0) {
+                             expected.wire_label_by_raw_root.size(),
+                             global_idx, coord) != 0) {
           return 1;
         }
         if (print_scalar_diff("max_label", expected.max_label,
-                              gpu.max_label[tile_idx], tile_idx, coord) != 0) {
+                              gpu.max_label[batch_idx], global_idx,
+                              coord) != 0) {
           return 1;
         }
         if (print_scalar_diff("overflow", expected.overflow,
-                              gpu.overflow[tile_idx], tile_idx, coord) != 0) {
+                              gpu.overflow[batch_idx], global_idx,
+                              coord) != 0) {
           return 1;
         }
         if (print_array_diff("group_flags", expected.group_flags,
                              gpu.group_flags, group_offset,
-                             expected.group_flags.size(), tile_idx, coord) != 0) {
+                             expected.group_flags.size(), global_idx,
+                             coord) != 0) {
           return 1;
         }
         continue;
@@ -458,12 +586,12 @@ int main(int argc, char** argv) {
 
       for (std::size_t prime_idx = 0; prime_idx < cpu_parent.size(); ++prime_idx) {
         const std::size_t offset =
-            tile_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU) +
+            batch_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU) +
             prime_idx;
         const std::int32_t gpu_parent =
             static_cast<std::int32_t>(gpu.parent[offset]);
         if (cpu_parent[prime_idx] != gpu_parent) {
-          std::cerr << "diff at tile " << tile_idx << " (i=" << coord.i
+          std::cerr << "diff at tile " << global_idx << " (i=" << coord.i
                     << ", j=" << coord.j << "), prime " << prime_idx
                     << ": cpu_parent=" << cpu_parent[prime_idx]
                     << " cuda_parent=" << gpu_parent << "\n";
@@ -472,7 +600,7 @@ int main(int argc, char** argv) {
       }
     }
 
-    std::cout << "cuda_vs_cpu_diff: " << limit << " tile(s) matched "
+    std::cout << "cuda_vs_cpu_diff: " << batch.size() << " tile(s) matched "
               << (options.m4 ? "M4 debug parity" : "K1-K4 parent parity")
               << "\n";
     return 0;
