@@ -23,7 +23,7 @@ campaign::Grid make_grid(const std::vector<std::pair<int, int>>& columns) {
   grid.tower_offset.push_back(0);
 
   std::int64_t total = 0;
-  for (const auto [lo, hi] : columns) {
+  for (const auto& [lo, hi] : columns) {
     grid.j_low.push_back(lo);
     grid.j_high.push_back(hi);
     total += hi - lo + 1;

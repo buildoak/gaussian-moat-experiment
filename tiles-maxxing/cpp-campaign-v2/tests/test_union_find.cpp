@@ -100,7 +100,7 @@ TEST(UnionFind, RepeatedBuildsProduceIdenticalRoots) {
   std::vector<std::int32_t> expected;
   for (int run = 0; run < 4; ++run) {
     DSU dsu(20);
-    for (const auto [a, b] : unions) {
+    for (const auto& [a, b] : unions) {
       dsu.unite(a, b);
     }
 
