@@ -28,6 +28,8 @@
     interval-boundary checks
 12. Append column coordinates directly into CUDA batches instead of allocating a
     temporary vector per column
+13. Add K1 launch/register build knobs plus a compile-time guard that prevents
+    `K1_BLOCK_THREADS < ACTIVE_ROWS`
 
 ## Rejected Experiments
 
@@ -42,6 +44,7 @@ left out of the branch state:
 | UF shared parent scratch | CUDA CTest and diff probes passed, but smoke UF regressed to about `1.032s` | Reverted |
 | Face packed-unpack micro | CUDA CTest and diff probes passed, but face encode regressed on smoke | Reverted |
 | Direct column append with exact per-column `reserve` | Correctness passed, but forced repeated reallocations and stalled CPU-side before first GPU dispatch | Reworked without the per-column reserve |
+| K1 launch/register retuning | Smoke sweep tested `272/288/320` block sizes and `36/40/48` register caps; no variant beat the current `288`, maxrregcount `40` default on total time | Keep current default; retain knobs and guard |
 
 ## Commands
 
@@ -277,6 +280,9 @@ Direct column-append larger-radius sample evidence used run directory:
 Direct column-append Tsuchimura evidence used run directory:
 `/workspace/opt-wave1-direct-append-tsuchimura-full-20260503-030730`.
 
+K1 launch/register sweep evidence used run directory:
+`/workspace/opt-wave1-k1-launch-sweep-20260503-031539`.
+
 ## CUDA Stage Timing
 
 The profile schema now includes `cuda_stage_timings_seconds`. `--profile` no
@@ -314,6 +320,20 @@ After the direct column-append candidate, the app avoids allocating a temporary
 `std::vector<TileCoord>` for every column during CUDA batch assembly. The full
 SPANNING run is noise-flat at `147.894s`; the full MOAT run improves to
 `146.942s`.
+
+K1 launch/register sweep results:
+
+| K1 block | maxrregcount | Total seconds | K1 seconds | CUDA K1-K5 seconds |
+|---:|---:|---:|---:|---:|
+| 272 | 40 | 7.624 | 1.127 | 5.931 |
+| 288 | 40 | 7.593 | 1.128 | 5.900 |
+| 320 | 40 | 7.976 | 1.124 | 6.238 |
+| 288 | 36 | 8.466 | 1.126 | 5.901 |
+| 288 | 48 | 7.705 | 1.125 | 5.913 |
+
+Decision: no K1 launch/register default change. The sweep did expose a safety
+constraint, so `K1_BLOCK_THREADS` is now explicit and compile-time checked
+against `ACTIVE_ROWS`.
 
 Current bottleneck read: MR is still the largest CUDA kernel bucket, followed
 by K1 sieve, UF, then face encode. The overlapped full pipeline is now
@@ -385,7 +405,8 @@ parallelization, profile-only CUDA stage timing attribution, and the
 K1-presieved MR primality path, the MR 256-thread launch default, and one-pass
 face representative extraction, the UF 128-thread launch default, and the
 parallel grid tower build with interval-boundary I4 verification, and direct
-column append for CUDA batch assembly.
+column append for CUDA batch assembly. Keep K1 at `288` threads and
+`--maxrregcount=40`, with explicit build knobs for future sweeps.
 
 Next high-leverage targets:
 

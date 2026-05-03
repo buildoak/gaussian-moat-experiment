@@ -10,6 +10,8 @@ endif()
 
 set(MR_BLOCK_THREADS 256 CACHE STRING "CUDA threads per MR kernel block")
 set(MR_MAXRREGCOUNT "" CACHE STRING "Optional --maxrregcount value for kernel_mr.cu")
+set(K1_BLOCK_THREADS 288 CACHE STRING "CUDA threads per K1 sieve kernel block")
+set(K1_MAXRREGCOUNT 40 CACHE STRING "Optional --maxrregcount value for kernel_sieve.cu")
 set(FACE_ENCODE_BLOCK_THREADS 128 CACHE STRING "CUDA threads per face encode kernel block")
 set(UF_BLOCK_THREADS 128 CACHE STRING "CUDA threads per UF kernel block")
 
@@ -54,6 +56,7 @@ target_link_libraries(campaign_cuda
 target_compile_definitions(campaign_cuda
   PUBLIC
     K_SQ=${K_SQ}
+    K1_BLOCK_THREADS=${K1_BLOCK_THREADS}
     MR_BLOCK_THREADS=${MR_BLOCK_THREADS}
     FACE_ENCODE_BLOCK_THREADS=${FACE_ENCODE_BLOCK_THREADS}
     UF_BLOCK_THREADS=${UF_BLOCK_THREADS}
@@ -62,9 +65,11 @@ set_target_properties(campaign_cuda PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
   CUDA_RESOLVE_DEVICE_SYMBOLS ON
 )
-set_source_files_properties(src/kernel_sieve.cu PROPERTIES
-  COMPILE_FLAGS "--maxrregcount=40"
-)
+if(NOT "${K1_MAXRREGCOUNT}" STREQUAL "")
+  set_source_files_properties(src/kernel_sieve.cu PROPERTIES
+    COMPILE_FLAGS "--maxrregcount=${K1_MAXRREGCOUNT}"
+  )
+endif()
 if(NOT "${MR_MAXRREGCOUNT}" STREQUAL "")
   set_source_files_properties(src/kernel_mr.cu PROPERTIES
     COMPILE_FLAGS "--maxrregcount=${MR_MAXRREGCOUNT}"

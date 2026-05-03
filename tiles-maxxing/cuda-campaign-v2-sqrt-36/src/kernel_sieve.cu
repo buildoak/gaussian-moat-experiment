@@ -9,6 +9,9 @@
 
 namespace cuda_campaign {
 
+static_assert(K1_BLOCK_THREADS >= ACTIVE_ROWS,
+              "K1_BLOCK_THREADS must cover every active tile row");
+
 namespace {
 
 __device__ void sieve_row_k1(std::uint32_t ws[BITMAP_WORDS_PER_ROW],
@@ -210,7 +213,7 @@ void launch_kernel_sieve(const campaign::TileCoord* d_coords,
                          int num_tiles,
                          int candidate_capacity,
                          cudaStream_t stream) {
-  kernel_sieve<<<num_tiles, BLOCK_THREADS, 0, stream>>>(
+  kernel_sieve<<<num_tiles, K1_BLOCK_THREADS, 0, stream>>>(
       d_coords, d_cand_list, d_total_cands, d_raw_total_cands, d_k1_overflow, num_tiles,
       candidate_capacity);
 }
