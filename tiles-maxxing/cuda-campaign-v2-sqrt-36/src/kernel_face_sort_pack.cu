@@ -30,6 +30,14 @@ __device__ __forceinline__ void swap_rep(FaceRepresentative& lhs,
   rhs = tmp;
 }
 
+__device__ __forceinline__ int sort_bound_for_count(std::uint16_t count) {
+  int bound = 1;
+  while (bound < static_cast<int>(count)) {
+    bound <<= 1;
+  }
+  return bound;
+}
+
 __device__ __forceinline__ void zero_tileop(TileOp* out) {
   std::uint8_t* bytes = reinterpret_cast<std::uint8_t*>(out);
   for (int i = 0; i < TILEOP_SIZE; ++i) {
@@ -102,20 +110,21 @@ __global__ void kernel_face_sort_pack(
 
   if (warp < NUM_FACES) {
     const std::uint16_t count = counts[warp];
+    const int sort_bound = sort_bound_for_count(count);
     const FaceRepresentative* face_reps =
         d_face_reps + static_cast<std::size_t>(tile_idx) * NUM_FACES *
                           FACE_REP_STRIDE +
         static_cast<std::size_t>(warp) * FACE_REP_STRIDE;
 
-    for (int i = lane; i < SORT_CAPACITY; i += 32) {
+    for (int i = lane; i < sort_bound; i += 32) {
       sort_scratch[warp][i] =
           i < static_cast<int>(count) ? face_reps[i] : sentinel_rep();
     }
     __syncwarp();
 
-    for (int size = 2; size <= SORT_CAPACITY; size <<= 1) {
+    for (int size = 2; size <= sort_bound; size <<= 1) {
       for (int stride = size >> 1; stride > 0; stride >>= 1) {
-        for (int i = lane; i < SORT_CAPACITY; i += 32) {
+        for (int i = lane; i < sort_bound; i += 32) {
           const int partner = i ^ stride;
           if (partner > i) {
             FaceRepresentative& lhs = sort_scratch[warp][i];
