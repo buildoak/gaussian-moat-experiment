@@ -3,9 +3,9 @@
 ## Context
 
 - Branch: `opt/performance-wave-1`
-- Measured implementation commit: `c5151f2 Optimize streaming compositor group lookup`
-- Previous measured implementation commit: `62324c9 Optimize streaming compositor frontier remap`
-- Previous report commit: `59e2709 Record rejected compositor reserve patch`
+- Measured implementation commit: `19d7e42 Bound face sort work by representative count`
+- Previous measured implementation commit: `c5151f2 Optimize streaming compositor group lookup`
+- Previous report commit: `ca1c6dc Record dense compositor group table results`
 - Baseline commit: `8d88f62 Expand performance optimization menu`
 - Hardware: Vast.ai RTX 4090, 24564 MiB
 - Driver / compiler: NVIDIA driver `560.35.03`, CUDA compiler `12.4.131`
@@ -34,6 +34,8 @@
     dense `NodeId` remap vector
 15. Replace streaming compositor's global current-group hash map with a dense
     per-current-column group table
+16. Bound face sort/pack bitonic sort work by the actual per-face
+    representative count
 
 ## Rejected Experiments
 
@@ -51,6 +53,8 @@ left out of the branch state:
 | K1 launch/register retuning | Smoke sweep tested `272/288/320` block sizes and `36/40/48` register caps; no variant beat the current `288`, maxrregcount `40` default on total time | Keep current default; retain knobs and guard |
 | Streaming compositor no-coordinate-vector refactor | Local tests, CUDA CTest, and diff probes passed; large-radius sample improved slightly, but full MOAT regressed versus dense-remap baseline (`146.779s` vs `146.502s`) | Reverted |
 | Streaming compositor reserve-only patch | Local compositor tests passed, but large-radius sample regressed versus dense-remap baseline (`83.972s` vs `83.338s`) | Reverted |
+| K1 row-prefix candidate scatter | CUDA CTest and diff probes passed, but paired smoke left K1 flat at about `1.533s` and total inside noise | Reverted |
+| MR Montgomery base shortcuts | CUDA CTest and diff probes passed, but paired smoke left MR flat at about `3.33s` and total inside noise | Reverted |
 
 ## Commands
 
@@ -199,6 +203,7 @@ done
 | Direct column-append gate | PASS | `/workspace/opt-wave1-direct-append-tsuchimura-full-20260503-030730`, Tsuchimura verdicts correct, zero overflows |
 | Dense compositor remap gate | PASS | `/workspace/opt-wave1-compositor-dense-remap-tsuchimura-full-20260503-032726`, Tsuchimura verdicts correct, zero overflows |
 | Dense compositor group-table gate | PASS | `/workspace/opt-wave1-compositor-dense-groups-tsuchimura-full-20260503-035240` plus MOAT repeat `/workspace/opt-wave1-compositor-dense-groups-moat-repeat-20260503-035751`, Tsuchimura verdicts correct, zero overflows |
+| Face sort-bound gate | PASS | `/workspace/opt-wave1-face-sort-bound-tsuchimura-20260503-041606`, overlap full `/workspace/opt-wave1-face-sort-bound-overlap-full-20260503-042226`, and MOAT repeat `/workspace/opt-wave1-face-sort-bound-moat-repeat-20260503-042733`, Tsuchimura verdicts correct, zero overflows |
 
 ## Full-Run Timing
 
@@ -207,14 +212,14 @@ chunk `500000` and `--overlap-compositor`.
 
 | Case | Metric | Baseline | Candidate | Delta |
 |---|---|---:|---:|---:|
-| SPANNING full | total seconds | 342.003 | 145.638 | -57.4% |
-| SPANNING full | CUDA K1-K5 seconds | 180.726 | 141.570 | -21.7% |
-| SPANNING full | compositor seconds | 155.930 | 24.651 | -84.2% |
-| SPANNING full | pipeline tiles/s | 45,160 | 106,050 | +134.8% |
-| MOAT full | total seconds | 424.070 | 145.339 | -65.7% |
-| MOAT full | CUDA K1-K5 seconds | 176.305 | 141.277 | -19.9% |
-| MOAT full | compositor seconds | 242.593 | 24.366 | -90.0% |
-| MOAT full | pipeline tiles/s | 36,439 | 106,321 | +191.8% |
+| SPANNING full | total seconds | 342.003 | 144.508 | -57.7% |
+| SPANNING full | CUDA K1-K5 seconds | 180.726 | 140.582 | -22.2% |
+| SPANNING full | compositor seconds | 155.930 | 24.454 | -84.3% |
+| SPANNING full | pipeline tiles/s | 45,160 | 106,879 | +136.7% |
+| MOAT full | total seconds | 424.070 | 145.269 | -65.7% |
+| MOAT full | CUDA K1-K5 seconds | 176.305 | 141.416 | -19.8% |
+| MOAT full | compositor seconds | 242.593 | 25.503 | -89.5% |
+| MOAT full | pipeline tiles/s | 36,439 | 106,373 | +191.9% |
 
 The final total is lower than `cuda_k1_k5 + compositor` because
 `--overlap-compositor` runs one GPU batch ahead while the main thread ingests the
@@ -239,6 +244,7 @@ previous complete-column batch.
 | Direct column append, chunk 500k | 147.894 | 146.942 |
 | Dense compositor remap, chunk 500k | 147.171 | 146.502 |
 | Dense compositor group table, chunk 500k | 145.638 | 145.339 |
+| Face sort bound, chunk 500k | 144.508 | 145.269 |
 
 Repeat evidence used run directory:
 `/workspace/opt-wave1-overlap-repeat-20260503-004319`.
@@ -308,12 +314,33 @@ Dense compositor group-table Tsuchimura evidence used run directory:
 Dense compositor group-table MOAT repeat evidence used run directory:
 `/workspace/opt-wave1-compositor-dense-groups-moat-repeat-20260503-035751`.
 
+Face sort-bound smoke evidence used run directory:
+`/workspace/opt-wave1-face-sort-bound-smoke-20260503-041505`.
+
+Face sort-bound Tsuchimura gate evidence used run directory:
+`/workspace/opt-wave1-face-sort-bound-tsuchimura-20260503-041606`.
+
+Face sort-bound overlap full-run evidence used run directory:
+`/workspace/opt-wave1-face-sort-bound-overlap-full-20260503-042226`.
+
+Face sort-bound MOAT repeat evidence used run directory:
+`/workspace/opt-wave1-face-sort-bound-moat-repeat-20260503-042733`.
+
+Face sort-bound larger-radius sample evidence used run directory:
+`/workspace/opt-wave1-face-sort-bound-r1100m-sample-20260503-043042`.
+
 Rejected no-coordinate-vector compositor evidence used run directories:
 `/workspace/opt-wave1-compositor-no-coords2-r1100m-sample-20260503-033700`
 and `/workspace/opt-wave1-compositor-no-coords-tsuchimura-full-20260503-033947`.
 
 Rejected compositor reserve-only evidence used run directory:
 `/workspace/opt-wave1-compositor-reserve-r1100m-sample-20260503-034606`.
+
+Rejected K1 row-prefix scatter evidence used run directory:
+`/workspace/opt-wave1-k1-prefix-smoke-20260503-040817`.
+
+Rejected MR Montgomery shortcut evidence used run directory:
+`/workspace/opt-wave1-mr-mont-shortcut-smoke-20260503-041151`.
 
 ## CUDA Stage Timing
 
@@ -379,6 +406,12 @@ because current-column nodes are either compacted into the frontier after the
 column or discarded. Previous-column stitching still goes through frontier
 nodes. Full MOAT repeat compositor time drops to `24.366s`.
 
+After the face sort-bound candidate, `kernel_face_sort_pack` sorts only the
+next power-of-two bound for each face's actual representative count instead of
+always sorting `256` slots. The comparator and face write order are unchanged.
+Full MOAT repeat face sort/pack time is `0.177s`; the earlier dense-group full
+profiles were about `1.09s`.
+
 Current bottleneck read: MR is still the largest CUDA kernel bucket, followed
 by K1 sieve, UF, then face encode. The overlapped full pipeline is now bounded
 by roughly `141s` CUDA generation; compositor ingestion is mostly hidden behind
@@ -398,6 +431,7 @@ overflow pressure appears before attempting wider, expensive bands.
 | `R=1,100,000,000`, width `500` | Direct column append | 10,888,283 | 84.213 | 2.645 | 77.348 | 42.801 | 129,294 | 0 |
 | `R=1,100,000,000`, width `500` | Dense compositor remap | 10,888,283 | 83.338 | 2.569 | 76.878 | 35.225 | 130,652 | 0 |
 | `R=1,100,000,000`, width `500` | Dense compositor group table | 10,888,283 | 82.570 | 2.670 | 77.020 | 13.546 | 131,867 | 0 |
+| `R=1,100,000,000`, width `500` | Face sort bound | 10,888,283 | 81.629 | 2.343 | 76.413 | 13.873 | 133,387 | 0 |
 
 Stage breakdown:
 
@@ -407,15 +441,17 @@ Stage breakdown:
 | Parallel grid build | 0.028 | 15.471 | 33.346 | 0.295 | 8.953 | 6.001 | 0.757 | 0.003 | 0.165 |
 | Direct column append | 0.026 | 15.457 | 33.330 | 0.295 | 8.947 | 5.997 | 0.757 | 0.003 | 0.154 |
 | Dense compositor remap | 0.026 | 15.468 | 33.344 | 0.295 | 8.953 | 6.002 | 0.757 | 0.003 | 0.154 |
+| Face sort bound | 0.038 | 15.477 | 33.381 | 0.295 | 8.962 | 6.005 | 0.108 | 0.003 | 0.233 |
 
 Read: overflow remains clean at this radius and throughput is stable at about
-`132k` pipeline tiles/s after the dense compositor group table. The
+`133k` pipeline tiles/s after the face sort bound. The
 interval-only I4 change was correctness-preserving but not performance-material
 by itself; the large grid win comes from computing independent column towers in
 parallel before the deterministic prefix-sum pass. Direct column append adds a
 smaller host-loop win by eliminating per-column temporary vector allocation.
 Dense compositor remap cuts frontier compaction overhead, and the dense group
-table cuts the hot current-group lookup without changing TileOp math.
+table cuts the hot current-group lookup without changing TileOp math. Face sort
+bound cuts the final face sort/pack bucket without changing TileOp packing.
 
 ## Chunk Sweep
 
@@ -446,6 +482,9 @@ chunks; smaller chunks avoid extra produced tiles before early exit.
 - Current-group lookup: dense current-column group table preserves per-tile
   group identity inside a column; previous-column stitching still uses frontier
   nodes, not stale global group ids.
+- Face sort/pack: dynamic sort bound changes only the amount of bitonic sort
+  work. It keeps the same representative comparator, count checks, face order,
+  and `face_groups` packing.
 - Snapshot mode affected: overlap is rejected with snapshot mode; serial
   snapshot SHA smoke passed.
 - Byte layout affected: no TileOp layout changes.
@@ -460,17 +499,17 @@ K1-presieved MR primality path, the MR 256-thread launch default, and one-pass
 face representative extraction, the UF 128-thread launch default, and the
 parallel grid tower build with interval-boundary I4 verification, and direct
 column append for CUDA batch assembly, dense streaming-compositor frontier root
-remapping, and dense streaming-compositor current-group lookup. Keep K1 at
-`288` threads and `--maxrregcount=40`, with explicit build knobs for future
-sweeps.
+remapping, dense streaming-compositor current-group lookup, and dynamic
+face-sort bounds. Keep K1 at `288` threads and `--maxrregcount=40`, with
+explicit build knobs for future sweeps.
 
 Next high-leverage targets:
 
-1. Continue MR arithmetic work only if a concrete Montgomery shortcut is found;
-   launch/register tuning is exhausted for now.
+1. Continue MR arithmetic work only if a stronger concrete shortcut is found;
+   launch/register tuning and the first Montgomery shortcut were exhausted.
 2. Revisit dispatcher resource persistence only after isolating why one run
    improved CUDA time but worsened compositor time.
-3. Inspect K1 next; it now accounts for about `22.0s` on full MOAT and
-   `15.5s` on the `R=1.1B`, width `500` sample.
+3. Inspect K1 only if a non-prefix-scan idea appears; launch tuning and
+   row-prefix scatter were exhausted.
 4. Decide whether `--overlap-compositor` should become default after another
    verification repeat.
