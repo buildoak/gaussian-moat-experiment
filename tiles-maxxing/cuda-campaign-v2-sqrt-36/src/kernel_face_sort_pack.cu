@@ -160,4 +160,94 @@ void launch_kernel_face_sort_pack(const FaceSortPackBuffers& buffers,
       num_tiles);
 }
 
+namespace {
+
+inline constexpr int SUMMARY_THREADS = 256;
+inline constexpr int SUMMARY_COUNTERS = 4;
+
+__global__ void kernel_overflow_summary(
+    const std::uint32_t* __restrict__ d_k1_overflow,
+    const std::uint32_t* __restrict__ d_prime_count,
+    const std::uint8_t* __restrict__ d_remap_overflow,
+    const std::uint16_t* __restrict__ d_face_rep_counts,
+    unsigned long long* __restrict__ d_summary_counts,
+    int num_tiles) {
+  const int tid = static_cast<int>(threadIdx.x);
+  const int tile_idx =
+      static_cast<int>(blockIdx.x) * SUMMARY_THREADS + tid;
+
+  __shared__ unsigned int block_counts[SUMMARY_THREADS][SUMMARY_COUNTERS];
+
+  unsigned int k1_count = 0;
+  unsigned int k4_prime_count = 0;
+  unsigned int k4_group_count = 0;
+  unsigned int k5_port_count = 0;
+
+  if (tile_idx < num_tiles) {
+    const bool k1_cand_overflow = d_k1_overflow[tile_idx] != 0U;
+    const bool k4_prime_overflow =
+        d_prime_count[tile_idx] > static_cast<std::uint32_t>(MAX_PRIMES_GPU);
+    const bool k4_group_overflow =
+        d_remap_overflow[tile_idx] != 0 && !k1_cand_overflow &&
+        !k4_prime_overflow;
+
+    std::uint32_t port_sum = 0;
+    for (int face = 0; face < NUM_FACES; ++face) {
+      port_sum +=
+          d_face_rep_counts[static_cast<std::size_t>(tile_idx) *
+                                FACE_COUNT_STRIDE +
+                            static_cast<std::size_t>(face)];
+    }
+    const bool k5_port_overflow = port_sum > MAX_PORTS_PER_TILE;
+
+    k1_count = k1_cand_overflow ? 1U : 0U;
+    k4_prime_count = k4_prime_overflow ? 1U : 0U;
+    k4_group_count = k4_group_overflow ? 1U : 0U;
+    k5_port_count = k5_port_overflow ? 1U : 0U;
+  }
+
+  block_counts[tid][0] = k1_count;
+  block_counts[tid][1] = k4_prime_count;
+  block_counts[tid][2] = k4_group_count;
+  block_counts[tid][3] = k5_port_count;
+  __syncthreads();
+
+  for (int stride = SUMMARY_THREADS / 2; stride > 0; stride >>= 1) {
+    if (tid < stride) {
+      block_counts[tid][0] += block_counts[tid + stride][0];
+      block_counts[tid][1] += block_counts[tid + stride][1];
+      block_counts[tid][2] += block_counts[tid + stride][2];
+      block_counts[tid][3] += block_counts[tid + stride][3];
+    }
+    __syncthreads();
+  }
+
+  if (tid == 0) {
+    atomicAdd(d_summary_counts + 0,
+              static_cast<unsigned long long>(block_counts[0][0]));
+    atomicAdd(d_summary_counts + 1,
+              static_cast<unsigned long long>(block_counts[0][1]));
+    atomicAdd(d_summary_counts + 2,
+              static_cast<unsigned long long>(block_counts[0][2]));
+    atomicAdd(d_summary_counts + 3,
+              static_cast<unsigned long long>(block_counts[0][3]));
+  }
+}
+
+}  // namespace
+
+void launch_kernel_overflow_summary(
+    const std::uint32_t* d_k1_overflow,
+    const std::uint32_t* d_prime_count,
+    const std::uint8_t* d_remap_overflow,
+    const std::uint16_t* d_face_rep_counts,
+    unsigned long long* d_summary_counts,
+    int num_tiles,
+    cudaStream_t stream) {
+  const int blocks = (num_tiles + SUMMARY_THREADS - 1) / SUMMARY_THREADS;
+  kernel_overflow_summary<<<blocks, SUMMARY_THREADS, 0, stream>>>(
+      d_k1_overflow, d_prime_count, d_remap_overflow, d_face_rep_counts,
+      d_summary_counts, num_tiles);
+}
+
 }  // namespace cuda_campaign

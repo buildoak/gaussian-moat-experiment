@@ -20,7 +20,19 @@
 #include "cuda_campaign/uf_buffers.cuh"
 
 namespace cuda_campaign {
+
+void launch_kernel_overflow_summary(
+    const std::uint32_t* d_k1_overflow,
+    const std::uint32_t* d_prime_count,
+    const std::uint8_t* d_remap_overflow,
+    const std::uint16_t* d_face_rep_counts,
+    unsigned long long* d_summary_counts,
+    int num_tiles,
+    cudaStream_t stream = nullptr);
+
 namespace {
+
+inline constexpr int OVERFLOW_SUMMARY_COUNTERS = 4;
 
 void check_cuda(cudaError_t status, const char* what) {
   if (status != cudaSuccess) {
@@ -254,6 +266,8 @@ std::size_t pooled_device_bytes_for_tiles(std::size_t tiles, int ring_slots) {
   add(face_slots, sizeof(std::uint16_t), "pooled d_face_roots");
   add(face_slots, sizeof(FaceRepresentative), "pooled d_face_reps");
   add(face_count_slots, sizeof(std::uint16_t), "pooled d_face_rep_counts");
+  add(OVERFLOW_SUMMARY_COUNTERS, sizeof(unsigned long long),
+      "pooled d_overflow_summary");
   add(tiles * static_cast<std::size_t>(ring_slots), sizeof(TileOp),
       "pooled d_tileops");
   return total;
@@ -405,7 +419,8 @@ struct DeviceWorkspace {
         d_face_counts(capacity * NUM_FACES),
         d_face_roots(capacity * NUM_FACES * MAX_PRIMES_GPU),
         d_face_reps(capacity * NUM_FACES * MAX_PRIMES_GPU),
-        d_face_rep_counts(capacity * NUM_FACES) {}
+        d_face_rep_counts(capacity * NUM_FACES),
+        d_overflow_summary(OVERFLOW_SUMMARY_COUNTERS) {}
 
   std::size_t capacity_tiles = 0;
   DeviceBuffer<campaign::TileCoord> d_coords;
@@ -428,6 +443,7 @@ struct DeviceWorkspace {
   DeviceBuffer<std::uint16_t> d_face_roots;
   DeviceBuffer<FaceRepresentative> d_face_reps;
   DeviceBuffer<std::uint16_t> d_face_rep_counts;
+  DeviceBuffer<unsigned long long> d_overflow_summary;
 };
 
 void fill_k1k4_buffers(K1K4Buffers* buffers,
@@ -1007,8 +1023,18 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
     bool group_dump_written = false;
     const bool collect_overflow_diagnostics =
         config_.overflow_diagnostics || group_dump_path != nullptr;
+    const bool collect_overflow_summary =
+        stats != nullptr && !collect_overflow_diagnostics;
     const std::size_t max_overflow_diagnostics =
         collect_overflow_diagnostics ? config_.max_overflow_diagnostics : 0;
+
+    if (collect_overflow_summary) {
+      check_cuda(cudaMemsetAsync(workspace.d_overflow_summary.get(), 0,
+                                 OVERFLOW_SUMMARY_COUNTERS *
+                                     sizeof(unsigned long long),
+                                 streams.compute.get()),
+                 "cudaMemsetAsync(overflow_summary)");
+    }
 
     int device = 0;
     cudaDeviceProp prop{};
@@ -1141,10 +1167,19 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
                                      streams.compute.get());
         check_last_launch("dispatch launch_kernel_face_sort_pack");
 
+        if (collect_overflow_summary) {
+          launch_kernel_overflow_summary(
+              workspace.d_k1_overflow.get(), workspace.d_prime_count.get(),
+              workspace.d_overflow.get(), workspace.d_face_rep_counts.get(),
+              workspace.d_overflow_summary.get(), num_tiles,
+              streams.compute.get());
+          check_last_launch("dispatch launch_kernel_overflow_summary");
+        }
+
         check_cuda(cudaEventRecord(slot.compute_done.get(),
                                    streams.compute.get()),
                    "cudaEventRecord(compute_done)");
-        if (stats != nullptr) {
+        if (stats != nullptr && collect_overflow_diagnostics) {
           check_cuda(cudaEventSynchronize(slot.compute_done.get()),
                      "cudaEventSynchronize(compute_done)");
 
@@ -1285,6 +1320,19 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
                "cudaStreamSynchronize(compute)");
     check_cuda(cudaStreamSynchronize(streams.d2h.get()),
                "cudaStreamSynchronize(d2h)");
+
+    if (collect_overflow_summary) {
+      unsigned long long h_overflow_summary[OVERFLOW_SUMMARY_COUNTERS] = {};
+      check_cuda(cudaMemcpy(h_overflow_summary,
+                            workspace.d_overflow_summary.get(),
+                            sizeof(h_overflow_summary),
+                            cudaMemcpyDeviceToHost),
+                 "cudaMemcpy(overflow_summary)");
+      local_stats.k1_cand_overflow_count = h_overflow_summary[0];
+      local_stats.k4_prime_overflow_count = h_overflow_summary[1];
+      local_stats.k4_group_overflow_count = h_overflow_summary[2];
+      local_stats.k5_port_overflow_count = h_overflow_summary[3];
+    }
 
     if (stats != nullptr) {
       *stats = local_stats;
