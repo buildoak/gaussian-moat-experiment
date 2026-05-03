@@ -70,28 +70,40 @@ Expected:
 | `R_inner=80000000`, `R_outer=80015782` | `--no-early-exit` | `SPANNING` | zero required |
 | `R_inner=80000000`, `R_outer=80015790` | `--no-early-exit` | `MOAT` | zero required |
 
-6. Tsuchimura K34 upper-bound cross-K gate:
+## Rejected K34 Candidate Gate
+
+Tsuchimura reports `sqrt(34)` finite with farthest distance `< 24,289,452`.
+That is an upper bound on the origin-connected component, not a directly
+specified annular boundary for this compositor.
+
+The naive shell probe was tested and rejected as a gate:
 
 ```bash
-cd /workspace/gaussian-moat-cuda/tiles-maxxing/cuda-campaign-v2-sqrt-36
+cd /workspace/gaussian-moat-cuda-timing/tiles-maxxing/cuda-campaign-v2-sqrt-36
 cmake -S . -B build-k34 -DK_SQ=34 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=89
 cmake --build build-k34 -j"$(nproc)"
-scripts/run_tsuchimura_k34_gate.sh \
-  --cuda-bin ./build-k34/campaign_main_cuda \
-  --chunk-size 200000 \
+./build-k34/campaign_main_cuda \
+  --k-sq=34 \
+  --r-inner=24289452 \
+  --r-outer=24297644 \
+  --region full-octant \
+  --chunk-size=200000 \
+  --no-early-exit \
   --timing \
-  --profile-dir /workspace/profiles-k34
+  --profile /workspace/profiles-k34-20260503-165257/R24289452_moat.profile.json
 ```
 
-Expected:
+Observed at commit `9e69542` on the Vast RTX 4090:
 
-| Case | Mode | Verdict | Overflow counters |
-|---|---|---|---|
-| `K_SQ=34`, `R_inner=24289452`, `R_outer=24297644` | `--no-early-exit` | `MOAT` | zero required |
+| Case | Tiles | Total | CUDA K1-K5 | Compositor | Verdict | Overflow counters |
+|---|---:|---:|---:|---:|---|---|
+| `K_SQ=34`, `R_inner=24289452`, `R_outer=24297644` | `2,479,915` | `27.2406s` | `22.1916s` | `4.10526s` | `SPANNING` | all zero |
 
-This is weaker than the K36 two-case boundary because Tsuchimura reports
-`sqrt(34)` finite with farthest distance `< 24,289,452`, not a nearby exact
-SPANNING/MOAT bracket. Its value is cross-K coverage and overflow pressure.
+This does not contradict Tsuchimura: his K34 result bounds the component of the
+origin, while the shell compositor asks whether any prime component spans the
+chosen annulus. K34 can become a strong gate only if we implement direct
+origin-component verification or obtain an exact externally justified annular
+boundary.
 
 ## Baseline Performance
 

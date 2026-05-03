@@ -61,31 +61,28 @@ Tsuchimura's published `k^2=36` boundary remains the known-answer gate:
 
 This gate is evidence that an implementation is on the right track. It does not make the implementation the source of truth. A passing known-answer gate plus methodology alignment is the minimum trust package.
 
-## Secondary Gate - Tsuchimura k^2=34
+## Rejected Candidate Gate - Tsuchimura k^2=34
 
 Tsuchimura also reports `sqrt(34)` finite with farthest distance
-`< 24,289,452` in METR 2004-13. This is an upper-bound result, not the exact
-two-sided boundary we have for K36. Use it as a secondary cross-K regression
-gate:
+`< 24,289,452` in METR 2004-13. This is an upper-bound result for the connected
+component of the origin, not an exact annular SPANNING/MOAT boundary like the
+K36 gate.
 
-| K_SQ | R_inner | R_outer | Expected verdict | Semantics |
-|------|---------|---------|------------------|-----------|
-| `34` | `24,289,452` | `24,297,644` | `MOAT` | Full annulus outside Tsuchimura's reported upper bound |
-
-The executable gate is `tiles-maxxing/cuda-campaign-v2-sqrt-36/scripts/run_tsuchimura_k34_gate.sh`.
-It requires zero overflow counters. If K34 overflows appear, stop treating this
-as a cheap gate and revisit capacity/math engineering before accepting it.
+The naive full-octant shell probe
+`K_SQ=34, R_inner=24,289,452, R_outer=24,297,644` was tested on the 4090 at
+commit `9e69542` and returned `SPANNING` with zero overflow counters. Therefore
+it is not a valid external truth gate. To make K34 into a strong gate, use an
+algorithm that verifies Tsuchimura's origin-component upper bound directly, or
+find and externally justify an exact annular boundary.
 
 ## Verification Stack
 
 Use this order when judging campaign correctness:
 
 1. **External truth:** Tsuchimura's two-case K36 known-answer gate above.
-2. **Cross-K truth:** Tsuchimura's K34 upper-bound MOAT gate, when K34 support
-   is in scope for the branch.
-3. **Implementation equivalence:** CPU/CUDA snapshot parity for the same full-octant inputs, because verdict equality alone can hide wrong TileOps.
-4. **Fault localization:** `cuda_vs_cpu_diff --m4 --verbose` and `cuda_vs_cpu_diff --k5 --verbose` to find the first divergent internal surface, tile, or byte.
-5. **Regression tripwires:** CUDA golden JSON batches are cheap smoke checks. They are not mathematical proof, and because they are generated from CUDA debug output they must not outrank CPU parity, Tsuchimura, or the methodology.
+2. **Implementation equivalence:** CPU/CUDA snapshot parity for the same full-octant inputs, because verdict equality alone can hide wrong TileOps.
+3. **Fault localization:** `cuda_vs_cpu_diff --m4 --verbose` and `cuda_vs_cpu_diff --k5 --verbose` to find the first divergent internal surface, tile, or byte.
+4. **Regression tripwires:** CUDA golden JSON batches are cheap smoke checks. They are not mathematical proof, and because they are generated from CUDA debug output they must not outrank CPU parity, Tsuchimura, or the methodology.
 
 If these layers disagree, stop and resolve the stronger layer first. Do not refresh goldens to bless a failing stronger gate.
 
