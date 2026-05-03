@@ -3,7 +3,7 @@
 ## Context
 
 - Branch: `opt/performance-wave-1`
-- Candidate commit: `2d26cce Tune MR kernel block size`
+- Candidate commit: `7c52472 Optimize face representative extraction`
 - Baseline commit: `8d88f62 Expand performance optimization menu`
 - Hardware: Vast.ai RTX 4090, 24564 MiB
 - Driver / compiler: NVIDIA driver `560.35.03`, CUDA compiler `12.4.131`
@@ -20,6 +20,7 @@
 6. `0277e8c Add CUDA stage timing profiles`
 7. `f7edf6d Skip redundant MR trial division`
 8. `2d26cce Tune MR kernel block size`
+9. `7c52472 Optimize face representative extraction`
 
 The dispatcher resource-persistence experiment was tested but not accepted:
 CUDA generation improved, but compositor timing regressed in the same run. It is
@@ -107,6 +108,21 @@ MR block-size candidate:
   --profile /workspace/opt-wave1-mr-block256-full-20260503-014542/profiles/R80015790_moat.profile.json
 ```
 
+Face representative candidate:
+
+```bash
+./build-k36/campaign_main_cuda \
+  --k-sq=36 \
+  --r-inner=80000000 \
+  --r-outer=80015790 \
+  --region full-octant \
+  --chunk-size=500000 \
+  --overlap-compositor \
+  --no-early-exit \
+  --timing \
+  --profile /workspace/opt-wave1-face-reps-full-20260503-020208/profiles/R80015790_moat.profile.json
+```
+
 Chunk sweep after compositor optimization:
 
 ```bash
@@ -136,23 +152,24 @@ done
 | Stage profile gate | PASS | `/workspace/opt-wave1-stage-timing-full-20260503-012121`, all CUDA stage timing fields present |
 | MR prefilter gate | PASS | `/workspace/opt-wave1-mr-prefilter-full-20260503-013224`, Tsuchimura verdicts correct, zero overflows |
 | MR block-size gate | PASS | `/workspace/opt-wave1-mr-block256-full-20260503-014542`, Tsuchimura verdicts correct, zero overflows |
+| Face reps gate | PASS | `/workspace/opt-wave1-face-reps-full-20260503-020208`, Tsuchimura verdicts correct, zero overflows |
 
 ## Full-Run Timing
 
-Baseline was commit `8d88f62` with chunk `200000`. The final MR block-size
-candidate was commit `2d26cce` with chunk `500000` and
+Baseline was commit `8d88f62` with chunk `200000`. The final face-reps
+candidate was commit `7c52472` with chunk `500000` and
 `--overlap-compositor`.
 
 | Case | Metric | Baseline | Candidate | Delta |
 |---|---|---:|---:|---:|
-| SPANNING full | total seconds | 342.003 | 162.244 | -52.6% |
-| SPANNING full | CUDA K1-K5 seconds | 180.726 | 154.798 | -14.3% |
-| SPANNING full | compositor seconds | 155.930 | 90.128 | -42.2% |
-| SPANNING full | pipeline tiles/s | 45,160 | 95,195 | +110.8% |
-| MOAT full | total seconds | 424.070 | 163.427 | -61.5% |
-| MOAT full | CUDA K1-K5 seconds | 176.305 | 155.957 | -11.5% |
-| MOAT full | compositor seconds | 242.593 | 90.436 | -62.7% |
-| MOAT full | pipeline tiles/s | 36,439 | 94,553 | +159.5% |
+| SPANNING full | total seconds | 342.003 | 150.468 | -56.0% |
+| SPANNING full | CUDA K1-K5 seconds | 180.726 | 143.058 | -20.8% |
+| SPANNING full | compositor seconds | 155.930 | 89.790 | -42.4% |
+| SPANNING full | pipeline tiles/s | 45,160 | 102,646 | +127.3% |
+| MOAT full | total seconds | 424.070 | 150.357 | -64.5% |
+| MOAT full | CUDA K1-K5 seconds | 176.305 | 142.890 | -19.0% |
+| MOAT full | compositor seconds | 242.593 | 90.088 | -62.9% |
+| MOAT full | pipeline tiles/s | 36,439 | 102,773 | +182.0% |
 
 The final total is lower than `cuda_k1_k5 + compositor` because
 `--overlap-compositor` runs one GPU batch ahead while the main thread ingests the
@@ -171,6 +188,7 @@ previous complete-column batch.
 | Stage-timed profile, chunk 500k | 167.388 | 166.564 |
 | MR prefilter, chunk 500k | 162.566 | 163.833 |
 | MR block 256, chunk 500k | 162.244 | 163.427 |
+| Face reps one-pass, chunk 500k | 150.468 | 150.357 |
 
 Repeat evidence used run directory:
 `/workspace/opt-wave1-overlap-repeat-20260503-004319`.
@@ -189,6 +207,12 @@ MR block-size sweep evidence used run directory:
 
 MR block-size gate evidence used run directory:
 `/workspace/opt-wave1-mr-block256-full-20260503-014542`.
+
+Face block-size sweep evidence used run directory:
+`/workspace/opt-wave1-face-block-sweep-20260503-015740`.
+
+Face representative extraction evidence used run directory:
+`/workspace/opt-wave1-face-reps-full-20260503-020208`.
 
 ## CUDA Stage Timing
 
@@ -212,10 +236,14 @@ MR at `56.764s` on SPANNING full and `56.918s` on MOAT full. The sweep also
 tested 256/288/320 blocks and 44/48 register caps; uncapped 256 was the
 cleanest candidate.
 
+After `7c52472`, face encode uses a `128` thread launch and a one-pass
+best-representative extraction. Face encode drops to `17.845s` on SPANNING full
+and `17.906s` on MOAT full.
+
 Current bottleneck read: MR is still the largest CUDA kernel bucket, followed
-by face encode, then UF and K1 sieve. The overlapped full pipeline is now
-bounded by roughly `155-156s` CUDA generation and `90s` compositor ingestion,
-with the compositor mostly hidden behind the CUDA batch stream.
+by UF and K1 sieve, then face encode. The overlapped full pipeline is now
+bounded by roughly `143s` CUDA generation and `90s` compositor ingestion, with
+the compositor mostly hidden behind the CUDA batch stream.
 
 ## Chunk Sweep
 
@@ -247,7 +275,8 @@ chunks; smaller chunks avoid extra produced tiles before early exit.
 Accept the compositor cursor lookup, device-side overflow summary, explicit
 `--overlap-compositor` app-level pipeline, face representative
 parallelization, profile-only CUDA stage timing attribution, and the
-K1-presieved MR primality path, and the MR 256-thread launch default.
+K1-presieved MR primality path, the MR 256-thread launch default, and one-pass
+face representative extraction.
 
 Next high-leverage targets:
 
@@ -255,7 +284,7 @@ Next high-leverage targets:
    launch/register tuning is exhausted for now.
 2. Revisit dispatcher resource persistence only after isolating why one run
    improved CUDA time but worsened compositor time.
-3. CUDA face extraction / encoding follow-ups: reduce packed-position divides
-   and make sort/pack count-aware, gated by K5 byte parity.
+3. Inspect UF and K1 next; they now account for about `25.5s` and `22.0s`
+   respectively on full MOAT.
 4. Decide whether `--overlap-compositor` should become default after another
    verification repeat.
