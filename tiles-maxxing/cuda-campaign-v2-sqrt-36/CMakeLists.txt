@@ -10,6 +10,8 @@ endif()
 
 project(cuda_campaign_v2_sqrt36 LANGUAGES CXX CUDA)
 
+find_package(Threads REQUIRED)
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -97,6 +99,7 @@ target_include_directories(campaign_main_cuda
 target_link_libraries(campaign_main_cuda
   PRIVATE
     campaign_cuda
+    Threads::Threads
 )
 target_compile_definitions(campaign_main_cuda
   PRIVATE

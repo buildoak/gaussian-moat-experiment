@@ -15,6 +15,7 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -60,6 +61,14 @@ struct ColumnBatch {
   }
 };
 
+struct BatchDispatchResult {
+  std::vector<ColumnBatch::Column> columns;
+  std::vector<campaign::TileOp> tileops;
+  cuda_campaign::DispatchStats dispatch;
+  Duration cuda = Duration::zero();
+  std::uint64_t produced_tiles = 0;
+};
+
 struct RunStats {
   std::uint64_t produced_tiles = 0;
   std::uint64_t ingested_tiles = 0;
@@ -92,6 +101,8 @@ void print_help(const char* prog) {
       << "  --snapshot-out <path>  Optional output snapshot.bin path\n"
       << "  --out <path>           Alias for --snapshot-out\n"
       << "  --chunk-size=N         Max app-level tiles per column-complete batch\n"
+      << "  --overlap-compositor   Overlap CUDA dispatch with CPU compositor "
+         "ingestion\n"
       << "  --no-early-exit        Ingest all columns even after SPANNING is found\n"
       << "  --timing               Print timing and chunk accounting\n"
       << "  --profile <path>       Write JSON profile; implies --timing\n"
@@ -481,6 +492,128 @@ bool flush_batch(ColumnBatch& batch,
   return false;
 }
 
+BatchDispatchResult dispatch_batch(
+    ColumnBatch batch,
+    cuda_campaign::TileBatchDispatcher& dispatcher) {
+  BatchDispatchResult result;
+  result.produced_tiles = static_cast<std::uint64_t>(batch.tiles.size());
+  result.columns = std::move(batch.columns);
+  result.tileops.resize(batch.tiles.size());
+
+  auto cuda_start = Clock::now();
+  dispatcher.dispatch(batch.tiles.data(), batch.tiles.size(),
+                      result.tileops.data(), &result.dispatch);
+  result.cuda = Clock::now() - cuda_start;
+
+  return result;
+}
+
+std::future<BatchDispatchResult> launch_dispatch(
+    ColumnBatch& batch,
+    cuda_campaign::TileBatchDispatcher& dispatcher) {
+  ColumnBatch dispatch_batch_input;
+  dispatch_batch_input.tiles = std::move(batch.tiles);
+  dispatch_batch_input.columns = std::move(batch.columns);
+  batch.clear();
+
+  return std::async(std::launch::async,
+                    [&dispatcher,
+                     batch_input = std::move(dispatch_batch_input)]() mutable {
+                      return dispatch_batch(std::move(batch_input), dispatcher);
+                    });
+}
+
+bool ingest_dispatch_result(BatchDispatchResult result,
+                            campaign::StreamingCompositor& compositor,
+                            Timings& timings,
+                            RunStats& stats,
+                            bool early_exit_enabled) {
+  timings.cuda += result.cuda;
+  stats.produced_tiles += result.produced_tiles;
+  stats.app_batches += 1;
+  accumulate_dispatch_stats(stats.dispatch, result.dispatch);
+
+  std::size_t offset = 0;
+  for (const ColumnBatch::Column& column : result.columns) {
+    const std::span<const campaign::TileOp> column_tileops(
+        result.tileops.data() + static_cast<std::ptrdiff_t>(offset),
+        column.tile_count);
+
+    auto comp_start = Clock::now();
+    compositor.ingest_column(column.i, column_tileops);
+    timings.compositor += Clock::now() - comp_start;
+    stats.ingested_tiles += static_cast<std::uint64_t>(column.tile_count);
+    stats.ingested_columns += 1;
+
+    offset += column.tile_count;
+
+    if (early_exit_enabled && compositor.has_spanning()) {
+      stats.early_exit_taken = true;
+      return true;
+    }
+  }
+
+  return false;
+}
+
+BatchDispatchResult take_in_flight_result(
+    std::optional<std::future<BatchDispatchResult>>& in_flight) {
+  std::future<BatchDispatchResult> ready = std::move(*in_flight);
+  in_flight.reset();
+  return ready.get();
+}
+
+void discard_in_flight_result(
+    std::optional<std::future<BatchDispatchResult>>& in_flight) {
+  if (!in_flight.has_value()) {
+    return;
+  }
+  (void)take_in_flight_result(in_flight);
+}
+
+bool submit_batch_and_ingest_ready(
+    ColumnBatch& batch,
+    std::optional<std::future<BatchDispatchResult>>& in_flight,
+    cuda_campaign::TileBatchDispatcher& dispatcher,
+    campaign::StreamingCompositor& compositor,
+    Timings& timings,
+    RunStats& stats,
+    bool early_exit_enabled) {
+  if (batch.tiles.empty()) {
+    batch.clear();
+    return false;
+  }
+
+  if (!in_flight.has_value()) {
+    in_flight = launch_dispatch(batch, dispatcher);
+    return false;
+  }
+
+  BatchDispatchResult ready = take_in_flight_result(in_flight);
+  in_flight = launch_dispatch(batch, dispatcher);
+  if (ingest_dispatch_result(std::move(ready), compositor, timings, stats,
+                             early_exit_enabled)) {
+    discard_in_flight_result(in_flight);
+    return true;
+  }
+  return false;
+}
+
+bool drain_in_flight_and_ingest(
+    std::optional<std::future<BatchDispatchResult>>& in_flight,
+    campaign::StreamingCompositor& compositor,
+    Timings& timings,
+    RunStats& stats,
+    bool early_exit_enabled) {
+  if (!in_flight.has_value()) {
+    return false;
+  }
+
+  BatchDispatchResult ready = take_in_flight_result(in_flight);
+  return ingest_dispatch_result(std::move(ready), compositor, timings, stats,
+                                early_exit_enabled);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -501,6 +634,7 @@ int main(int argc, char** argv) {
   std::optional<std::string> profile_path;
   std::size_t chunk_size = kDefaultChunkSize;
   bool no_early_exit = false;
+  bool overlap_compositor = false;
   bool timing = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -564,6 +698,8 @@ int main(int argc, char** argv) {
       chunk_size = static_cast<std::size_t>(v);
     } else if (a == "--no-early-exit") {
       no_early_exit = true;
+    } else if (a == "--overlap-compositor") {
+      overlap_compositor = true;
     } else if (a == "--timing") {
       timing = true;
     } else if (take_val("--profile", val)) {
@@ -613,6 +749,12 @@ int main(int argc, char** argv) {
   }
   const std::optional<std::string> snapshot_path =
       snapshot_out_path.has_value() ? snapshot_out_path : out_alias_path;
+
+  if (overlap_compositor && snapshot_path.has_value()) {
+    std::cerr << "Error: --overlap-compositor cannot be used with "
+              << "--snapshot-out/--out; snapshot mode is serial\n";
+    return 2;
+  }
 
   if (static_cast<std::uint32_t>(*k_sq) !=
       static_cast<std::uint32_t>(campaign::k_sq_value)) {
@@ -710,43 +852,113 @@ int main(int argc, char** argv) {
     }
 
     ColumnBatch batch;
-    for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
-      std::vector<campaign::TileCoord> column_tiles =
-          grid.enumerate_column_tiles(i);
-      if (column_tiles.empty()) {
+    if (overlap_compositor) {
+      std::optional<std::future<BatchDispatchResult>> in_flight;
+      try {
+        for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+          std::vector<campaign::TileCoord> column_tiles =
+              grid.enumerate_column_tiles(i);
+          if (column_tiles.empty()) {
+            if (submit_batch_and_ingest_ready(batch, in_flight, dispatcher,
+                                              compositor, timings, run_stats,
+                                              early_exit_enabled)) {
+              break;
+            }
+            if (drain_in_flight_and_ingest(in_flight, compositor, timings,
+                                           run_stats, early_exit_enabled)) {
+              break;
+            }
+            if (ingest_empty_column(i, compositor, nullptr, timings, run_stats,
+                                    early_exit_enabled)) {
+              break;
+            }
+            continue;
+          }
+
+          if (!batch.tiles.empty() &&
+              batch.tiles.size() + column_tiles.size() > chunk_size) {
+            if (submit_batch_and_ingest_ready(batch, in_flight, dispatcher,
+                                              compositor, timings, run_stats,
+                                              early_exit_enabled)) {
+              break;
+            }
+          }
+
+          if (batch.tiles.empty() && column_tiles.size() > chunk_size) {
+            const std::uint64_t overshoot =
+                static_cast<std::uint64_t>(column_tiles.size() - chunk_size);
+            run_stats.total_chunk_overshoot_tiles += overshoot;
+            run_stats.max_chunk_overshoot_tiles =
+                std::max(run_stats.max_chunk_overshoot_tiles, overshoot);
+          }
+          append_column_to_batch(batch, i, std::move(column_tiles));
+        }
+
+        if (!run_stats.early_exit_taken) {
+          if (submit_batch_and_ingest_ready(batch, in_flight, dispatcher,
+                                            compositor, timings, run_stats,
+                                            early_exit_enabled)) {
+            // SPANNING was observed while ingesting the penultimate result.
+          }
+        }
+        if (!run_stats.early_exit_taken) {
+          if (drain_in_flight_and_ingest(in_flight, compositor, timings,
+                                         run_stats, early_exit_enabled)) {
+            // SPANNING was observed after the final dispatched column.
+          }
+        }
+      } catch (...) {
+        if (in_flight.has_value()) {
+          try {
+            discard_in_flight_result(in_flight);
+          } catch (const std::exception& e) {
+            std::cerr << "Error in speculative CUDA dispatch during cleanup: "
+                      << e.what() << "\n";
+          } catch (...) {
+            std::cerr << "Error in speculative CUDA dispatch during cleanup\n";
+          }
+        }
+        throw;
+      }
+    } else {
+      for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+        std::vector<campaign::TileCoord> column_tiles =
+            grid.enumerate_column_tiles(i);
+        if (column_tiles.empty()) {
+          if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
+                          timings, run_stats, early_exit_enabled)) {
+            break;
+          }
+          if (ingest_empty_column(i, compositor, snapshot_writer.get(), timings,
+                                  run_stats, early_exit_enabled)) {
+            break;
+          }
+          continue;
+        }
+
+        if (!batch.tiles.empty() &&
+            batch.tiles.size() + column_tiles.size() > chunk_size) {
+          if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
+                          timings, run_stats, early_exit_enabled)) {
+            break;
+          }
+        }
+
+        if (batch.tiles.empty() && column_tiles.size() > chunk_size) {
+          const std::uint64_t overshoot =
+              static_cast<std::uint64_t>(column_tiles.size() - chunk_size);
+          run_stats.total_chunk_overshoot_tiles += overshoot;
+          run_stats.max_chunk_overshoot_tiles =
+              std::max(run_stats.max_chunk_overshoot_tiles, overshoot);
+        }
+        append_column_to_batch(batch, i, std::move(column_tiles));
+      }
+
+      if (!run_stats.early_exit_taken) {
         if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
                         timings, run_stats, early_exit_enabled)) {
-          break;
+          // SPANNING was observed after the final dispatched column.
         }
-        if (ingest_empty_column(i, compositor, snapshot_writer.get(), timings,
-                                run_stats, early_exit_enabled)) {
-          break;
-        }
-        continue;
-      }
-
-      if (!batch.tiles.empty() &&
-          batch.tiles.size() + column_tiles.size() > chunk_size) {
-        if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
-                        timings, run_stats, early_exit_enabled)) {
-          break;
-        }
-      }
-
-      if (batch.tiles.empty() && column_tiles.size() > chunk_size) {
-        const std::uint64_t overshoot =
-            static_cast<std::uint64_t>(column_tiles.size() - chunk_size);
-        run_stats.total_chunk_overshoot_tiles += overshoot;
-        run_stats.max_chunk_overshoot_tiles =
-            std::max(run_stats.max_chunk_overshoot_tiles, overshoot);
-      }
-      append_column_to_batch(batch, i, std::move(column_tiles));
-    }
-
-    if (!run_stats.early_exit_taken) {
-      if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
-                      timings, run_stats, early_exit_enabled)) {
-        // SPANNING was observed after the final dispatched column.
       }
     }
 
