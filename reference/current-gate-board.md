@@ -70,6 +70,29 @@ Expected:
 | `R_inner=80000000`, `R_outer=80015782` | `--no-early-exit` | `SPANNING` | zero required |
 | `R_inner=80000000`, `R_outer=80015790` | `--no-early-exit` | `MOAT` | zero required |
 
+6. Tsuchimura K34 upper-bound cross-K gate:
+
+```bash
+cd /workspace/gaussian-moat-cuda/tiles-maxxing/cuda-campaign-v2-sqrt-36
+cmake -S . -B build-k34 -DK_SQ=34 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=89
+cmake --build build-k34 -j"$(nproc)"
+scripts/run_tsuchimura_k34_gate.sh \
+  --cuda-bin ./build-k34/campaign_main_cuda \
+  --chunk-size 200000 \
+  --timing \
+  --profile-dir /workspace/profiles-k34
+```
+
+Expected:
+
+| Case | Mode | Verdict | Overflow counters |
+|---|---|---|---|
+| `K_SQ=34`, `R_inner=24289452`, `R_outer=24297644` | `--no-early-exit` | `MOAT` | zero required |
+
+This is weaker than the K36 two-case boundary because Tsuchimura reports
+`sqrt(34)` finite with farthest distance `< 24,289,452`, not a nearby exact
+SPANNING/MOAT bracket. Its value is cross-K coverage and overflow pressure.
+
 ## Baseline Performance
 
 Vast RTX 4090 zero-offset correctness gate, chunk `200000`, snapshot disabled:
