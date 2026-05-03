@@ -106,6 +106,7 @@ void print_help(const char* prog) {
       << "  --no-early-exit        Ingest all columns even after SPANNING is found\n"
       << "  --timing               Print timing and chunk accounting\n"
       << "  --profile <path>       Write JSON profile; implies --timing\n"
+      << "  --overflow-diagnostics Capture first overflow tiles in profile output\n"
       << "  --threads=N            Accepted for CPU CLI compatibility; ignored\n"
       << "\n"
       << "Compile-time constants (baked in at build):\n"
@@ -286,6 +287,20 @@ double seconds(Duration duration) {
   return std::chrono::duration<double>(duration).count();
 }
 
+void accumulate_stage_timings(
+    cuda_campaign::DispatchStats::StageTimings& dst,
+    const cuda_campaign::DispatchStats::StageTimings& src) {
+  dst.h2d_seconds += src.h2d_seconds;
+  dst.k1_sieve_seconds += src.k1_sieve_seconds;
+  dst.mr_seconds += src.mr_seconds;
+  dst.compact_seconds += src.compact_seconds;
+  dst.uf_seconds += src.uf_seconds;
+  dst.face_encode_seconds += src.face_encode_seconds;
+  dst.face_sort_pack_seconds += src.face_sort_pack_seconds;
+  dst.overflow_summary_seconds += src.overflow_summary_seconds;
+  dst.d2h_seconds += src.d2h_seconds;
+}
+
 std::int64_t milliseconds(Duration duration) {
   return std::chrono::duration_cast<std::chrono::milliseconds>(duration)
       .count();
@@ -313,6 +328,7 @@ void accumulate_dispatch_stats(cuda_campaign::DispatchStats& dst,
   dst.k4_prime_overflow_count += src.k4_prime_overflow_count;
   dst.k4_group_overflow_count += src.k4_group_overflow_count;
   dst.k5_port_overflow_count += src.k5_port_overflow_count;
+  accumulate_stage_timings(dst.stage_timings, src.stage_timings);
 
   for (const auto& diag : src.first_overflow_tiles) {
     if (dst.first_overflow_tiles.size() >= kMaxOverflowDiagnostics) break;
@@ -386,6 +402,18 @@ void write_profile_json(const std::filesystem::path& path,
         {"compositor", seconds(timings.compositor)},
         {"snapshot", seconds(timings.snapshot)},
         {"total", seconds(timings.total)}}},
+      {"cuda_stage_timings_seconds",
+       {{"h2d", stats.dispatch.stage_timings.h2d_seconds},
+        {"k1_sieve", stats.dispatch.stage_timings.k1_sieve_seconds},
+        {"mr", stats.dispatch.stage_timings.mr_seconds},
+        {"compact", stats.dispatch.stage_timings.compact_seconds},
+        {"uf", stats.dispatch.stage_timings.uf_seconds},
+        {"face_encode", stats.dispatch.stage_timings.face_encode_seconds},
+        {"face_sort_pack",
+         stats.dispatch.stage_timings.face_sort_pack_seconds},
+        {"overflow_summary",
+         stats.dispatch.stage_timings.overflow_summary_seconds},
+        {"d2h", stats.dispatch.stage_timings.d2h_seconds}}},
       {"overflow_counters",
        {{"k1_cand_overflow_count", stats.dispatch.k1_cand_overflow_count},
         {"k4_prime_overflow_count", stats.dispatch.k4_prime_overflow_count},
@@ -635,6 +663,7 @@ int main(int argc, char** argv) {
   std::size_t chunk_size = kDefaultChunkSize;
   bool no_early_exit = false;
   bool overlap_compositor = false;
+  bool overflow_diagnostics = false;
   bool timing = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -700,6 +729,8 @@ int main(int argc, char** argv) {
       no_early_exit = true;
     } else if (a == "--overlap-compositor") {
       overlap_compositor = true;
+    } else if (a == "--overflow-diagnostics") {
+      overflow_diagnostics = true;
     } else if (a == "--timing") {
       timing = true;
     } else if (take_val("--profile", val)) {
@@ -836,7 +867,8 @@ int main(int argc, char** argv) {
   try {
     cuda_campaign::DispatchConfig config;
     config.host_chunk_tiles = chunk_size;
-    config.overflow_diagnostics = profile_path.has_value();
+    config.overflow_diagnostics = overflow_diagnostics;
+    config.collect_stage_timings = profile_path.has_value();
     config.max_overflow_diagnostics = kMaxOverflowDiagnostics;
 
     cuda_campaign::TileBatchDispatcher dispatcher(constants, config);

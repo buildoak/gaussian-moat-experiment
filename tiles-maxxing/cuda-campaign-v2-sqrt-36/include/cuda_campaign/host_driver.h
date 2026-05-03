@@ -20,10 +20,23 @@ struct DispatchConfig {
   std::size_t device_safety_bytes = 1024ULL * 1024ULL * 1024ULL;
   int ring_slots = 3;
   bool overflow_diagnostics = false;
+  bool collect_stage_timings = false;
   std::size_t max_overflow_diagnostics = 10;
 };
 
 struct DispatchStats {
+  struct StageTimings {
+    double h2d_seconds = 0.0;
+    double k1_sieve_seconds = 0.0;
+    double mr_seconds = 0.0;
+    double compact_seconds = 0.0;
+    double uf_seconds = 0.0;
+    double face_encode_seconds = 0.0;
+    double face_sort_pack_seconds = 0.0;
+    double overflow_summary_seconds = 0.0;
+    double d2h_seconds = 0.0;
+  };
+
   std::size_t tiles = 0;
   std::size_t chunks = 0;
   std::size_t slabs = 0;
@@ -38,6 +51,7 @@ struct DispatchStats {
   std::uint64_t k4_prime_overflow_count = 0;
   std::uint64_t k4_group_overflow_count = 0;
   std::uint64_t k5_port_overflow_count = 0;
+  StageTimings stage_timings;
 
   struct OverflowDiagnostic {
     campaign::TileCoord coord{};

@@ -23,6 +23,15 @@ FIELDS = [
     "total_s",
     "grid_s",
     "cuda_k1_k5_s",
+    "cuda_h2d_s",
+    "cuda_k1_sieve_s",
+    "cuda_mr_s",
+    "cuda_compact_s",
+    "cuda_uf_s",
+    "cuda_face_encode_s",
+    "cuda_face_sort_pack_s",
+    "cuda_overflow_summary_s",
+    "cuda_d2h_s",
     "compositor_s",
     "pipeline_tiles_s",
     "cuda_tileops_s",
@@ -43,6 +52,18 @@ OVERFLOW_FIELDS = [
     "k4_prime_overflow_count",
     "k4_group_overflow_count",
     "k5_port_overflow_count",
+]
+
+STAGE_TIMING_FIELDS = [
+    ("cuda_h2d_s", "h2d"),
+    ("cuda_k1_sieve_s", "k1_sieve"),
+    ("cuda_mr_s", "mr"),
+    ("cuda_compact_s", "compact"),
+    ("cuda_uf_s", "uf"),
+    ("cuda_face_encode_s", "face_encode"),
+    ("cuda_face_sort_pack_s", "face_sort_pack"),
+    ("cuda_overflow_summary_s", "overflow_summary"),
+    ("cuda_d2h_s", "d2h"),
 ]
 
 
@@ -82,6 +103,12 @@ def format_scalar(value: Any) -> str:
     if isinstance(value, float):
         return format_float(value)
     return str(value)
+
+
+def format_optional_scalar(value: Any) -> str:
+    if is_missing(value):
+        return ""
+    return format_scalar(value)
 
 
 def format_float(value: float) -> str:
@@ -175,6 +202,10 @@ def summarize(path: Path) -> dict[str, str]:
             overflow_total, "overflowed_tiles", produced, "tiles.produced"
         ),
     }
+    for field, name in STAGE_TIMING_FIELDS:
+        row[field] = format_optional_scalar(
+            get_path(data, f"cuda_stage_timings_seconds.{name}")
+        )
     for name, value in overflow_values.items():
         row[name] = format_scalar(value)
     return row

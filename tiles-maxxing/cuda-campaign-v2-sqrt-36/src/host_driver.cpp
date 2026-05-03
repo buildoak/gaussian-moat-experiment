@@ -209,6 +209,57 @@ class Event {
   cudaEvent_t event_ = nullptr;
 };
 
+class TimedEvent {
+ public:
+  TimedEvent() {
+    check_cuda(cudaEventCreateWithFlags(&event_, cudaEventDefault),
+               "cudaEventCreateWithFlags(timed)");
+  }
+
+  TimedEvent(const TimedEvent&) = delete;
+  TimedEvent& operator=(const TimedEvent&) = delete;
+
+  ~TimedEvent() {
+    if (event_ != nullptr) {
+      cudaEventDestroy(event_);
+    }
+  }
+
+  cudaEvent_t get() const noexcept {
+    return event_;
+  }
+
+ private:
+  cudaEvent_t event_ = nullptr;
+};
+
+struct TimedEventPair {
+  TimedEvent start;
+  TimedEvent stop;
+};
+
+void record_timing_start(TimedEventPair& pair,
+                         cudaStream_t stream,
+                         const char* what) {
+  check_cuda(cudaEventRecord(pair.start.get(), stream), what);
+}
+
+void record_timing_stop(TimedEventPair& pair,
+                        cudaStream_t stream,
+                        const char* what) {
+  check_cuda(cudaEventRecord(pair.stop.get(), stream), what);
+}
+
+void accumulate_elapsed_seconds(const TimedEventPair& pair,
+                                double& seconds,
+                                const char* what) {
+  float milliseconds = 0.0F;
+  check_cuda(cudaEventElapsedTime(&milliseconds, pair.start.get(),
+                                  pair.stop.get()),
+             what);
+  seconds += static_cast<double>(milliseconds) * 0.001;
+}
+
 void check_last_launch(const char* what) {
   check_cuda(cudaGetLastError(), what);
 }
@@ -367,11 +418,34 @@ struct HostRingSlot {
   Event h2d_done;
   Event compute_done;
   Event d2h_done;
+  std::unique_ptr<TimedEventPair> h2d_timing;
+  std::unique_ptr<TimedEventPair> d2h_timing;
+  bool h2d_timing_pending = false;
+  bool d2h_timing_pending = false;
 
-  HostRingSlot(std::size_t host_chunk_tiles, std::size_t device_slab_tiles)
+  HostRingSlot(std::size_t host_chunk_tiles,
+               std::size_t device_slab_tiles,
+               bool collect_timings)
       : coords(host_chunk_tiles),
         tileops(host_chunk_tiles),
-        d_tileops(device_slab_tiles) {}
+        d_tileops(device_slab_tiles) {
+    if (collect_timings) {
+      h2d_timing = std::make_unique<TimedEventPair>();
+      d2h_timing = std::make_unique<TimedEventPair>();
+    }
+  }
+};
+
+struct ComputeStageTimers {
+  TimedEventPair k1_sieve;
+  TimedEventPair mr;
+  TimedEventPair compact;
+  TimedEventPair uf;
+  TimedEventPair face_encode;
+  TimedEventPair face_sort_pack;
+  TimedEventPair overflow_summary;
+  bool pending = false;
+  bool overflow_summary_pending = false;
 };
 
 struct PendingD2H {
@@ -395,6 +469,49 @@ void drain_pending_d2h(HostRingSlot& slot,
   std::memcpy(output_tileops + pending.global_offset, slot.tileops.get(),
               pending.tiles * sizeof(campaign::TileOp));
   pending = PendingD2H{};
+}
+
+void collect_slot_transfer_timings(
+    HostRingSlot& slot,
+    DispatchStats::StageTimings& stage_timings) {
+  if (slot.h2d_timing != nullptr && slot.h2d_timing_pending) {
+    accumulate_elapsed_seconds(*slot.h2d_timing, stage_timings.h2d_seconds,
+                               "cudaEventElapsedTime(h2d)");
+    slot.h2d_timing_pending = false;
+  }
+  if (slot.d2h_timing != nullptr && slot.d2h_timing_pending) {
+    accumulate_elapsed_seconds(*slot.d2h_timing, stage_timings.d2h_seconds,
+                               "cudaEventElapsedTime(d2h)");
+    slot.d2h_timing_pending = false;
+  }
+}
+
+void collect_compute_stage_timings(
+    ComputeStageTimers& timers,
+    DispatchStats::StageTimings& stage_timings) {
+  if (!timers.pending) return;
+  accumulate_elapsed_seconds(timers.k1_sieve,
+                             stage_timings.k1_sieve_seconds,
+                             "cudaEventElapsedTime(k1_sieve)");
+  accumulate_elapsed_seconds(timers.mr, stage_timings.mr_seconds,
+                             "cudaEventElapsedTime(mr)");
+  accumulate_elapsed_seconds(timers.compact, stage_timings.compact_seconds,
+                             "cudaEventElapsedTime(compact)");
+  accumulate_elapsed_seconds(timers.uf, stage_timings.uf_seconds,
+                             "cudaEventElapsedTime(uf)");
+  accumulate_elapsed_seconds(timers.face_encode,
+                             stage_timings.face_encode_seconds,
+                             "cudaEventElapsedTime(face_encode)");
+  accumulate_elapsed_seconds(timers.face_sort_pack,
+                             stage_timings.face_sort_pack_seconds,
+                             "cudaEventElapsedTime(face_sort_pack)");
+  if (timers.overflow_summary_pending) {
+    accumulate_elapsed_seconds(timers.overflow_summary,
+                               stage_timings.overflow_summary_seconds,
+                               "cudaEventElapsedTime(overflow_summary)");
+  }
+  timers.pending = false;
+  timers.overflow_summary_pending = false;
 }
 
 struct DeviceWorkspace {
@@ -997,6 +1114,12 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
                 "CPU and CUDA TileOp layouts must remain byte-identical");
 
     Streams streams;
+    const bool collect_stage_timings =
+        stats != nullptr && config_.collect_stage_timings;
+    std::unique_ptr<ComputeStageTimers> compute_stage_timers;
+    if (collect_stage_timings) {
+      compute_stage_timers = std::make_unique<ComputeStageTimers>();
+    }
     const std::size_t max_requested_slab =
         std::min(config_.host_chunk_tiles, count);
     const std::size_t device_slab_capacity =
@@ -1007,7 +1130,8 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
     ring.reserve(static_cast<std::size_t>(config_.ring_slots));
     for (int slot = 0; slot < config_.ring_slots; ++slot) {
       ring.emplace_back(std::make_unique<HostRingSlot>(config_.host_chunk_tiles,
-                                                       device_slab_capacity));
+                                                       device_slab_capacity,
+                                                       collect_stage_timings));
     }
     DeviceWorkspace workspace(device_slab_capacity);
 
@@ -1074,19 +1198,33 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
         PendingD2H& slot_pending =
             pending[slab_index % static_cast<std::size_t>(config_.ring_slots)];
         drain_pending_d2h(slot, slot_pending, output_tileops);
+        collect_slot_transfer_timings(slot, local_stats.stage_timings);
         if (slab_index != 0) {
           check_cuda(cudaStreamSynchronize(streams.compute.get()),
                      "cudaStreamSynchronize(compute workspace reuse)");
+          if (compute_stage_timers != nullptr) {
+            collect_compute_stage_timings(*compute_stage_timers,
+                                          local_stats.stage_timings);
+          }
         }
 
         const std::size_t global_offset = copied + chunk_copied;
         std::memcpy(slot.coords.get(), tiles + global_offset,
                     slab_tiles * sizeof(campaign::TileCoord));
 
+        if (slot.h2d_timing != nullptr) {
+          record_timing_start(*slot.h2d_timing, streams.h2d.get(),
+                              "cudaEventRecord(h2d start)");
+        }
         check_cuda(cudaMemcpyAsync(workspace.d_coords.get(), slot.coords.get(),
                                    slab_tiles * sizeof(campaign::TileCoord),
                                    cudaMemcpyHostToDevice, streams.h2d.get()),
                    "cudaMemcpyAsync(dispatch coords H2D)");
+        if (slot.h2d_timing != nullptr) {
+          record_timing_stop(*slot.h2d_timing, streams.h2d.get(),
+                             "cudaEventRecord(h2d stop)");
+          slot.h2d_timing_pending = true;
+        }
         check_cuda(cudaEventRecord(slot.h2d_done.get(), streams.h2d.get()),
                    "cudaEventRecord(h2d_done)");
         check_cuda(cudaStreamWaitEvent(streams.compute.get(),
@@ -1094,6 +1232,11 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
                    "cudaStreamWaitEvent(h2d_done)");
 
         const int num_tiles = static_cast<int>(slab_tiles);
+        if (compute_stage_timers != nullptr) {
+          record_timing_start(compute_stage_timers->k1_sieve,
+                              streams.compute.get(),
+                              "cudaEventRecord(k1_sieve start)");
+        }
         launch_kernel_sieve(workspace.d_coords.get(),
                             workspace.d_cand_list.get(),
                             workspace.d_total_cands.get(),
@@ -1101,12 +1244,25 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
                             workspace.d_k1_overflow.get(), num_tiles,
                             MAX_CANDIDATES_GPU, streams.compute.get());
         check_last_launch("dispatch launch_kernel_sieve");
+        if (compute_stage_timers != nullptr) {
+          record_timing_stop(compute_stage_timers->k1_sieve,
+                             streams.compute.get(),
+                             "cudaEventRecord(k1_sieve stop)");
+        }
+        if (compute_stage_timers != nullptr) {
+          record_timing_start(compute_stage_timers->mr, streams.compute.get(),
+                              "cudaEventRecord(mr start)");
+        }
         launch_kernel_mr(workspace.d_coords.get(),
                          workspace.d_cand_list.get(),
                          workspace.d_total_cands.get(),
                          workspace.d_bitmap.get(), d_fj64_table_, num_tiles,
                          streams.compute.get());
         check_last_launch("dispatch launch_kernel_mr");
+        if (compute_stage_timers != nullptr) {
+          record_timing_stop(compute_stage_timers->mr, streams.compute.get(),
+                             "cudaEventRecord(mr stop)");
+        }
 
         const std::size_t prime_slots = slab_tiles * MAX_PRIMES_GPU;
         const std::size_t face_slots =
@@ -1128,11 +1284,29 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
             workspace.d_max_label.get(), workspace.d_overflow.get(),
             workspace.d_group_flags.get());
 
+        if (compute_stage_timers != nullptr) {
+          record_timing_start(compute_stage_timers->compact,
+                              streams.compute.get(),
+                              "cudaEventRecord(compact start)");
+        }
         launch_kernel_compact(workspace.d_bitmap.get(), k1k4.compact,
                               num_tiles, streams.compute.get());
         check_last_launch("dispatch launch_kernel_compact");
+        if (compute_stage_timers != nullptr) {
+          record_timing_stop(compute_stage_timers->compact,
+                             streams.compute.get(),
+                             "cudaEventRecord(compact stop)");
+        }
+        if (compute_stage_timers != nullptr) {
+          record_timing_start(compute_stage_timers->uf, streams.compute.get(),
+                              "cudaEventRecord(uf start)");
+        }
         launch_kernel_uf_v2(k1k4.uf, num_tiles, streams.compute.get());
         check_last_launch("dispatch launch_kernel_uf_v2");
+        if (compute_stage_timers != nullptr) {
+          record_timing_stop(compute_stage_timers->uf, streams.compute.get(),
+                             "cudaEventRecord(uf stop)");
+        }
 
         K1K5Buffers k1k5{};
         k1k5.k1k4 = k1k4;
@@ -1155,25 +1329,59 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
         face_encode.in.d_group_flags = k1k5.k1k4.uf.out.d_group_flags;
         face_encode.d_tileops = k1k5.d_tileops;
         face_encode.debug = k1k5.face_debug;
+        if (compute_stage_timers != nullptr) {
+          record_timing_start(compute_stage_timers->face_encode,
+                              streams.compute.get(),
+                              "cudaEventRecord(face_encode start)");
+        }
         launch_kernel_face_encode_v2(face_encode, num_tiles,
                                      streams.compute.get());
         check_last_launch("dispatch launch_kernel_face_encode_v2");
+        if (compute_stage_timers != nullptr) {
+          record_timing_stop(compute_stage_timers->face_encode,
+                             streams.compute.get(),
+                             "cudaEventRecord(face_encode stop)");
+        }
 
         FaceSortPackBuffers sort_pack{};
         sort_pack.in.d_face_reps = k1k5.face_debug.d_face_reps;
         sort_pack.in.d_face_rep_counts = k1k5.face_debug.d_face_rep_counts;
         sort_pack.d_tileops = k1k5.d_tileops;
+        if (compute_stage_timers != nullptr) {
+          record_timing_start(compute_stage_timers->face_sort_pack,
+                              streams.compute.get(),
+                              "cudaEventRecord(face_sort_pack start)");
+        }
         launch_kernel_face_sort_pack(sort_pack, num_tiles,
                                      streams.compute.get());
         check_last_launch("dispatch launch_kernel_face_sort_pack");
+        if (compute_stage_timers != nullptr) {
+          record_timing_stop(compute_stage_timers->face_sort_pack,
+                             streams.compute.get(),
+                             "cudaEventRecord(face_sort_pack stop)");
+        }
 
         if (collect_overflow_summary) {
+          if (compute_stage_timers != nullptr) {
+            record_timing_start(compute_stage_timers->overflow_summary,
+                                streams.compute.get(),
+                                "cudaEventRecord(overflow_summary start)");
+          }
           launch_kernel_overflow_summary(
               workspace.d_k1_overflow.get(), workspace.d_prime_count.get(),
               workspace.d_overflow.get(), workspace.d_face_rep_counts.get(),
               workspace.d_overflow_summary.get(), num_tiles,
               streams.compute.get());
           check_last_launch("dispatch launch_kernel_overflow_summary");
+          if (compute_stage_timers != nullptr) {
+            record_timing_stop(compute_stage_timers->overflow_summary,
+                               streams.compute.get(),
+                               "cudaEventRecord(overflow_summary stop)");
+            compute_stage_timers->overflow_summary_pending = true;
+          }
+        }
+        if (compute_stage_timers != nullptr) {
+          compute_stage_timers->pending = true;
         }
 
         check_cuda(cudaEventRecord(slot.compute_done.get(),
@@ -1182,6 +1390,10 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
         if (stats != nullptr && collect_overflow_diagnostics) {
           check_cuda(cudaEventSynchronize(slot.compute_done.get()),
                      "cudaEventSynchronize(compute_done)");
+          if (compute_stage_timers != nullptr) {
+            collect_compute_stage_timings(*compute_stage_timers,
+                                          local_stats.stage_timings);
+          }
 
           std::vector<std::uint32_t> h_k1_overflow(slab_tiles);
           std::vector<std::uint32_t> h_prime_count(slab_tiles);
@@ -1292,11 +1504,20 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
         check_cuda(cudaStreamWaitEvent(streams.d2h.get(),
                                        slot.compute_done.get(), 0),
                    "cudaStreamWaitEvent(compute_done)");
+        if (slot.d2h_timing != nullptr) {
+          record_timing_start(*slot.d2h_timing, streams.d2h.get(),
+                              "cudaEventRecord(d2h start)");
+        }
         check_cuda(cudaMemcpyAsync(slot.tileops.get(), slot.d_tileops.get(),
                                    slab_tiles * sizeof(campaign::TileOp),
                                    cudaMemcpyDeviceToHost,
                                    streams.d2h.get()),
                    "cudaMemcpyAsync(dispatch tileops D2H)");
+        if (slot.d2h_timing != nullptr) {
+          record_timing_stop(*slot.d2h_timing, streams.d2h.get(),
+                             "cudaEventRecord(d2h stop)");
+          slot.d2h_timing_pending = true;
+        }
         check_cuda(cudaEventRecord(slot.d2h_done.get(), streams.d2h.get()),
                    "cudaEventRecord(d2h_done)");
         slot_pending.active = true;
@@ -1312,6 +1533,8 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
 
     for (std::size_t slot_idx = 0; slot_idx < pending.size(); ++slot_idx) {
       drain_pending_d2h(*ring[slot_idx], pending[slot_idx], output_tileops);
+      collect_slot_transfer_timings(*ring[slot_idx],
+                                    local_stats.stage_timings);
     }
 
     check_cuda(cudaStreamSynchronize(streams.h2d.get()),
@@ -1320,6 +1543,13 @@ void TileBatchDispatcher::Impl::dispatch(const campaign::TileCoord* tiles,
                "cudaStreamSynchronize(compute)");
     check_cuda(cudaStreamSynchronize(streams.d2h.get()),
                "cudaStreamSynchronize(d2h)");
+    if (compute_stage_timers != nullptr) {
+      collect_compute_stage_timings(*compute_stage_timers,
+                                    local_stats.stage_timings);
+    }
+    for (const auto& slot : ring) {
+      collect_slot_transfer_timings(*slot, local_stats.stage_timings);
+    }
 
     if (collect_overflow_summary) {
       unsigned long long h_overflow_summary[OVERFLOW_SUMMARY_COUNTERS] = {};
