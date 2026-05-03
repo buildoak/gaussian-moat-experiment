@@ -158,7 +158,7 @@ struct Grid {
   // non-empty diagnostic describing the first violation. Intended to be
   // called by production entry points (see campaign_main) as the
   // release-mode compensation for the tower-closing [PROOF GAP] at spec
-  // line 361 per blueprint §4.3. O(total_tiles) — see Grid::build.
+  // line 361 per blueprint §4.3. O(columns) for contiguous tower grids.
   //
   // Sparse (explicit_tiles) grids skip the I1/I2 shape checks because they
   // do not represent a tower; only the explicit-tile set is validated for

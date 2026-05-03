@@ -424,31 +424,31 @@ std::string check_shape_invariants(const Grid& g) {
 
   // I4 — diagonal orphans: for every diagonally-adjacent active pair
   // (i, j) and (i+1, j+1) or (i, j) and (i+1, j-1), at least one
-  // face-neighbor common to both is active. O(total_tiles), table-only.
-  // This is the scan the blueprint §4.3 names as mandatory.
-  auto col_has = [&](std::int32_t i, std::int32_t j) -> bool {
-    if (!g.has_column(i)) return false;
-    const auto [lo, hi] = g.column_bounds(i);
-    return j >= lo && j <= hi;
-  };
-
+  // face-neighbor common to both is active.
+  //
+  // Since every non-empty tower is a contiguous interval, orphan witnesses
+  // can only occur at the interval boundaries:
+  //   upper orphan: next_low == current_high + 1
+  //   lower orphan: next_high == current_low - 1
+  // Interior diagonal pairs always have a same-column face neighbor.
   for (std::int32_t i = g.i_min; i < g.i_max; ++i) {
     const auto [lo, hi] = g.column_bounds(i);
-    for (std::int32_t j = lo; j <= hi; ++j) {
-      for (int dj : {+1, -1}) {
-        const std::int32_t j2 = j + dj;
-        if (col_has(i + 1, j2)) {
-          const bool n1 = col_has(i + 1, j);
-          const bool n2 = col_has(i, j2);
-          if (!n1 && !n2) {
-            std::ostringstream msg;
-            msg << "I4 diagonal orphan: active (" << i << "," << j
-                << ") and (" << (i + 1) << "," << j2
-                << ") share no active face-neighbor";
-            return msg.str();
-          }
-        }
-      }
+    const auto [next_lo, next_hi] = g.column_bounds(i + 1);
+    if (hi < lo || next_hi < next_lo) continue;
+
+    if (next_lo == hi + 1) {
+      std::ostringstream msg;
+      msg << "I4 diagonal orphan: active (" << i << "," << hi
+          << ") and (" << (i + 1) << "," << next_lo
+          << ") share no active face-neighbor";
+      return msg.str();
+    }
+    if (next_hi == lo - 1) {
+      std::ostringstream msg;
+      msg << "I4 diagonal orphan: active (" << i << "," << lo
+          << ") and (" << (i + 1) << "," << next_hi
+          << ") share no active face-neighbor";
+      return msg.str();
     }
   }
   return {};
@@ -607,13 +607,20 @@ Grid Grid::build(std::uint64_t R_inner, std::uint64_t R_outer,
   g.j_high.assign(static_cast<std::size_t>(n_cols), -1);
   g.tower_offset.assign(static_cast<std::size_t>(n_cols + 1), 0);
 
-  std::int64_t running = 0;
-  for (std::int32_t i = g.i_min; i <= g.i_max; ++i) {
-    const std::size_t k = static_cast<std::size_t>(i - g.i_min);
+  #pragma omp parallel for schedule(static)
+  for (int k = 0; k < n_cols; ++k) {
+    const std::int32_t i = g.i_min + static_cast<std::int32_t>(k);
     auto [lo, hi] = find_tower(i, g);
-    g.j_low[k] = lo;
-    g.j_high[k] = hi;
-    g.tower_offset[k] = running;
+    g.j_low[static_cast<std::size_t>(k)] = lo;
+    g.j_high[static_cast<std::size_t>(k)] = hi;
+  }
+
+  std::int64_t running = 0;
+  for (int k = 0; k < n_cols; ++k) {
+    const auto idx = static_cast<std::size_t>(k);
+    const std::int32_t lo = g.j_low[idx];
+    const std::int32_t hi = g.j_high[idx];
+    g.tower_offset[idx] = running;
     if (hi >= lo) running += (hi - lo + 1);
   }
   g.tower_offset[static_cast<std::size_t>(n_cols)] = running;

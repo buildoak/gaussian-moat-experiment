@@ -213,6 +213,44 @@ TEST(Grid, VerifyInvariantsDetectsI1MalformedRange) {
       << "diagnostic must name I1 (malformed range), got: " << err;
 }
 
+TEST(Grid, VerifyInvariantsDetectsUpperDiagonalOrphan) {
+  campaign::Grid g{};
+  g.i_min = 0;
+  g.i_max = 1;
+  g.j_low = {10, 11};
+  g.j_high = {10, 11};
+  g.tower_offset = {0, 1, 2};
+  g.total_tiles = 2;
+
+  const std::string err = g.verify_invariants();
+  EXPECT_FALSE(err.empty());
+  EXPECT_NE(err.find("I4"), std::string::npos)
+      << "diagnostic must name I4, got: " << err;
+  EXPECT_NE(err.find("(0,10)"), std::string::npos)
+      << "diagnostic must identify the current-column witness, got: " << err;
+  EXPECT_NE(err.find("(1,11)"), std::string::npos)
+      << "diagnostic must identify the next-column witness, got: " << err;
+}
+
+TEST(Grid, VerifyInvariantsDetectsLowerDiagonalOrphan) {
+  campaign::Grid g{};
+  g.i_min = 0;
+  g.i_max = 1;
+  g.j_low = {10, 9};
+  g.j_high = {10, 9};
+  g.tower_offset = {0, 1, 2};
+  g.total_tiles = 2;
+
+  const std::string err = g.verify_invariants();
+  EXPECT_FALSE(err.empty());
+  EXPECT_NE(err.find("I4"), std::string::npos)
+      << "diagnostic must name I4, got: " << err;
+  EXPECT_NE(err.find("(0,10)"), std::string::npos)
+      << "diagnostic must identify the current-column witness, got: " << err;
+  EXPECT_NE(err.find("(1,9)"), std::string::npos)
+      << "diagnostic must identify the next-column witness, got: " << err;
+}
+
 TEST(Grid, VerifyInvariantsEmptyGridReturnsEmpty) {
   // Empty grids trivially satisfy — must not spuriously report error.
   campaign::Grid g{};

@@ -3,8 +3,9 @@
 ## Context
 
 - Branch: `opt/performance-wave-1`
-- Measured implementation commit: `be610f1 Tune UF kernel block size`
-- Current report commit before this update: `74bd1f0 Record UF block performance`
+- Measured implementation commit: parallel grid-build candidate in this report
+- Previous measured implementation commit: `be610f1 Tune UF kernel block size`
+- Previous report commit: `6193ffc Record larger-radius readiness sample`
 - Baseline commit: `8d88f62 Expand performance optimization menu`
 - Hardware: Vast.ai RTX 4090, 24564 MiB
 - Driver / compiler: NVIDIA driver `560.35.03`, CUDA compiler `12.4.131`
@@ -23,6 +24,8 @@
 8. `2d26cce Tune MR kernel block size`
 9. `7c52472 Optimize face representative extraction`
 10. `be610f1 Tune UF kernel block size`
+11. Parallelize grid tower construction and reduce I4 invariant verification to
+    interval-boundary checks
 
 ## Rejected Experiments
 
@@ -180,23 +183,23 @@ done
 | MR block-size gate | PASS | `/workspace/opt-wave1-mr-block256-full-20260503-014542`, Tsuchimura verdicts correct, zero overflows |
 | Face reps gate | PASS | `/workspace/opt-wave1-face-reps-full-20260503-020208`, Tsuchimura verdicts correct, zero overflows |
 | UF block-size gate | PASS | `/workspace/opt-wave1-uf-block128-full-20260503-021501`, Tsuchimura verdicts correct, zero overflows |
+| Grid parallel gate | PASS | `/workspace/opt-wave1-grid-parallel-tsuchimura-full-20260503-025042`, Tsuchimura verdicts correct, zero overflows |
 
 ## Full-Run Timing
 
-Baseline was commit `8d88f62` with chunk `200000`. The final UF block-size
-candidate was commit `be610f1` with chunk `500000` and
-`--overlap-compositor`.
+Baseline was commit `8d88f62` with chunk `200000`. The current candidate uses
+chunk `500000` and `--overlap-compositor`.
 
 | Case | Metric | Baseline | Candidate | Delta |
 |---|---|---:|---:|---:|
-| SPANNING full | total seconds | 342.003 | 149.040 | -56.4% |
-| SPANNING full | CUDA K1-K5 seconds | 180.726 | 141.630 | -21.6% |
-| SPANNING full | compositor seconds | 155.930 | 90.414 | -42.0% |
-| SPANNING full | pipeline tiles/s | 45,160 | 103,630 | +129.5% |
-| MOAT full | total seconds | 424.070 | 149.207 | -64.8% |
-| MOAT full | CUDA K1-K5 seconds | 176.305 | 141.762 | -19.6% |
-| MOAT full | compositor seconds | 242.593 | 91.156 | -62.4% |
-| MOAT full | pipeline tiles/s | 36,439 | 103,565 | +184.2% |
+| SPANNING full | total seconds | 342.003 | 147.796 | -56.8% |
+| SPANNING full | CUDA K1-K5 seconds | 180.726 | 141.824 | -21.5% |
+| SPANNING full | compositor seconds | 155.930 | 90.278 | -42.1% |
+| SPANNING full | pipeline tiles/s | 45,160 | 104,502 | +131.4% |
+| MOAT full | total seconds | 424.070 | 148.148 | -65.1% |
+| MOAT full | CUDA K1-K5 seconds | 176.305 | 142.144 | -19.4% |
+| MOAT full | compositor seconds | 242.593 | 89.757 | -63.0% |
+| MOAT full | pipeline tiles/s | 36,439 | 104,305 | +186.2% |
 
 The final total is lower than `cuda_k1_k5 + compositor` because
 `--overlap-compositor` runs one GPU batch ahead while the main thread ingests the
@@ -217,6 +220,7 @@ previous complete-column batch.
 | MR block 256, chunk 500k | 162.244 | 163.427 |
 | Face reps one-pass, chunk 500k | 150.468 | 150.357 |
 | UF block 128, chunk 500k | 149.040 | 149.207 |
+| Parallel grid build, chunk 500k | 147.796 | 148.148 |
 
 Repeat evidence used run directory:
 `/workspace/opt-wave1-overlap-repeat-20260503-004319`.
@@ -251,6 +255,17 @@ UF block-size gate evidence used run directory:
 Larger-radius readiness sample evidence used run directory:
 `/workspace/opt-wave1-r1100m-sample-20260503-023454`.
 
+Grid I4 interval-check sample evidence used run directory:
+`/workspace/opt-wave1-grid-i4-r1100m-sample-20260503-024408`.
+
+Parallel grid-build larger-radius sample evidence used run directory:
+`/workspace/opt-wave1-grid-parallel-r1100m-sample-20260503-024806`.
+
+Parallel grid-build Tsuchimura evidence used run directories:
+`/workspace/opt-wave1-grid-parallel-tsuchimura-20260503-024959` for early
+SPANNING and `/workspace/opt-wave1-grid-parallel-tsuchimura-full-20260503-025042`
+for the two full cases.
+
 ## CUDA Stage Timing
 
 The profile schema now includes `cuda_stage_timings_seconds`. `--profile` no
@@ -280,6 +295,10 @@ and `17.906s` on MOAT full.
 After `be610f1`, UF uses a `128` thread launch by default. UF drops to
 `24.156s` on SPANNING full and `24.218s` on MOAT full.
 
+After the parallel grid-build candidate, grid initialization drops to `0.234s`
+on SPANNING full and `0.216s` on MOAT full. CUDA stage buckets are effectively
+unchanged, as expected; this is a CPU-side pre-dispatch optimization.
+
 Current bottleneck read: MR is still the largest CUDA kernel bucket, followed
 by K1 sieve, UF, then face encode. The overlapped full pipeline is now
 bounded by roughly `142s` CUDA generation and `90-91s` compositor ingestion, with
@@ -291,20 +310,24 @@ This is a narrow legal-annulus sample, not an external truth gate. It checks
 whether the current pipeline remains stable at a larger radius and whether
 overflow pressure appears before attempting wider, expensive bands.
 
-| Radius / width | Active tiles | Total seconds | Grid-init seconds | CUDA K1-K5 seconds | Compositor seconds | Pipeline tiles/s | Overflowed tiles |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `R=1,100,000,000`, width `500` | 10,888,283 | 105.638 | 24.532 | 76.895 | 42.728 | 103,072 | 0 |
+| Radius / width | Candidate | Active tiles | Total seconds | Grid-init seconds | CUDA K1-K5 seconds | Compositor seconds | Pipeline tiles/s | Overflowed tiles |
+|---|---|---:|---:|---:|---:|---:|---:|---:|
+| `R=1,100,000,000`, width `500` | UF block 128 | 10,888,283 | 105.638 | 24.532 | 76.895 | 42.728 | 103,072 | 0 |
+| `R=1,100,000,000`, width `500` | I4 interval only | 10,888,283 | 106.663 | 24.421 | 78.015 | 42.776 | 102,081 | 0 |
+| `R=1,100,000,000`, width `500` | Parallel grid build | 10,888,283 | 86.152 | 2.508 | 79.397 | 42.429 | 126,384 | 0 |
 
-Stage breakdown for this sample:
+Stage breakdown:
 
-| H2D | K1 sieve | MR | Compact | UF | Face encode | Face sort/pack | Overflow summary | D2H |
-|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| 0.027 | 15.462 | 33.340 | 0.295 | 8.951 | 5.997 | 0.757 | 0.003 | 0.160 |
+| Candidate | H2D | K1 sieve | MR | Compact | UF | Face encode | Face sort/pack | Overflow summary | D2H |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| UF block 128 | 0.027 | 15.462 | 33.340 | 0.295 | 8.951 | 5.997 | 0.757 | 0.003 | 0.160 |
+| Parallel grid build | 0.028 | 15.471 | 33.346 | 0.295 | 8.953 | 6.001 | 0.757 | 0.003 | 0.165 |
 
 Read: overflow remains clean at this radius and throughput is stable at about
-`103k` pipeline tiles/s, but grid initialization is already `24.5s` on a narrow
-band. Grid creation should be inspected before committing rented GPU time to
-wide `R=1.1B+` campaigns.
+`126k` pipeline tiles/s after the parallel grid build. The interval-only I4
+change was correctness-preserving but not performance-material by itself; the
+large win comes from computing independent column towers in parallel before the
+deterministic prefix-sum pass.
 
 ## Chunk Sweep
 
@@ -326,6 +349,8 @@ chunks; smaller chunks avoid extra produced tiles before early exit.
 - Overflow counters: all four counters remained zero in all accepted full
   Tsuchimura gates and profile summaries.
 - Verdicts: external truth cases preserved.
+- Grid invariants: focused tests cover both upper and lower diagonal-orphan
+  witnesses after replacing the per-tile I4 scan with interval-boundary checks.
 - Snapshot mode affected: overlap is rejected with snapshot mode; serial
   snapshot SHA smoke passed.
 - Byte layout affected: no TileOp layout changes.
@@ -337,7 +362,8 @@ Accept the compositor cursor lookup, device-side overflow summary, explicit
 `--overlap-compositor` app-level pipeline, face representative
 parallelization, profile-only CUDA stage timing attribution, and the
 K1-presieved MR primality path, the MR 256-thread launch default, and one-pass
-face representative extraction, and the UF 128-thread launch default.
+face representative extraction, the UF 128-thread launch default, and the
+parallel grid tower build with interval-boundary I4 verification.
 
 Next high-leverage targets:
 
@@ -345,9 +371,7 @@ Next high-leverage targets:
    launch/register tuning is exhausted for now.
 2. Revisit dispatcher resource persistence only after isolating why one run
    improved CUDA time but worsened compositor time.
-3. Inspect grid initialization before wider large-radius campaigns; the
-   `R=1.1B`, width `500` sample spent `24.5s` there.
-4. Inspect K1 next; it now accounts for about `22.0s` on full MOAT and
+3. Inspect K1 next; it now accounts for about `22.0s` on full MOAT and
    `15.5s` on the `R=1.1B`, width `500` sample.
-5. Decide whether `--overlap-compositor` should become default after another
+4. Decide whether `--overlap-compositor` should become default after another
    verification repeat.
