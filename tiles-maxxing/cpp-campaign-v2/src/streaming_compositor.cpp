@@ -310,23 +310,28 @@ struct StreamingCompositor::State {
       return;
     }
 
-    std::map<NodeId, NodeId> root_to_compact;
+    constexpr NodeId kInvalidNode = std::numeric_limits<NodeId>::max();
+    std::vector<NodeId> root_to_compact(parent.size(), kInvalidNode);
     std::vector<NodeId> compact_parent;
     std::vector<std::uint8_t> compact_reach;
 
     for (FrontierNode& entry : next_frontier) {
       const NodeId root = find(entry.node);
+      if (root >= root_to_compact.size()) {
+        throw std::runtime_error("StreamingCompositor root remap out of range");
+      }
       if (compact_parent.size() > std::numeric_limits<NodeId>::max()) {
         throw std::runtime_error(
             "StreamingCompositor compact frontier node cap exceeded");
       }
-      auto [it, inserted] = root_to_compact.emplace(
-          root, static_cast<NodeId>(compact_parent.size()));
-      if (inserted) {
-        compact_parent.push_back(it->second);
+      NodeId compact = root_to_compact[root];
+      if (compact == kInvalidNode) {
+        compact = static_cast<NodeId>(compact_parent.size());
+        root_to_compact[root] = compact;
+        compact_parent.push_back(compact);
         compact_reach.push_back(reach[root]);
       }
-      entry.node = it->second;
+      entry.node = compact;
     }
 
     group_to_node.clear();
