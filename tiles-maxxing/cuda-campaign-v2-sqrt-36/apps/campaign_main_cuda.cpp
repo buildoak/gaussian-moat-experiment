@@ -336,12 +336,32 @@ void accumulate_dispatch_stats(cuda_campaign::DispatchStats& dst,
   }
 }
 
+std::size_t column_tile_count(const campaign::Grid& grid, std::int32_t i) {
+  const auto [jlo, jhi] = grid.column_bounds(i);
+  if (jhi < jlo) return 0;
+  return static_cast<std::size_t>(jhi - jlo + 1);
+}
+
 void append_column_to_batch(ColumnBatch& batch,
+                            const campaign::Grid& grid,
                             std::int32_t i,
-                            std::vector<campaign::TileCoord> column_tiles) {
-  batch.columns.push_back(ColumnBatch::Column{i, column_tiles.size()});
-  batch.tiles.insert(batch.tiles.end(), column_tiles.begin(),
-                     column_tiles.end());
+                            std::size_t tile_count) {
+  if (tile_count == 0) return;
+
+  const auto [jlo, jhi] = grid.column_bounds(i);
+  batch.columns.push_back(ColumnBatch::Column{i, tile_count});
+
+  const std::int64_t a_lo = static_cast<std::int64_t>(campaign::OFFSET_X) +
+                            static_cast<std::int64_t>(campaign::S) * i;
+  for (std::int32_t j = jlo; j <= jhi; ++j) {
+    campaign::TileCoord tc{};
+    tc.i = i;
+    tc.j = j;
+    tc.a_lo = a_lo;
+    tc.b_lo = static_cast<std::int64_t>(campaign::OFFSET_Y) +
+              static_cast<std::int64_t>(campaign::S) * j;
+    batch.tiles.push_back(tc);
+  }
 }
 
 void write_profile_json(const std::filesystem::path& path,
@@ -888,9 +908,8 @@ int main(int argc, char** argv) {
       std::optional<std::future<BatchDispatchResult>> in_flight;
       try {
         for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
-          std::vector<campaign::TileCoord> column_tiles =
-              grid.enumerate_column_tiles(i);
-          if (column_tiles.empty()) {
+          const std::size_t column_tiles = column_tile_count(grid, i);
+          if (column_tiles == 0) {
             if (submit_batch_and_ingest_ready(batch, in_flight, dispatcher,
                                               compositor, timings, run_stats,
                                               early_exit_enabled)) {
@@ -908,7 +927,7 @@ int main(int argc, char** argv) {
           }
 
           if (!batch.tiles.empty() &&
-              batch.tiles.size() + column_tiles.size() > chunk_size) {
+              batch.tiles.size() + column_tiles > chunk_size) {
             if (submit_batch_and_ingest_ready(batch, in_flight, dispatcher,
                                               compositor, timings, run_stats,
                                               early_exit_enabled)) {
@@ -916,14 +935,14 @@ int main(int argc, char** argv) {
             }
           }
 
-          if (batch.tiles.empty() && column_tiles.size() > chunk_size) {
+          if (batch.tiles.empty() && column_tiles > chunk_size) {
             const std::uint64_t overshoot =
-                static_cast<std::uint64_t>(column_tiles.size() - chunk_size);
+                static_cast<std::uint64_t>(column_tiles - chunk_size);
             run_stats.total_chunk_overshoot_tiles += overshoot;
             run_stats.max_chunk_overshoot_tiles =
                 std::max(run_stats.max_chunk_overshoot_tiles, overshoot);
           }
-          append_column_to_batch(batch, i, std::move(column_tiles));
+          append_column_to_batch(batch, grid, i, column_tiles);
         }
 
         if (!run_stats.early_exit_taken) {
@@ -954,9 +973,8 @@ int main(int argc, char** argv) {
       }
     } else {
       for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
-        std::vector<campaign::TileCoord> column_tiles =
-            grid.enumerate_column_tiles(i);
-        if (column_tiles.empty()) {
+        const std::size_t column_tiles = column_tile_count(grid, i);
+        if (column_tiles == 0) {
           if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
                           timings, run_stats, early_exit_enabled)) {
             break;
@@ -969,21 +987,21 @@ int main(int argc, char** argv) {
         }
 
         if (!batch.tiles.empty() &&
-            batch.tiles.size() + column_tiles.size() > chunk_size) {
+            batch.tiles.size() + column_tiles > chunk_size) {
           if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
                           timings, run_stats, early_exit_enabled)) {
             break;
           }
         }
 
-        if (batch.tiles.empty() && column_tiles.size() > chunk_size) {
+        if (batch.tiles.empty() && column_tiles > chunk_size) {
           const std::uint64_t overshoot =
-              static_cast<std::uint64_t>(column_tiles.size() - chunk_size);
+              static_cast<std::uint64_t>(column_tiles - chunk_size);
           run_stats.total_chunk_overshoot_tiles += overshoot;
           run_stats.max_chunk_overshoot_tiles =
               std::max(run_stats.max_chunk_overshoot_tiles, overshoot);
         }
-        append_column_to_batch(batch, i, std::move(column_tiles));
+        append_column_to_batch(batch, grid, i, column_tiles);
       }
 
       if (!run_stats.early_exit_taken) {

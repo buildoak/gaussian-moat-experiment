@@ -3,7 +3,7 @@
 ## Context
 
 - Branch: `opt/performance-wave-1`
-- Measured implementation commit: `cd5da67 Parallelize grid tower construction`
+- Measured implementation commit: 
 - Previous measured implementation commit: `be610f1 Tune UF kernel block size`
 - Previous report commit: `6193ffc Record larger-radius readiness sample`
 - Baseline commit: `8d88f62 Expand performance optimization menu`
@@ -26,6 +26,8 @@
 10. `be610f1 Tune UF kernel block size`
 11. Parallelize grid tower construction and reduce I4 invariant verification to
     interval-boundary checks
+12. Append column coordinates directly into CUDA batches instead of allocating a
+    temporary vector per column
 
 ## Rejected Experiments
 
@@ -39,6 +41,7 @@ left out of the branch state:
 | UF read-only final find | CUDA CTest and diff probes passed; SPANNING full improved slightly to `148.913s`, but MOAT full regressed to `149.882s` | Reverted |
 | UF shared parent scratch | CUDA CTest and diff probes passed, but smoke UF regressed to about `1.032s` | Reverted |
 | Face packed-unpack micro | CUDA CTest and diff probes passed, but face encode regressed on smoke | Reverted |
+| Direct column append with exact per-column `reserve` | Correctness passed, but forced repeated reallocations and stalled CPU-side before first GPU dispatch | Reworked without the per-column reserve |
 
 ## Commands
 
@@ -184,6 +187,7 @@ done
 | Face reps gate | PASS | `/workspace/opt-wave1-face-reps-full-20260503-020208`, Tsuchimura verdicts correct, zero overflows |
 | UF block-size gate | PASS | `/workspace/opt-wave1-uf-block128-full-20260503-021501`, Tsuchimura verdicts correct, zero overflows |
 | Grid parallel gate | PASS | `/workspace/opt-wave1-grid-parallel-tsuchimura-full-20260503-025042`, Tsuchimura verdicts correct, zero overflows |
+| Direct column-append gate | PASS | `/workspace/opt-wave1-direct-append-tsuchimura-full-20260503-030730`, Tsuchimura verdicts correct, zero overflows |
 
 ## Full-Run Timing
 
@@ -192,14 +196,14 @@ chunk `500000` and `--overlap-compositor`.
 
 | Case | Metric | Baseline | Candidate | Delta |
 |---|---|---:|---:|---:|
-| SPANNING full | total seconds | 342.003 | 147.796 | -56.8% |
-| SPANNING full | CUDA K1-K5 seconds | 180.726 | 141.824 | -21.5% |
-| SPANNING full | compositor seconds | 155.930 | 90.278 | -42.1% |
-| SPANNING full | pipeline tiles/s | 45,160 | 104,502 | +131.4% |
-| MOAT full | total seconds | 424.070 | 148.148 | -65.1% |
-| MOAT full | CUDA K1-K5 seconds | 176.305 | 142.144 | -19.4% |
-| MOAT full | compositor seconds | 242.593 | 89.757 | -63.0% |
-| MOAT full | pipeline tiles/s | 36,439 | 104,305 | +186.2% |
+| SPANNING full | total seconds | 342.003 | 147.894 | -56.8% |
+| SPANNING full | CUDA K1-K5 seconds | 180.726 | 141.857 | -21.5% |
+| SPANNING full | compositor seconds | 155.930 | 89.955 | -42.3% |
+| SPANNING full | pipeline tiles/s | 45,160 | 104,433 | +131.2% |
+| MOAT full | total seconds | 424.070 | 146.942 | -65.4% |
+| MOAT full | CUDA K1-K5 seconds | 176.305 | 140.938 | -20.1% |
+| MOAT full | compositor seconds | 242.593 | 89.676 | -63.0% |
+| MOAT full | pipeline tiles/s | 36,439 | 105,161 | +188.6% |
 
 The final total is lower than `cuda_k1_k5 + compositor` because
 `--overlap-compositor` runs one GPU batch ahead while the main thread ingests the
@@ -221,6 +225,7 @@ previous complete-column batch.
 | Face reps one-pass, chunk 500k | 150.468 | 150.357 |
 | UF block 128, chunk 500k | 149.040 | 149.207 |
 | Parallel grid build, chunk 500k | 147.796 | 148.148 |
+| Direct column append, chunk 500k | 147.894 | 146.942 |
 
 Repeat evidence used run directory:
 `/workspace/opt-wave1-overlap-repeat-20260503-004319`.
@@ -266,6 +271,12 @@ Parallel grid-build Tsuchimura evidence used run directories:
 SPANNING and `/workspace/opt-wave1-grid-parallel-tsuchimura-full-20260503-025042`
 for the two full cases.
 
+Direct column-append larger-radius sample evidence used run directory:
+`/workspace/opt-wave1-direct-append2-r1100m-sample-20260503-030439`.
+
+Direct column-append Tsuchimura evidence used run directory:
+`/workspace/opt-wave1-direct-append-tsuchimura-full-20260503-030730`.
+
 ## CUDA Stage Timing
 
 The profile schema now includes `cuda_stage_timings_seconds`. `--profile` no
@@ -299,6 +310,11 @@ After the parallel grid-build candidate, grid initialization drops to `0.234s`
 on SPANNING full and `0.216s` on MOAT full. CUDA stage buckets are effectively
 unchanged, as expected; this is a CPU-side pre-dispatch optimization.
 
+After the direct column-append candidate, the app avoids allocating a temporary
+`std::vector<TileCoord>` for every column during CUDA batch assembly. The full
+SPANNING run is noise-flat at `147.894s`; the full MOAT run improves to
+`146.942s`.
+
 Current bottleneck read: MR is still the largest CUDA kernel bucket, followed
 by K1 sieve, UF, then face encode. The overlapped full pipeline is now
 bounded by roughly `142s` CUDA generation and `90-91s` compositor ingestion, with
@@ -315,6 +331,7 @@ overflow pressure appears before attempting wider, expensive bands.
 | `R=1,100,000,000`, width `500` | UF block 128 | 10,888,283 | 105.638 | 24.532 | 76.895 | 42.728 | 103,072 | 0 |
 | `R=1,100,000,000`, width `500` | I4 interval only | 10,888,283 | 106.663 | 24.421 | 78.015 | 42.776 | 102,081 | 0 |
 | `R=1,100,000,000`, width `500` | Parallel grid build | 10,888,283 | 86.152 | 2.508 | 79.397 | 42.429 | 126,384 | 0 |
+| `R=1,100,000,000`, width `500` | Direct column append | 10,888,283 | 84.213 | 2.645 | 77.348 | 42.801 | 129,294 | 0 |
 
 Stage breakdown:
 
@@ -322,12 +339,14 @@ Stage breakdown:
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
 | UF block 128 | 0.027 | 15.462 | 33.340 | 0.295 | 8.951 | 5.997 | 0.757 | 0.003 | 0.160 |
 | Parallel grid build | 0.028 | 15.471 | 33.346 | 0.295 | 8.953 | 6.001 | 0.757 | 0.003 | 0.165 |
+| Direct column append | 0.026 | 15.457 | 33.330 | 0.295 | 8.947 | 5.997 | 0.757 | 0.003 | 0.154 |
 
 Read: overflow remains clean at this radius and throughput is stable at about
-`126k` pipeline tiles/s after the parallel grid build. The interval-only I4
-change was correctness-preserving but not performance-material by itself; the
-large win comes from computing independent column towers in parallel before the
-deterministic prefix-sum pass.
+`129k` pipeline tiles/s after direct column append. The interval-only I4 change
+was correctness-preserving but not performance-material by itself; the large
+grid win comes from computing independent column towers in parallel before the
+deterministic prefix-sum pass. Direct column append adds a smaller host-loop win
+by eliminating per-column temporary vector allocation.
 
 ## Chunk Sweep
 
@@ -351,6 +370,8 @@ chunks; smaller chunks avoid extra produced tiles before early exit.
 - Verdicts: external truth cases preserved.
 - Grid invariants: focused tests cover both upper and lower diagonal-orphan
   witnesses after replacing the per-tile I4 scan with interval-boundary checks.
+- Column ordering: direct append emits the same column-major `(i,j,a_lo,b_lo)`
+  sequence as `Grid::enumerate_column_tiles()` for non-sparse tower grids.
 - Snapshot mode affected: overlap is rejected with snapshot mode; serial
   snapshot SHA smoke passed.
 - Byte layout affected: no TileOp layout changes.
@@ -363,7 +384,8 @@ Accept the compositor cursor lookup, device-side overflow summary, explicit
 parallelization, profile-only CUDA stage timing attribution, and the
 K1-presieved MR primality path, the MR 256-thread launch default, and one-pass
 face representative extraction, the UF 128-thread launch default, and the
-parallel grid tower build with interval-boundary I4 verification.
+parallel grid tower build with interval-boundary I4 verification, and direct
+column append for CUDA batch assembly.
 
 Next high-leverage targets:
 
