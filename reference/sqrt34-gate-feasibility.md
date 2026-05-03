@@ -70,3 +70,23 @@ One of these is needed:
 
 Until then, K34 is useful for compile/generalization checks and CPU/CUDA parity,
 but it is not an external correctness gate.
+
+## Current Practical Gate
+
+Use the practical K34 regression script when a branch needs cross-K coverage:
+
+```bash
+cd tiles-maxxing/cuda-campaign-v2-sqrt-36
+scripts/run_k34_regression_gate.sh \
+  --cpu-bin ../cpp-campaign-v2/build-k34/campaign_main \
+  --cuda-bin ./build-k34/campaign_main_cuda \
+  --diff-bin ./build-k34/cuda_vs_cpu_diff \
+  --chunk-size 200000 \
+  --timing \
+  --profile-dir /workspace/profiles-k34-regression
+```
+
+This gate checks snapshot parity, `cuda_vs_cpu_diff`, and the observed
+Tsuchimura-scale shell sentinel. It should fail on K-dependent implementation
+drift or nonzero overflow counters. It should not be cited as proof of the
+published K34 moat.

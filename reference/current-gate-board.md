@@ -105,6 +105,30 @@ chosen annulus. K34 can become a strong gate only if we implement direct
 origin-component verification or obtain an exact externally justified annular
 boundary.
 
+## K34 Cross-K Regression Gate
+
+This is accepted only as implementation regression coverage, not as external
+truth:
+
+```bash
+cd /workspace/gaussian-moat-cuda-timing/tiles-maxxing/cuda-campaign-v2-sqrt-36
+scripts/run_k34_regression_gate.sh \
+  --cpu-bin ../cpp-campaign-v2/build-k34/campaign_main \
+  --cuda-bin ./build-k34/campaign_main_cuda \
+  --diff-bin ./build-k34/cuda_vs_cpu_diff \
+  --chunk-size 200000 \
+  --timing \
+  --profile-dir /workspace/profiles-k34-regression
+```
+
+Expected:
+
+| Step | Expected |
+|---|---|
+| K34 snapshot smoke | CPU/CUDA SHA match |
+| K34 `cuda_vs_cpu_diff --m4 --k5 --limit 16` on `24289452..24297644` | pass |
+| K34 shell sentinel `24289452..24297644` | `SPANNING`, zero overflow counters |
+
 ## Baseline Performance
 
 Vast RTX 4090 zero-offset correctness gate, chunk `200000`, snapshot disabled:

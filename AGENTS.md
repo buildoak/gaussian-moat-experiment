@@ -76,14 +76,23 @@ it is not a valid external truth gate. To make K34 into a strong gate, use an
 algorithm that verifies Tsuchimura's origin-component upper bound directly, or
 find and externally justify an exact annular boundary.
 
+The executable K34 cross-K regression gate is
+`tiles-maxxing/cuda-campaign-v2-sqrt-36/scripts/run_k34_regression_gate.sh`.
+It runs K34 snapshot smoke, K34 CPU/CUDA diff, and the observed shell sentinel
+(`SPANNING`, zero overflows). Treat it as implementation regression coverage,
+not mathematical truth.
+
 ## Verification Stack
 
 Use this order when judging campaign correctness:
 
 1. **External truth:** Tsuchimura's two-case K36 known-answer gate above.
-2. **Implementation equivalence:** CPU/CUDA snapshot parity for the same full-octant inputs, because verdict equality alone can hide wrong TileOps.
-3. **Fault localization:** `cuda_vs_cpu_diff --m4 --verbose` and `cuda_vs_cpu_diff --k5 --verbose` to find the first divergent internal surface, tile, or byte.
-4. **Regression tripwires:** CUDA golden JSON batches are cheap smoke checks. They are not mathematical proof, and because they are generated from CUDA debug output they must not outrank CPU parity, Tsuchimura, or the methodology.
+2. **Cross-K regression:** K34 regression gate above, when K34 support is in
+   scope. This is not external truth; it catches K-dependent implementation
+   drift and overflow pressure.
+3. **Implementation equivalence:** CPU/CUDA snapshot parity for the same full-octant inputs, because verdict equality alone can hide wrong TileOps.
+4. **Fault localization:** `cuda_vs_cpu_diff --m4 --verbose` and `cuda_vs_cpu_diff --k5 --verbose` to find the first divergent internal surface, tile, or byte.
+5. **Regression tripwires:** CUDA golden JSON batches are cheap smoke checks. They are not mathematical proof, and because they are generated from CUDA debug output they must not outrank CPU parity, Tsuchimura, or the methodology.
 
 If these layers disagree, stop and resolve the stronger layer first. Do not refresh goldens to bless a failing stronger gate.
 
