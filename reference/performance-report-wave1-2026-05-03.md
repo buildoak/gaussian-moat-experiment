@@ -113,6 +113,10 @@ previous complete-column batch.
 | Compositor cursor, chunk 200k | 284.002 | 283.135 |
 | Overflow summary, chunk 500k | 268.715 | 268.825 |
 | Overlap flag, chunk 500k | 179.721 | 180.464 |
+| Overlap repeat, chunk 500k | 179.350 | 180.194 |
+
+Repeat evidence used run directory:
+`/workspace/opt-wave1-overlap-repeat-20260503-004319`.
 
 ## Chunk Sweep
 
