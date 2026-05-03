@@ -14,7 +14,6 @@
 #include <map>
 #include <stdexcept>
 #include <string>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -67,8 +66,8 @@ struct StreamingCompositor::State {
   static constexpr std::uint8_t kReachInner = 0x1;
   static constexpr std::uint8_t kReachOuter = 0x2;
   static constexpr std::uint8_t kReachBoth = kReachInner | kReachOuter;
-  using GroupKey = std::uint64_t;
   using NodeId = std::uint32_t;
+  static constexpr NodeId kInvalidNode = std::numeric_limits<NodeId>::max();
 
   struct FrontierNode {
     std::int32_t j = 0;
@@ -82,7 +81,9 @@ struct StreamingCompositor::State {
   std::int32_t next_i = 0;
   std::int32_t last_frontier_i = 0;
   bool has_frontier_column = false;
-  std::unordered_map<GroupKey, NodeId> group_to_node;
+  std::int64_t current_group_base_index = 0;
+  std::size_t current_group_tile_count = 0;
+  std::vector<NodeId> current_group_nodes;
   std::vector<NodeId> parent;
   std::vector<std::uint8_t> reach;
   std::vector<TileOp> prev_column;
@@ -141,7 +142,25 @@ struct StreamingCompositor::State {
     }
   }
 
-  GroupKey global_group_id(std::int64_t tile_index, int group_label) const {
+  void begin_current_column_groups(std::int32_t i, std::size_t tile_count) {
+    current_group_nodes.clear();
+    current_group_base_index = 0;
+    current_group_tile_count = tile_count;
+    if (tile_count == 0) return;
+
+    if (tile_count >
+        std::numeric_limits<std::size_t>::max() / kGroupsPerTile) {
+      throw std::runtime_error("StreamingCompositor current group table too large");
+    }
+    const auto [jlo, jhi] = grid.column_bounds(i);
+    if (jhi < jlo) {
+      throw std::runtime_error("StreamingCompositor current column is empty");
+    }
+    current_group_base_index = checked_tile_index(i, jlo);
+    current_group_nodes.assign(tile_count * kGroupsPerTile, kInvalidNode);
+  }
+
+  void validate_group_ref(std::int64_t tile_index, int group_label) const {
     if (group_label == 0) {
       throw std::runtime_error(
           "TileOp group label is 0 (reserved zero-sentinel) in active port");
@@ -153,22 +172,28 @@ struct StreamingCompositor::State {
     if (tile_index < 0) {
       throw std::runtime_error("negative tile index in active port");
     }
-    const std::uint64_t tile = static_cast<std::uint64_t>(tile_index);
-    if (tile > (std::numeric_limits<GroupKey>::max() -
-                static_cast<std::uint64_t>(group_label - 1)) /
-                   kGroupsPerTile) {
-      throw std::runtime_error("global group id exceeds uint64_t");
-    }
-    return tile * kGroupsPerTile +
-           static_cast<std::uint64_t>(group_label - 1);
   }
 
   NodeId node_for_group(std::int64_t tile_index, int group_label) {
-    const GroupKey gid = global_group_id(tile_index, group_label);
-    auto it = group_to_node.find(gid);
-    if (it != group_to_node.end()) return it->second;
-    const NodeId node = make_node();
-    group_to_node.emplace(gid, node);
+    validate_group_ref(tile_index, group_label);
+    if (current_group_nodes.empty()) {
+      throw std::runtime_error("current group table is not initialized");
+    }
+    if (tile_index < current_group_base_index) {
+      throw std::runtime_error("current group tile precedes active column");
+    }
+    const auto local_tile =
+        static_cast<std::uint64_t>(tile_index - current_group_base_index);
+    if (local_tile >= current_group_tile_count) {
+      throw std::runtime_error("current group tile exceeds active column");
+    }
+    const std::size_t slot =
+        static_cast<std::size_t>(local_tile) * kGroupsPerTile +
+        static_cast<std::size_t>(group_label - 1);
+    NodeId& node = current_group_nodes[slot];
+    if (node == kInvalidNode) {
+      node = make_node();
+    }
     return node;
   }
 
@@ -303,14 +328,14 @@ struct StreamingCompositor::State {
 
   void compact_to_frontier(std::vector<FrontierNode> next_frontier) {
     if (next_frontier.empty()) {
-      group_to_node.clear();
+      current_group_nodes.clear();
+      current_group_tile_count = 0;
       parent.clear();
       reach.clear();
       frontier.clear();
       return;
     }
 
-    constexpr NodeId kInvalidNode = std::numeric_limits<NodeId>::max();
     std::vector<NodeId> root_to_compact(parent.size(), kInvalidNode);
     std::vector<NodeId> compact_parent;
     std::vector<std::uint8_t> compact_reach;
@@ -334,7 +359,8 @@ struct StreamingCompositor::State {
       entry.node = compact;
     }
 
-    group_to_node.clear();
+    current_group_nodes.clear();
+    current_group_tile_count = 0;
     parent = std::move(compact_parent);
     reach = std::move(compact_reach);
     frontier = std::move(next_frontier);
@@ -383,6 +409,7 @@ void StreamingCompositor::ingest_column(
   std::vector<TileOp> current_column(column_tileops.begin(),
                                      column_tileops.end());
   std::vector<TileCoord> current_coords = column_tiles;
+  state_->begin_current_column_groups(i, current_coords.size());
 
   for (std::size_t local = 0; local < current_coords.size(); ++local) {
     const TileCoord& coord = current_coords[local];
