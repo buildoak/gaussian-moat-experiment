@@ -48,6 +48,7 @@ left out of the branch state:
 | Direct column append with exact per-column `reserve` | Correctness passed, but forced repeated reallocations and stalled CPU-side before first GPU dispatch | Reworked without the per-column reserve |
 | K1 launch/register retuning | Smoke sweep tested `272/288/320` block sizes and `36/40/48` register caps; no variant beat the current `288`, maxrregcount `40` default on total time | Keep current default; retain knobs and guard |
 | Streaming compositor no-coordinate-vector refactor | Local tests, CUDA CTest, and diff probes passed; large-radius sample improved slightly, but full MOAT regressed versus dense-remap baseline (`146.779s` vs `146.502s`) | Reverted |
+| Streaming compositor reserve-only patch | Local compositor tests passed, but large-radius sample regressed versus dense-remap baseline (`83.972s` vs `83.338s`) | Reverted |
 
 ## Commands
 
@@ -297,6 +298,9 @@ Dense compositor remap Tsuchimura evidence used run directory:
 Rejected no-coordinate-vector compositor evidence used run directories:
 `/workspace/opt-wave1-compositor-no-coords2-r1100m-sample-20260503-033700`
 and `/workspace/opt-wave1-compositor-no-coords-tsuchimura-full-20260503-033947`.
+
+Rejected compositor reserve-only evidence used run directory:
+`/workspace/opt-wave1-compositor-reserve-r1100m-sample-20260503-034606`.
 
 ## CUDA Stage Timing
 
