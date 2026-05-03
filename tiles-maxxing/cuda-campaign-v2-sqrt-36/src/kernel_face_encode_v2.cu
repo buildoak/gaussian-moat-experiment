@@ -337,18 +337,17 @@ __global__ void kernel_face_encode_v2(
   }
   __syncthreads();
 
-  if (tid == 0 && tile_face_roots != nullptr && tile_face_reps != nullptr &&
-      tile_face_rep_counts != nullptr) {
-    for (int face_idx = 0; face_idx < NUM_FACES; ++face_idx) {
-      build_face_dsu_and_reps(
-          tile_prime_pos, tile_parent, tile_wire_label_by_raw_root,
-          static_cast<Face>(face_idx),
-          tile_face_indices + face_idx * FACE_INDEX_STRIDE,
-          tile_face_counts[face_idx],
-          tile_face_roots + face_idx * FACE_ROOT_STRIDE,
-          tile_face_reps + face_idx * FACE_REP_STRIDE,
-          tile_face_rep_counts + face_idx);
-    }
+  const int lane = tid & 31;
+  if (warp < NUM_FACES && lane == 0 && tile_face_roots != nullptr &&
+      tile_face_reps != nullptr && tile_face_rep_counts != nullptr) {
+    build_face_dsu_and_reps(
+        tile_prime_pos, tile_parent, tile_wire_label_by_raw_root,
+        static_cast<Face>(warp),
+        tile_face_indices + warp * FACE_INDEX_STRIDE,
+        tile_face_counts[warp],
+        tile_face_roots + warp * FACE_ROOT_STRIDE,
+        tile_face_reps + warp * FACE_REP_STRIDE,
+        tile_face_rep_counts + warp);
   }
 
   (void)d_coords;
