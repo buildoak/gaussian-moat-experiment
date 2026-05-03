@@ -8,6 +8,10 @@
 #include "cuda_campaign/campaign_constants.cuh"
 #include "cuda_campaign/gpu_math.cuh"
 
+#ifndef MR_BLOCK_THREADS
+#define MR_BLOCK_THREADS BLOCK_THREADS
+#endif
+
 namespace cuda_campaign {
 
 namespace {
@@ -46,14 +50,14 @@ __global__ void kernel_mr(const campaign::TileCoord* __restrict__ coords,
   std::uint32_t* tile_bitmap =
       d_bitmap + static_cast<std::size_t>(tile_idx) * BITMAP_WORDS;
 
-  for (int i = tid; i < BITMAP_WORDS; i += BLOCK_THREADS) {
+  for (int i = tid; i < BITMAP_WORDS; i += MR_BLOCK_THREADS) {
     tile_bitmap[i] = 0U;
   }
   __syncthreads();
 
   const int total_cands = static_cast<int>(d_total_cands[tile_idx]);
 
-  for (int i = tid; i < total_cands; i += BLOCK_THREADS) {
+  for (int i = tid; i < total_cands; i += MR_BLOCK_THREADS) {
     const std::uint32_t packed = tile_cand_list[i];
     const int cand_row = static_cast<int>(packed >> 16);
     const int cand_col = static_cast<int>(packed & 0xFFFFU);
@@ -96,7 +100,7 @@ void launch_kernel_mr(const campaign::TileCoord* d_coords,
                       const std::uint16_t* d_fj64_table,
                       int num_tiles,
                       cudaStream_t stream) {
-  kernel_mr<<<num_tiles, BLOCK_THREADS, 0, stream>>>(
+  kernel_mr<<<num_tiles, MR_BLOCK_THREADS, 0, stream>>>(
       d_coords, d_cand_list, d_total_cands, d_bitmap, d_fj64_table, num_tiles);
 }
 

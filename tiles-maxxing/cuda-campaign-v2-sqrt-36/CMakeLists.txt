@@ -8,6 +8,9 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "CUDA architectures")
 endif()
 
+set(MR_BLOCK_THREADS 256 CACHE STRING "CUDA threads per MR kernel block")
+set(MR_MAXRREGCOUNT "" CACHE STRING "Optional --maxrregcount value for kernel_mr.cu")
+
 project(cuda_campaign_v2_sqrt36 LANGUAGES CXX CUDA)
 
 find_package(Threads REQUIRED)
@@ -49,6 +52,7 @@ target_link_libraries(campaign_cuda
 target_compile_definitions(campaign_cuda
   PUBLIC
     K_SQ=${K_SQ}
+    MR_BLOCK_THREADS=${MR_BLOCK_THREADS}
 )
 set_target_properties(campaign_cuda PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
@@ -57,6 +61,11 @@ set_target_properties(campaign_cuda PROPERTIES
 set_source_files_properties(src/kernel_sieve.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=40"
 )
+if(NOT "${MR_MAXRREGCOUNT}" STREQUAL "")
+  set_source_files_properties(src/kernel_mr.cu PROPERTIES
+    COMPILE_FLAGS "--maxrregcount=${MR_MAXRREGCOUNT}"
+  )
+endif()
 set_source_files_properties(src/kernel_compact.cu PROPERTIES
   COMPILE_FLAGS "--maxrregcount=32"
 )
