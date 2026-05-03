@@ -3,7 +3,8 @@
 ## Context
 
 - Branch: `opt/performance-wave-1`
-- Candidate commit: `be610f1 Tune UF kernel block size`
+- Measured implementation commit: `be610f1 Tune UF kernel block size`
+- Current report commit before this update: `74bd1f0 Record UF block performance`
 - Baseline commit: `8d88f62 Expand performance optimization menu`
 - Hardware: Vast.ai RTX 4090, 24564 MiB
 - Driver / compiler: NVIDIA driver `560.35.03`, CUDA compiler `12.4.131`
@@ -23,9 +24,18 @@
 9. `7c52472 Optimize face representative extraction`
 10. `be610f1 Tune UF kernel block size`
 
-The dispatcher resource-persistence experiment was tested but not accepted:
-CUDA generation improved, but compositor timing regressed in the same run. It is
-preserved locally as stash `wip dispatcher resource persistence mixed perf`.
+## Rejected Experiments
+
+These were tested after the accepted UF block-size candidate and deliberately
+left out of the branch state:
+
+| Experiment | Result | Decision |
+|---|---|---|
+| Dispatcher resource persistence | CUDA generation improved, but compositor timing regressed in the same run | Preserved locally as stash `wip dispatcher resource persistence mixed perf` |
+| K1 split-prime `b_start mod p` precompute | CUDA CTest and diff probes passed, but legal smoke regressed to `9.590s` total / `6.503s` CUDA / `1.127s` K1 | Reverted |
+| UF read-only final find | CUDA CTest and diff probes passed; SPANNING full improved slightly to `148.913s`, but MOAT full regressed to `149.882s` | Reverted |
+| UF shared parent scratch | CUDA CTest and diff probes passed, but smoke UF regressed to about `1.032s` | Reverted |
+| Face packed-unpack micro | CUDA CTest and diff probes passed, but face encode regressed on smoke | Reverted |
 
 ## Commands
 
@@ -238,6 +248,9 @@ UF block-size sweep evidence used run directory:
 UF block-size gate evidence used run directory:
 `/workspace/opt-wave1-uf-block128-full-20260503-021501`.
 
+Larger-radius readiness sample evidence used run directory:
+`/workspace/opt-wave1-r1100m-sample-20260503-023454`.
+
 ## CUDA Stage Timing
 
 The profile schema now includes `cuda_stage_timings_seconds`. `--profile` no
@@ -271,6 +284,27 @@ Current bottleneck read: MR is still the largest CUDA kernel bucket, followed
 by K1 sieve, UF, then face encode. The overlapped full pipeline is now
 bounded by roughly `142s` CUDA generation and `90-91s` compositor ingestion, with
 the compositor mostly hidden behind the CUDA batch stream.
+
+## Larger Radius Readiness
+
+This is a narrow legal-annulus sample, not an external truth gate. It checks
+whether the current pipeline remains stable at a larger radius and whether
+overflow pressure appears before attempting wider, expensive bands.
+
+| Radius / width | Active tiles | Total seconds | Grid-init seconds | CUDA K1-K5 seconds | Compositor seconds | Pipeline tiles/s | Overflowed tiles |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| `R=1,100,000,000`, width `500` | 10,888,283 | 105.638 | 24.532 | 76.895 | 42.728 | 103,072 | 0 |
+
+Stage breakdown for this sample:
+
+| H2D | K1 sieve | MR | Compact | UF | Face encode | Face sort/pack | Overflow summary | D2H |
+|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| 0.027 | 15.462 | 33.340 | 0.295 | 8.951 | 5.997 | 0.757 | 0.003 | 0.160 |
+
+Read: overflow remains clean at this radius and throughput is stable at about
+`103k` pipeline tiles/s, but grid initialization is already `24.5s` on a narrow
+band. Grid creation should be inspected before committing rented GPU time to
+wide `R=1.1B+` campaigns.
 
 ## Chunk Sweep
 
@@ -311,6 +345,9 @@ Next high-leverage targets:
    launch/register tuning is exhausted for now.
 2. Revisit dispatcher resource persistence only after isolating why one run
    improved CUDA time but worsened compositor time.
-3. Inspect K1 next; it now accounts for about `22.0s` on full MOAT.
-4. Decide whether `--overlap-compositor` should become default after another
+3. Inspect grid initialization before wider large-radius campaigns; the
+   `R=1.1B`, width `500` sample spent `24.5s` there.
+4. Inspect K1 next; it now accounts for about `22.0s` on full MOAT and
+   `15.5s` on the `R=1.1B`, width `500` sample.
+5. Decide whether `--overlap-compositor` should become default after another
    verification repeat.
