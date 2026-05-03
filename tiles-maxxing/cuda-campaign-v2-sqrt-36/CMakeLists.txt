@@ -10,6 +10,7 @@ endif()
 
 set(MR_BLOCK_THREADS 256 CACHE STRING "CUDA threads per MR kernel block")
 set(MR_MAXRREGCOUNT "" CACHE STRING "Optional --maxrregcount value for kernel_mr.cu")
+set(FACE_ENCODE_BLOCK_THREADS 128 CACHE STRING "CUDA threads per face encode kernel block")
 
 project(cuda_campaign_v2_sqrt36 LANGUAGES CXX CUDA)
 
@@ -53,6 +54,7 @@ target_compile_definitions(campaign_cuda
   PUBLIC
     K_SQ=${K_SQ}
     MR_BLOCK_THREADS=${MR_BLOCK_THREADS}
+    FACE_ENCODE_BLOCK_THREADS=${FACE_ENCODE_BLOCK_THREADS}
 )
 set_target_properties(campaign_cuda PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON

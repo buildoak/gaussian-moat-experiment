@@ -5,6 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 
+#ifndef FACE_ENCODE_BLOCK_THREADS
+#define FACE_ENCODE_BLOCK_THREADS BLOCK_THREADS
+#endif
+
 namespace cuda_campaign {
 namespace {
 
@@ -191,42 +195,41 @@ __device__ void build_face_dsu_and_reps(
     face_roots[i] = face_dsu_find(face_roots, i);
   }
 
-  std::uint16_t rep_count = 0;
   for (std::uint16_t root = 0; root < face_count; ++root) {
-    bool have_rep = false;
-    std::int64_t best_h = 0;
-    std::int64_t best_perp = 0;
-    std::uint16_t best_prime_idx = 0;
-    std::uint8_t label = 0;
+    face_reps[root].prime_index = 0xffffU;
+  }
 
-    for (std::uint16_t k = 0; k < face_count; ++k) {
-      if (face_roots[k] != root) continue;
-      const std::uint16_t prime_idx = face_indices[k];
-      const std::uint32_t packed = tile_prime_pos[prime_idx];
-      const std::int64_t h = face_h_from_packed(packed, face);
-      const std::int64_t p_perp = face_perp_from_packed(packed, face);
-      if (!have_rep || h < best_h || (h == best_h && p_perp < best_perp)) {
-        have_rep = true;
-        best_h = h;
-        best_perp = p_perp;
-        best_prime_idx = prime_idx;
-        label = 0;
-        if (tile_parent != nullptr && tile_wire_label_by_raw_root != nullptr) {
-          const std::uint16_t raw_root = tile_parent[prime_idx];
-          const std::uint16_t wide_label =
-              tile_wire_label_by_raw_root[raw_root];
-          label = static_cast<std::uint8_t>(wide_label & 0xffU);
-        }
+  for (std::uint16_t k = 0; k < face_count; ++k) {
+    const std::uint16_t root = face_roots[k];
+    FaceRepresentative& best = face_reps[root];
+    const std::uint16_t prime_idx = face_indices[k];
+    const std::uint32_t packed = tile_prime_pos[prime_idx];
+    const std::int64_t h = face_h_from_packed(packed, face);
+    const std::int64_t p_perp = face_perp_from_packed(packed, face);
+    if (best.prime_index == 0xffffU || h < best.h ||
+        (h == best.h && p_perp < best.p_perp)) {
+      std::uint8_t label = 0;
+      if (tile_parent != nullptr && tile_wire_label_by_raw_root != nullptr) {
+        const std::uint16_t raw_root = tile_parent[prime_idx];
+        const std::uint16_t wide_label =
+            tile_wire_label_by_raw_root[raw_root];
+        label = static_cast<std::uint8_t>(wide_label & 0xffU);
       }
-    }
-
-    if (have_rep) {
-      face_reps[rep_count] = FaceRepresentative{
-          static_cast<std::int16_t>(best_h),
-          static_cast<std::int16_t>(best_perp),
-          best_prime_idx,
+      best = FaceRepresentative{
+          static_cast<std::int16_t>(h),
+          static_cast<std::int16_t>(p_perp),
+          prime_idx,
           label,
           0};
+    }
+  }
+
+  std::uint16_t rep_count = 0;
+  for (std::uint16_t root = 0; root < face_count; ++root) {
+    if (face_reps[root].prime_index != 0xffffU) {
+      if (rep_count != root) {
+        face_reps[rep_count] = face_reps[root];
+      }
       ++rep_count;
     }
   }
@@ -358,7 +361,7 @@ __global__ void kernel_face_encode_v2(
 void launch_kernel_face_encode_v2(const FaceEncodeBuffers& buffers,
                                   int num_tiles,
                                   cudaStream_t stream) {
-  kernel_face_encode_v2<<<num_tiles, BLOCK_THREADS, 0, stream>>>(
+  kernel_face_encode_v2<<<num_tiles, FACE_ENCODE_BLOCK_THREADS, 0, stream>>>(
       buffers.in.d_coords, buffers.in.d_prime_pos, buffers.in.d_prime_count,
       buffers.in.d_remap_overflow, buffers.in.d_parent,
       buffers.in.d_wire_label_by_raw_root, buffers.in.d_group_flags,
