@@ -9,6 +9,10 @@
 #include "cuda_campaign/gpu_math.cuh"
 #include "cuda_campaign/i128_sq_leq.cuh"
 
+#ifndef UF_BLOCK_THREADS
+#define UF_BLOCK_THREADS BLOCK_THREADS
+#endif
+
 namespace cuda_campaign {
 namespace {
 
@@ -210,17 +214,17 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
     if (d_overflow != nullptr) d_overflow[tile_idx] = prior_overflow ? 1 : 0;
   }
   if (tile_wire_label_by_raw_root != nullptr) {
-    for (int i = tid; i < MAX_PRIMES_GPU; i += BLOCK_THREADS) {
+    for (int i = tid; i < MAX_PRIMES_GPU; i += UF_BLOCK_THREADS) {
       tile_wire_label_by_raw_root[i] = 0;
     }
   }
   if (tile_prime_geo_bits != nullptr) {
-    for (int i = tid; i < MAX_PRIMES_GPU; i += BLOCK_THREADS) {
+    for (int i = tid; i < MAX_PRIMES_GPU; i += UF_BLOCK_THREADS) {
       tile_prime_geo_bits[i] = 0;
     }
   }
   if (tile_group_flags != nullptr) {
-    for (int i = tid; i < 256; i += BLOCK_THREADS) {
+    for (int i = tid; i < 256; i += UF_BLOCK_THREADS) {
       tile_group_flags[i] = 0;
     }
   }
@@ -239,12 +243,12 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
   const int bounded =
       prime_count < MAX_PRIMES_GPU ? prime_count : MAX_PRIMES_GPU;
 
-  for (int i = tid; i < bounded; i += BLOCK_THREADS) {
+  for (int i = tid; i < bounded; i += UF_BLOCK_THREADS) {
     tile_parent[i] = static_cast<std::uint16_t>(i);
   }
   __syncthreads();
 
-  for (int i = tid; i < bounded; i += BLOCK_THREADS) {
+  for (int i = tid; i < bounded; i += UF_BLOCK_THREADS) {
     const std::uint32_t packed = tile_prime_pos[i];
     const int row = static_cast<int>(packed / SIDE_EXP);
     const int col = static_cast<int>(packed % SIDE_EXP);
@@ -268,12 +272,12 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
   }
   __syncthreads();
 
-  for (int i = tid; i < bounded; i += BLOCK_THREADS) {
+  for (int i = tid; i < bounded; i += UF_BLOCK_THREADS) {
     tile_parent[i] = atomic_find_root(tile_parent, static_cast<std::uint16_t>(i));
   }
   __syncthreads();
 
-  for (int i = tid; i < bounded; i += BLOCK_THREADS) {
+  for (int i = tid; i < bounded; i += UF_BLOCK_THREADS) {
     const std::uint8_t bits =
         d_coords == nullptr
             ? 0
@@ -335,7 +339,7 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
     return;
   }
 
-  for (int i = tid; i < bounded; i += BLOCK_THREADS) {
+  for (int i = tid; i < bounded; i += UF_BLOCK_THREADS) {
     const std::uint16_t label = tile_wire_label_by_raw_root[tile_parent[i]];
     if (label == 0 || label > 256) {
       continue;
@@ -353,7 +357,7 @@ __global__ void kernel_uf_v2(const std::uint32_t* __restrict__ d_bitmap,
 void launch_kernel_uf_v2(const UfBuffers& buffers,
                          int num_tiles,
                          cudaStream_t stream) {
-  kernel_uf_v2<<<num_tiles, BLOCK_THREADS, 0, stream>>>(
+  kernel_uf_v2<<<num_tiles, UF_BLOCK_THREADS, 0, stream>>>(
       buffers.in.d_bitmap, buffers.in.d_row_prefix, buffers.in.d_prime_pos,
       buffers.in.d_prime_count, buffers.in.d_coords,
       buffers.in.d_prior_overflow, buffers.out.d_parent,
