@@ -23,10 +23,11 @@ namespace campaign {
 // ---------------------------------------------------------------------------
 
 // Step-squared bound K. Must be injected via CMake cache var (-DK_SQ=N).
-// Valid values in v2: 36 or 40. Other values compile but are outside the
+// Primary v2 values: 36 or 40. K_SQ=34 is also used as a Tsuchimura
+// cross-K verification gate. Other values compile but are outside the
 // BZ-verified regime; `bz_check.py` acts as the pre-build gate.
 #ifndef K_SQ
-#error "K_SQ must be defined via -DK_SQ=36 or -DK_SQ=40 at CMake time"
+#error "K_SQ must be defined via -DK_SQ=N at CMake time"
 #endif
 
 static_assert(K_SQ > 0, "K_SQ must be positive");

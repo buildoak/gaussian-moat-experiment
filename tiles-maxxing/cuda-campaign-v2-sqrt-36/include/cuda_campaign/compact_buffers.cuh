@@ -20,9 +20,12 @@ struct CompactBuffers {
 };
 
 static_assert(MAX_PRIMES_GPU >= 6144, "K3 compact capacity must be at least 6144");
-static_assert(ROW_PREFIX_ENTRIES == 270,
-              "K3 row-prefix stride changed; update downstream buffer sizing");
-static_assert(ROW_PREFIX_BYTES_PER_TILE == 540,
-              "K3 row-prefix byte budget changed");
+static_assert(ROW_PREFIX_ENTRIES == ACTIVE_ROWS + 1,
+              "K3 row-prefix stride must include one sentinel entry");
+static_assert(ROW_PREFIX_ENTRIES <= BLOCK_THREADS,
+              "K3 row-prefix scan expects one CUDA block to cover all rows plus sentinel");
+static_assert(ROW_PREFIX_BYTES_PER_TILE ==
+                  sizeof(std::uint16_t) * ROW_PREFIX_ENTRIES,
+              "K3 row-prefix byte budget must track stride");
 
 }  // namespace cuda_campaign
