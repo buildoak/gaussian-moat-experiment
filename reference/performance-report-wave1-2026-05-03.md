@@ -47,6 +47,7 @@ left out of the branch state:
 | Face packed-unpack micro | CUDA CTest and diff probes passed, but face encode regressed on smoke | Reverted |
 | Direct column append with exact per-column `reserve` | Correctness passed, but forced repeated reallocations and stalled CPU-side before first GPU dispatch | Reworked without the per-column reserve |
 | K1 launch/register retuning | Smoke sweep tested `272/288/320` block sizes and `36/40/48` register caps; no variant beat the current `288`, maxrregcount `40` default on total time | Keep current default; retain knobs and guard |
+| Streaming compositor no-coordinate-vector refactor | Local tests, CUDA CTest, and diff probes passed; large-radius sample improved slightly, but full MOAT regressed versus dense-remap baseline (`146.779s` vs `146.502s`) | Reverted |
 
 ## Commands
 
@@ -292,6 +293,10 @@ Dense compositor remap larger-radius sample evidence used run directory:
 
 Dense compositor remap Tsuchimura evidence used run directory:
 `/workspace/opt-wave1-compositor-dense-remap-tsuchimura-full-20260503-032726`.
+
+Rejected no-coordinate-vector compositor evidence used run directories:
+`/workspace/opt-wave1-compositor-no-coords2-r1100m-sample-20260503-033700`
+and `/workspace/opt-wave1-compositor-no-coords-tsuchimura-full-20260503-033947`.
 
 ## CUDA Stage Timing
 
