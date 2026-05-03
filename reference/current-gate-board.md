@@ -105,6 +105,15 @@ chosen annulus. K34 can become a strong gate only if we implement direct
 origin-component verification or obtain an exact externally justified annular
 boundary.
 
+The corrected outer-bound placement was also tested:
+
+| Case | Tiles | Total | CUDA K1-K5 | Compositor | Verdict | Overflow counters |
+|---|---:|---:|---:|---:|---|---|
+| `K_SQ=34`, `R_inner=24281260`, `R_outer=24289452` | `2,479,110` | `27.639s` | `22.5806s` | `4.08228s` | `SPANNING` | all zero |
+
+This means the earlier inner/outer placement was wrong, but fixing that
+placement still did not yield a K34 MOAT gate.
+
 ## K34 Cross-K Regression Gate
 
 This is accepted only as implementation regression coverage, not as external

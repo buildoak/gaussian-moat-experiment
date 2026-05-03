@@ -20,7 +20,8 @@ from the shell's inner boundary to its outer boundary. Those are not equivalent.
 
 ## Rejected Probe
 
-The candidate probe was:
+The first candidate probe incorrectly put Tsuchimura's reported upper bound on
+the inner boundary:
 
 ```bash
 ./build-k34/campaign_main_cuda \
@@ -42,6 +43,30 @@ Observed on the Vast RTX 4090 at commit `9e69542`:
 The zero overflow result is useful: K34 itself does not immediately stress the
 current capacities. The `SPANNING` verdict means this shell is not a cheap
 external truth gate.
+
+After review, the closer analogy to the K36 gate is to put Tsuchimura's upper
+bound on the outer boundary, not the inner boundary. That corrected candidate
+was also tested:
+
+```bash
+./build-k34/campaign_main_cuda \
+  --k-sq=34 \
+  --r-inner=24281260 \
+  --r-outer=24289452 \
+  --region full-octant \
+  --chunk-size=200000 \
+  --no-early-exit \
+  --timing
+```
+
+Observed on the Vast RTX 4090 at commit `6222ddf`:
+
+| Tiles | Total | CUDA K1-K5 | Compositor | Verdict | Overflow counters |
+|---:|---:|---:|---:|---|---|
+| `2,479,110` | `27.639s` | `22.5806s` | `4.08228s` | `SPANNING` | all zero |
+
+So the initial inner/outer placement was wrong, but correcting it did not
+produce a K34 MOAT gate.
 
 ## Why It Failed
 
