@@ -3,9 +3,9 @@
 ## Context
 
 - Branch: `opt/performance-wave-1`
-- Measured implementation commit: `62324c9 Optimize streaming compositor frontier remap`
-- Previous measured implementation commit: `be610f1 Tune UF kernel block size`
-- Previous report commit: `6193ffc Record larger-radius readiness sample`
+- Measured implementation commit: `c5151f2 Optimize streaming compositor group lookup`
+- Previous measured implementation commit: `62324c9 Optimize streaming compositor frontier remap`
+- Previous report commit: `59e2709 Record rejected compositor reserve patch`
 - Baseline commit: `8d88f62 Expand performance optimization menu`
 - Hardware: Vast.ai RTX 4090, 24564 MiB
 - Driver / compiler: NVIDIA driver `560.35.03`, CUDA compiler `12.4.131`
@@ -32,6 +32,8 @@
     `K1_BLOCK_THREADS < ACTIVE_ROWS`
 14. Replace streaming compositor frontier compaction's ordered root map with a
     dense `NodeId` remap vector
+15. Replace streaming compositor's global current-group hash map with a dense
+    per-current-column group table
 
 ## Rejected Experiments
 
@@ -196,6 +198,7 @@ done
 | Grid parallel gate | PASS | `/workspace/opt-wave1-grid-parallel-tsuchimura-full-20260503-025042`, Tsuchimura verdicts correct, zero overflows |
 | Direct column-append gate | PASS | `/workspace/opt-wave1-direct-append-tsuchimura-full-20260503-030730`, Tsuchimura verdicts correct, zero overflows |
 | Dense compositor remap gate | PASS | `/workspace/opt-wave1-compositor-dense-remap-tsuchimura-full-20260503-032726`, Tsuchimura verdicts correct, zero overflows |
+| Dense compositor group-table gate | PASS | `/workspace/opt-wave1-compositor-dense-groups-tsuchimura-full-20260503-035240` plus MOAT repeat `/workspace/opt-wave1-compositor-dense-groups-moat-repeat-20260503-035751`, Tsuchimura verdicts correct, zero overflows |
 
 ## Full-Run Timing
 
@@ -204,14 +207,14 @@ chunk `500000` and `--overlap-compositor`.
 
 | Case | Metric | Baseline | Candidate | Delta |
 |---|---|---:|---:|---:|
-| SPANNING full | total seconds | 342.003 | 147.171 | -57.0% |
-| SPANNING full | CUDA K1-K5 seconds | 180.726 | 141.854 | -21.5% |
-| SPANNING full | compositor seconds | 155.930 | 68.903 | -55.8% |
-| SPANNING full | pipeline tiles/s | 45,160 | 104,945 | +132.4% |
-| MOAT full | total seconds | 424.070 | 146.502 | -65.5% |
-| MOAT full | CUDA K1-K5 seconds | 176.305 | 141.140 | -19.9% |
-| MOAT full | compositor seconds | 242.593 | 68.905 | -71.6% |
-| MOAT full | pipeline tiles/s | 36,439 | 105,477 | +189.5% |
+| SPANNING full | total seconds | 342.003 | 145.638 | -57.4% |
+| SPANNING full | CUDA K1-K5 seconds | 180.726 | 141.570 | -21.7% |
+| SPANNING full | compositor seconds | 155.930 | 24.651 | -84.2% |
+| SPANNING full | pipeline tiles/s | 45,160 | 106,050 | +134.8% |
+| MOAT full | total seconds | 424.070 | 145.339 | -65.7% |
+| MOAT full | CUDA K1-K5 seconds | 176.305 | 141.277 | -19.9% |
+| MOAT full | compositor seconds | 242.593 | 24.366 | -90.0% |
+| MOAT full | pipeline tiles/s | 36,439 | 106,321 | +191.8% |
 
 The final total is lower than `cuda_k1_k5 + compositor` because
 `--overlap-compositor` runs one GPU batch ahead while the main thread ingests the
@@ -235,6 +238,7 @@ previous complete-column batch.
 | Parallel grid build, chunk 500k | 147.796 | 148.148 |
 | Direct column append, chunk 500k | 147.894 | 146.942 |
 | Dense compositor remap, chunk 500k | 147.171 | 146.502 |
+| Dense compositor group table, chunk 500k | 145.638 | 145.339 |
 
 Repeat evidence used run directory:
 `/workspace/opt-wave1-overlap-repeat-20260503-004319`.
@@ -294,6 +298,15 @@ Dense compositor remap larger-radius sample evidence used run directory:
 
 Dense compositor remap Tsuchimura evidence used run directory:
 `/workspace/opt-wave1-compositor-dense-remap-tsuchimura-full-20260503-032726`.
+
+Dense compositor group-table larger-radius sample evidence used run directory:
+`/workspace/opt-wave1-compositor-dense-groups-r1100m-sample-20260503-034950`.
+
+Dense compositor group-table Tsuchimura evidence used run directory:
+`/workspace/opt-wave1-compositor-dense-groups-tsuchimura-full-20260503-035240`.
+
+Dense compositor group-table MOAT repeat evidence used run directory:
+`/workspace/opt-wave1-compositor-dense-groups-moat-repeat-20260503-035751`.
 
 Rejected no-coordinate-vector compositor evidence used run directories:
 `/workspace/opt-wave1-compositor-no-coords2-r1100m-sample-20260503-033700`
@@ -359,10 +372,17 @@ vector indexed by dense `NodeId` roots instead of an ordered map. This preserves
 first-seen frontier compact ordering while removing tree lookups from the hot
 compaction path. Full MOAT compositor time drops to `68.905s`.
 
+After the dense compositor group-table candidate, the current-column group
+lookup uses a dense vector slot:
+`(tile_index - current_group_base_index) * 128 + group_label - 1`. This is valid
+because current-column nodes are either compacted into the frontier after the
+column or discarded. Previous-column stitching still goes through frontier
+nodes. Full MOAT repeat compositor time drops to `24.366s`.
+
 Current bottleneck read: MR is still the largest CUDA kernel bucket, followed
-by K1 sieve, UF, then face encode. The overlapped full pipeline is now
-bounded by roughly `142s` CUDA generation and `90-91s` compositor ingestion, with
-the compositor mostly hidden behind the CUDA batch stream.
+by K1 sieve, UF, then face encode. The overlapped full pipeline is now bounded
+by roughly `141s` CUDA generation; compositor ingestion is mostly hidden behind
+the CUDA batch stream and no longer dominates host-side runtime.
 
 ## Larger Radius Readiness
 
@@ -377,6 +397,7 @@ overflow pressure appears before attempting wider, expensive bands.
 | `R=1,100,000,000`, width `500` | Parallel grid build | 10,888,283 | 86.152 | 2.508 | 79.397 | 42.429 | 126,384 | 0 |
 | `R=1,100,000,000`, width `500` | Direct column append | 10,888,283 | 84.213 | 2.645 | 77.348 | 42.801 | 129,294 | 0 |
 | `R=1,100,000,000`, width `500` | Dense compositor remap | 10,888,283 | 83.338 | 2.569 | 76.878 | 35.225 | 130,652 | 0 |
+| `R=1,100,000,000`, width `500` | Dense compositor group table | 10,888,283 | 82.570 | 2.670 | 77.020 | 13.546 | 131,867 | 0 |
 
 Stage breakdown:
 
@@ -388,12 +409,13 @@ Stage breakdown:
 | Dense compositor remap | 0.026 | 15.468 | 33.344 | 0.295 | 8.953 | 6.002 | 0.757 | 0.003 | 0.154 |
 
 Read: overflow remains clean at this radius and throughput is stable at about
-`130k` pipeline tiles/s after dense compositor remap. The interval-only I4
-change was correctness-preserving but not performance-material by itself; the
-large grid win comes from computing independent column towers in parallel before
-the deterministic prefix-sum pass. Direct column append adds a smaller host-loop
-win by eliminating per-column temporary vector allocation. Dense compositor
-remap cuts frontier compaction overhead without changing TileOp math.
+`132k` pipeline tiles/s after the dense compositor group table. The
+interval-only I4 change was correctness-preserving but not performance-material
+by itself; the large grid win comes from computing independent column towers in
+parallel before the deterministic prefix-sum pass. Direct column append adds a
+smaller host-loop win by eliminating per-column temporary vector allocation.
+Dense compositor remap cuts frontier compaction overhead, and the dense group
+table cuts the hot current-group lookup without changing TileOp math.
 
 ## Chunk Sweep
 
@@ -421,6 +443,9 @@ chunks; smaller chunks avoid extra produced tiles before early exit.
   sequence as `Grid::enumerate_column_tiles()` for non-sparse tower grids.
 - Frontier compaction: dense remap preserves first-seen compact component order
   because entries are still processed in `next_frontier` order.
+- Current-group lookup: dense current-column group table preserves per-tile
+  group identity inside a column; previous-column stitching still uses frontier
+  nodes, not stale global group ids.
 - Snapshot mode affected: overlap is rejected with snapshot mode; serial
   snapshot SHA smoke passed.
 - Byte layout affected: no TileOp layout changes.
@@ -434,9 +459,10 @@ parallelization, profile-only CUDA stage timing attribution, and the
 K1-presieved MR primality path, the MR 256-thread launch default, and one-pass
 face representative extraction, the UF 128-thread launch default, and the
 parallel grid tower build with interval-boundary I4 verification, and direct
-column append for CUDA batch assembly, and dense streaming-compositor frontier
-root remapping. Keep K1 at `288` threads and `--maxrregcount=40`, with explicit
-build knobs for future sweeps.
+column append for CUDA batch assembly, dense streaming-compositor frontier root
+remapping, and dense streaming-compositor current-group lookup. Keep K1 at
+`288` threads and `--maxrregcount=40`, with explicit build knobs for future
+sweeps.
 
 Next high-leverage targets:
 
