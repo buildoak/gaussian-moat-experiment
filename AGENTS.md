@@ -26,6 +26,7 @@ The project is restarting from the mathematical methodology plus a heavily revie
 | `agents-directives/experiment-contract.md` | Operational contract for CUDA experiments, validation gates, golden usage, and performance reports. |
 | `reference/` | Current operational reference docs for gates, optimization workflow, pre-push checks, and history cleanup. Every durable workflow doc here should be named from the job it gates. |
 | `reference/current-gate-board.md` | Current baseline/verified commits, exact required gates, Tsuchimura commands, and baseline performance numbers. Read before optimization work. |
+| `reference/sqrt34-gate-feasibility.md` | Feasibility note for the rejected K34 annulus gate and what would be required for a real K34 external truth gate. |
 | `reference/agentic-optimization-workflow.md` | Long-running agent workflow for optimization branches: preflight, post-correctness, and post-performance reporting. |
 | `reference/optimization-safety-checklist.md` | Do-not-break checklist for math/TileOp/port/verdict semantics during optimization. |
 | `reference/performance-report-template.md` | Required report shape for before/after profile JSON and timing evidence. |
