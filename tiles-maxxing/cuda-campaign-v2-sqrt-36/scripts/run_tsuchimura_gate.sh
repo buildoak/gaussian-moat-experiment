@@ -213,19 +213,13 @@ run_case() {
   [[ "$verdict" == "$expected" ]] ||
     die "$label verdict mismatch: expected $expected, got $verdict; log: $log"
 
-  if [[ "$full_mode" -eq 1 || "$expected" == "MOAT" ]]; then
-    require_zero_overflows "$output"
-  fi
+  require_zero_overflows "$output"
 
   if [[ "$timing" -eq 1 ]]; then
     elapsed=$((end_time - start_time))
     echo "tsuchimura-gate: $label elapsed=${elapsed}s"
   fi
-  if [[ "$full_mode" -eq 1 || "$expected" == "MOAT" ]]; then
-    echo "tsuchimura-gate: PASS $label verdict=$verdict overflows=0"
-  else
-    echo "tsuchimura-gate: PASS $label verdict=$verdict"
-  fi
+  echo "tsuchimura-gate: PASS $label verdict=$verdict overflows=0"
 }
 
 echo "tsuchimura-gate: K=$k_sq R_inner=$r_inner region=$region chunk_size=$chunk_size"

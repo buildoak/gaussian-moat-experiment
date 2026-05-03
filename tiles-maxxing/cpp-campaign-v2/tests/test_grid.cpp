@@ -75,6 +75,19 @@ TEST(Grid, TinyRadiiBuildsNonEmpty) {
   EXPECT_LE(g.i_min, g.i_max) << "i_min must be <= i_max for a non-empty grid";
 }
 
+TEST(Grid, AxisPrimeRadiusStartsAtColumnZero) {
+  static_assert(campaign::OFFSET_X == 0);
+  static_assert(campaign::OFFSET_Y == 0);
+  auto g = campaign::Grid::build(10, 11, campaign::k_sq_value);
+  ASSERT_GE(g.total_tiles, 1);
+  EXPECT_EQ(g.i_min, 0);
+  const auto tiles = g.enumerate_active_tiles();
+  const auto it = std::find_if(tiles.begin(), tiles.end(), [](const auto& t) {
+    return t.i == 0 && t.j == 0 && t.a_lo == 0 && t.b_lo == 0;
+  });
+  EXPECT_NE(it, tiles.end());
+}
+
 TEST(Grid, AllEnumeratedTilesAreInOctant) {
   auto g = campaign::Grid::build(kRinner, kRouter, campaign::k_sq_value);
   const auto tiles = g.enumerate_active_tiles();

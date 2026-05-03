@@ -10,10 +10,10 @@
 
 namespace campaign {
 
-// Axis-prime emission relies on the halo at column i=0 reaching x=0.
+// Axis-prime emission relies on column i=0 reaching x=0.
 // Concretely: `a_begin(i) = coord.a_lo - C = (OFFSET_X + S*i) - C`.
-// For a=0 to be reachable at i=0 we need `OFFSET_X - C <= 0` i.e.
-// `OFFSET_X <= C`. At K_SQ∈{36,40} we have C=6, OFFSET_X=1 — safe.
+// Canonical OFFSET_X=0 proper-owns the axis; the `OFFSET_X <= C` guard also
+// prevents future offset changes from moving x=0 outside the i=0 halo.
 // Audit rec (4): guard the contingency at compile time so future
 // offset/halo changes cannot silently drop axis-prime emission.
 static_assert(OFFSET_X >= 0,

@@ -49,10 +49,10 @@ inline constexpr int S = 256;
 inline constexpr int TILEOP_SIZE = 256;
 static_assert(TILEOP_SIZE == 256, "TileOp wire size is fixed at 256 bytes");
 
-// Grid offset. (1, 1) per blueprint §4.1 — sidesteps BACKLOG B1 axis-boundary
-// active-tile ambiguity at zero structural cost.
-inline constexpr int OFFSET_X = 1;
-inline constexpr int OFFSET_Y = 1;
+// Canonical grid offset. Keeping the octant axes on column/row zero means
+// axis primes are proper-owned by nonnegative active tiles, matching Lemma 6.
+inline constexpr int OFFSET_X = 0;
+inline constexpr int OFFSET_Y = 0;
 
 // Per-tile compacted-prime capacity inherited from the CUDA worker.
 // Upper bound on the number of Gaussian primes any tile's halo-expanded

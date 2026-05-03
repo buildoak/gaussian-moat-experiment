@@ -7,7 +7,7 @@ Non-blocking items surfaced while pressure-testing the canonical math source of 
 
 ## 2026-04-19 — initial pass (B1–B10)
 
-**B1. Active-tile definition at the axis boundary.** With canonical `o_x = 0`, column `−1` can register as "active" via the shared `x = 0` edge primes under the closed-interval proper-region convention. Harmless in practice (face_L strip is empty, side-exposed side is handled by Theorem 12), but the `i_min = 0` claim needs tightening — either mandate `o_x ≥ 1` in §Tower tiling, or refine "active" to exclude shared-boundary-only columns.
+**B1. Active-tile definition at the axis boundary.** With canonical `o_x = 0`, column `−1` can register as "active" via the shared `x = 0` edge primes under the closed-interval proper-region convention. Harmless in practice (face_L strip is empty, side-exposed side is handled by Theorem 12), but the `i_min = 0` claim needs tightening — refine "active" to exclude shared-boundary-only columns. Implementation note: as of the zero-offset alignment fix, code keeps `o_x = o_y = 0` and has an axis regression proving inert axis primes are proper-owned by column zero.
 
 **B2. Lemma 3's inline `[NOTE]` about G_full breadth.** The connectivity claim in the Lemma 3 Corollary is stated "over G_full" but only `G_facestrip_f`-connectivity is used downstream. Simplification opportunity, not a bug.
 
