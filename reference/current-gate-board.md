@@ -1,19 +1,17 @@
 # Current Gate Board
 
-Updated: 2026-05-02 after large-history cleanup.
+Updated: 2026-05-03 after zero-offset axis-alignment verification.
 
 ## Baseline
 
-- Current local main: the commit containing this gate-board update.
-- Verified implementation commit after history rewrite: `bdb4b0a Fix dispatcher reuse test fixture size`.
-- Verification record after history rewrite: `952bd3e Record Vast 4090 verification results`.
-- Verification note: `tiles-maxxing/cuda-campaign-v2-sqrt-36/planning/2026-05-02-vast-4090-verification.md`.
-- Verified hardware: Vast contract `36017558`, RTX 4090, driver `580.126.09`, CUDA `12.4.131`.
+- Current branch: `fix/zero-offset-axis-alignment`.
+- Verified implementation commit: `102b367 Align grid offset with canonical axis ownership`.
+- Current documentation commit containing this board update: the commit containing this edit.
+- Verified hardware: Vast RTX 4090 at `/workspace/gaussian-moat-cuda-timing`, CUDA architecture `89`.
 
-`952bd3e` only records the verification result. The code verified on Vast was
-`bdb4b0a`; later branches should treat the verification note as provenance, not
-as a code change. These hashes are post-filter-repo hashes; the backup bundle
-preserves the original pre-filter hashes.
+The code verified on Vast was `102b367`. The later `b256987` commit only
+documents the chunk-size benchmark contract in `AGENTS.md`; no compiled source
+changed between the verified implementation and that documentation commit.
 
 ## Required Gates
 
@@ -68,19 +66,31 @@ Expected:
 
 | Case | Mode | Verdict | Overflow counters |
 |---|---|---|---|
-| `R_inner=80000000`, `R_outer=80015782` | early exit | `SPANNING` | zero expected |
+| `R_inner=80000000`, `R_outer=80015782` | early exit | `SPANNING` | zero required |
 | `R_inner=80000000`, `R_outer=80015782` | `--no-early-exit` | `SPANNING` | zero required |
 | `R_inner=80000000`, `R_outer=80015790` | `--no-early-exit` | `MOAT` | zero required |
 
 ## Baseline Performance
 
-Vast RTX 4090 baseline, chunk `200000`:
+Vast RTX 4090 zero-offset baseline, chunk `200000`, snapshot disabled:
 
-| Case | Total | CUDA K1-K5 | Compositor | Full pipeline |
-|---|---:|---:|---:|---:|
-| early `80015782` SPANNING | `42.183s` | `25.936s` | `14.425s` | `39.0k tiles/s` |
-| full `80015782` SPANNING | `353.998s` | `221.996s` | `128.225s` | `43.6k tiles/s` |
-| full `80015790` MOAT | `353.263s` | `221.979s` | `127.488s` | `43.7k tiles/s` |
+| Case | Produced / ingested tiles | App batches | Total | CUDA K1-K5 | Compositor | Full pipeline |
+|---|---:|---:|---:|---:|---:|---:|
+| early `80015782` SPANNING | `1,799,777 / 1,644,732` | `9` | `19.859s` | `16.332s` | `2.590s` | `82.8k ingested tiles/s` |
+| full `80015782` SPANNING | `15,444,897 / 15,444,897` | `78` | `169.567s` | `141.977s` | `23.771s` | `91.1k tiles/s` |
+| full `80015790` MOAT | `15,452,696 / 15,452,696` | `78` | `170.945s` | `143.251s` | `23.891s` | `90.4k tiles/s` |
+
+Stage throughput for full cases:
+
+| Case | CUDA K1-K5 | Compositor |
+|---|---:|---:|
+| full `80015782` SPANNING | `108.8k tiles/s` | `649.7k tiles/s` |
+| full `80015790` MOAT | `107.9k tiles/s` | `646.8k tiles/s` |
+
+Small chunks such as `8192` are useful streaming stress tests but are not the
+performance baseline. The 2026-05-03 zero-offset stress run with chunk `8192`
+passed all Tsuchimura cases with zero overflows, but full-pipeline throughput
+was about `54k tiles/s` because it used about `1,895` app batches.
 
 Optimization branches must report before/after profile JSON, command lines,
 hardware, commit, and whether each gate above passed.
