@@ -72,7 +72,7 @@ Expected:
 
 ## Baseline Performance
 
-Vast RTX 4090 zero-offset baseline, chunk `200000`, snapshot disabled:
+Vast RTX 4090 zero-offset correctness gate, chunk `200000`, snapshot disabled:
 
 | Case | Produced / ingested tiles | App batches | Total | CUDA K1-K5 | Compositor | Full pipeline |
 |---|---:|---:|---:|---:|---:|---:|
@@ -86,6 +86,19 @@ Stage throughput for full cases:
 |---|---:|---:|
 | full `80015782` SPANNING | `108.8k tiles/s` | `649.7k tiles/s` |
 | full `80015790` MOAT | `107.9k tiles/s` | `646.8k tiles/s` |
+
+Optimized full-pipeline MOAT spot check with `--overlap-compositor`, same
+zero-offset build and hardware:
+
+| Chunk size | App batches | Total | CUDA K1-K5 | Compositor | Full pipeline |
+|---:|---:|---:|---:|---:|---:|
+| `400000` | `39` | `142.827s` | `138.556s` | `24.916s` | `108.2k tiles/s` |
+| `500000` | `31` | `144.160s` | `140.062s` | `24.560s` | `107.2k tiles/s` |
+
+Both runs returned `MOAT` for `R_outer=80015790` with all overflow counters
+zero. `400000` did not OOM and was slightly faster in this single current-build
+spot check; treat it as the provisional optimized chunk size until a repeated
+sweep confirms variance.
 
 Small chunks such as `8192` are useful streaming stress tests but are not the
 performance baseline. The 2026-05-03 zero-offset stress run with chunk `8192`

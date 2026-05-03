@@ -89,8 +89,11 @@ CUDA `--chunk-size` changes both streaming pressure and throughput. Treat it as
 part of the benchmark contract, not an incidental flag.
 
 - Use the default Tsuchimura gate chunk size (`200000` unless the script changes)
-  for the accepted performance baseline. This is the optimized full-pipeline
-  mode and should be used for apples-to-apples tiles/second comparisons.
+  for conservative correctness gates and apples-to-apples script comparisons.
+- For accepted performance baselines, measure the optimized full-pipeline mode
+  separately. As of the 2026-05-03 zero-offset run on RTX 4090, that means
+  `--overlap-compositor` plus a large chunk around `400000` to `500000`; the
+  measured MOAT case was slightly faster at `400000`.
 - Use small chunks such as `8192` for streaming stress/correctness tests. They
   create many more app batches and intentionally expose batching/early-exit
   issues, but they are not the performance baseline.
