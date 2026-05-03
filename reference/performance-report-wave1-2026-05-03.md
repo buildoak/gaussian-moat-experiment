@@ -3,7 +3,7 @@
 ## Context
 
 - Branch: `opt/performance-wave-1`
-- Candidate commit: `efe2a67 Add optional compositor overlap pipeline`
+- Candidate commit: `c55b631 Parallelize face representative encoding`
 - Baseline commit: `8d88f62 Expand performance optimization menu`
 - Hardware: Vast.ai RTX 4090, 24564 MiB
 - Driver / compiler: NVIDIA driver `560.35.03`, CUDA compiler `12.4.131`
@@ -16,6 +16,7 @@
 2. `39ed27c Optimize streaming compositor column lookups`
 3. `f46f123 Summarize overflow stats on device`
 4. `efe2a67 Add optional compositor overlap pipeline`
+5. `c55b631 Parallelize face representative encoding`
 
 The dispatcher resource-persistence experiment was tested but not accepted:
 CUDA generation improved, but compositor timing regressed in the same run. It is
@@ -88,18 +89,18 @@ done
 ## Full-Run Timing
 
 Baseline was commit `8d88f62` with chunk `200000`. The final candidate was
-commit `efe2a67` with chunk `500000` and `--overlap-compositor`.
+commit `c55b631` with chunk `500000` and `--overlap-compositor`.
 
 | Case | Metric | Baseline | Candidate | Delta |
 |---|---|---:|---:|---:|
-| SPANNING full | total seconds | 342.003 | 179.721 | -47.5% |
-| SPANNING full | CUDA K1-K5 seconds | 180.726 | 172.335 | -4.6% |
-| SPANNING full | compositor seconds | 155.930 | 91.022 | -41.6% |
-| SPANNING full | pipeline tiles/s | 45,160 | 85,938 | +90.3% |
-| MOAT full | total seconds | 424.070 | 180.464 | -57.4% |
-| MOAT full | CUDA K1-K5 seconds | 176.305 | 173.086 | -1.8% |
-| MOAT full | compositor seconds | 242.593 | 91.275 | -62.4% |
-| MOAT full | pipeline tiles/s | 36,439 | 85,624 | +135.0% |
+| SPANNING full | total seconds | 342.003 | 168.540 | -50.7% |
+| SPANNING full | CUDA K1-K5 seconds | 180.726 | 161.280 | -10.8% |
+| SPANNING full | compositor seconds | 155.930 | 93.195 | -40.2% |
+| SPANNING full | pipeline tiles/s | 45,160 | 91,639 | +102.9% |
+| MOAT full | total seconds | 424.070 | 169.173 | -60.1% |
+| MOAT full | CUDA K1-K5 seconds | 176.305 | 161.776 | -8.2% |
+| MOAT full | compositor seconds | 242.593 | 91.181 | -62.4% |
+| MOAT full | pipeline tiles/s | 36,439 | 91,342 | +150.7% |
 
 The final total is lower than `cuda_k1_k5 + compositor` because
 `--overlap-compositor` runs one GPU batch ahead while the main thread ingests the
@@ -114,9 +115,13 @@ previous complete-column batch.
 | Overflow summary, chunk 500k | 268.715 | 268.825 |
 | Overlap flag, chunk 500k | 179.721 | 180.464 |
 | Overlap repeat, chunk 500k | 179.350 | 180.194 |
+| Face reps parallel, chunk 500k | 168.540 | 169.173 |
 
 Repeat evidence used run directory:
 `/workspace/opt-wave1-overlap-repeat-20260503-004319`.
+
+Face-representative parallelization evidence used run directory:
+`/workspace/opt-wave1-face-parallel-20260503-005905`.
 
 ## Chunk Sweep
 
@@ -145,14 +150,16 @@ chunks; smaller chunks avoid extra produced tiles before early exit.
 
 ## Decision
 
-Accept the compositor cursor lookup, device-side overflow summary, and explicit
-`--overlap-compositor` app-level pipeline.
+Accept the compositor cursor lookup, device-side overflow summary, explicit
+`--overlap-compositor` app-level pipeline, and face representative
+parallelization.
 
 Next high-leverage targets:
 
-1. Revisit dispatcher resource persistence only after isolating why one run
+1. Add per-kernel CUDA event timing before deeper K5/MR/UF surgery.
+2. Revisit dispatcher resource persistence only after isolating why one run
    improved CUDA time but worsened compositor time.
-2. CUDA face extraction / encoding inspection after overlap/readback barriers
-   are exhausted.
-3. Decide whether `--overlap-compositor` should become default after another
+3. CUDA face extraction / encoding follow-ups: reduce packed-position divides
+   and make sort/pack count-aware, gated by K5 byte parity.
+4. Decide whether `--overlap-compositor` should become default after another
    verification repeat.
