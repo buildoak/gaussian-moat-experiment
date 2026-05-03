@@ -221,9 +221,14 @@ echo "k34-regression-gate: cuda_vs_cpu_diff M4+K5 parity"
   --r-inner "$r_inner" \
   --r-outer "$r_outer" \
   --m4 \
-  --k5 \
   --verbose \
   --limit 16 | tee "$work_dir/cuda_vs_cpu_diff.log"
+"$diff_bin" \
+  --r-inner "$r_inner" \
+  --r-outer "$r_outer" \
+  --k5 \
+  --verbose \
+  --limit 16 | tee "$work_dir/cuda_vs_cpu_diff_k5.log"
 
 log="$work_dir/R24289452_shell_spanning.log"
 profile="$work_dir/R24289452_shell_spanning.profile.json"

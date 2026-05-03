@@ -382,43 +382,42 @@ campaign::TileOp build_k5_cpu_tileop_from_gpu_order(
 
 M4ExpectedTile build_m4_expected_tile(
     const std::vector<campaign::Prime>& primes,
-    const std::vector<std::int32_t>& parent,
-    const campaign::CampaignConstants& constants) {
+    const campaign::CampaignConstants& constants,
+    const campaign::TileCoord& coord) {
   M4ExpectedTile out;
   out.prime_geo_bits.assign(cuda_campaign::MAX_PRIMES_GPU, 0);
   out.wire_label_by_raw_root.assign(cuda_campaign::MAX_PRIMES_GPU, 0);
   out.group_flags.assign(256U, 0);
 
+  std::vector<campaign::internal::PrimeGeoFlags> flags;
+  flags.reserve(primes.size());
   for (std::size_t i = 0; i < primes.size(); ++i) {
     out.prime_geo_bits[i] = prime_geo_bits(primes[i], constants);
+    flags.push_back(campaign::internal::PrimeGeoFlags{
+        (out.prime_geo_bits[i] & 0x1U) != 0,
+        (out.prime_geo_bits[i] & 0x2U) != 0,
+    });
   }
 
-  std::uint16_t next_label = 1;
-  for (std::size_t i = 0; i < parent.size(); ++i) {
-    const std::int32_t raw_root = parent[i];
-    if (raw_root < 0 ||
-        raw_root >= static_cast<std::int32_t>(out.wire_label_by_raw_root.size())) {
-      throw std::runtime_error("CPU parent root outside CUDA raw-root range");
-    }
-    std::uint16_t& label =
-        out.wire_label_by_raw_root[static_cast<std::size_t>(raw_root)];
-    if (label != 0) continue;
-    if (next_label > cuda_campaign::MAX_GROUPS_PER_TILE) {
-      out.overflow = 1;
-      break;
-    }
-    label = next_label;
-    ++next_label;
-  }
+  campaign::DSU dsu = campaign::internal::build_local_dsu(primes);
+  const campaign::internal::DenseRemap remap =
+      campaign::internal::dense_remap_visible_roots(&dsu, primes, flags, coord);
 
-  out.max_label = static_cast<std::uint16_t>(next_label - 1);
+  out.overflow = remap.overflow ? 1U : 0U;
+  out.max_label = static_cast<std::uint16_t>(remap.max_label);
+  for (std::size_t raw_root = 0;
+       raw_root < remap.wire_label_by_raw_root.size(); ++raw_root) {
+    out.wire_label_by_raw_root[raw_root] =
+        remap.wire_label_by_raw_root[raw_root];
+  }
   if (out.overflow != 0) {
     return out;
   }
 
-  for (std::size_t i = 0; i < parent.size(); ++i) {
+  for (std::size_t i = 0; i < primes.size(); ++i) {
+    const std::int32_t raw_root = dsu.find(static_cast<std::int32_t>(i));
     const std::uint16_t label =
-        out.wire_label_by_raw_root[static_cast<std::size_t>(parent[i])];
+        out.wire_label_by_raw_root[static_cast<std::size_t>(raw_root)];
     if (label == 0) continue;
     out.group_flags[static_cast<std::size_t>(label - 1)] |=
         out.prime_geo_bits[i] & 0x3U;
@@ -543,11 +542,8 @@ int main(int argc, char** argv) {
       if (options.m4) {
         const std::vector<campaign::Prime> gpu_ordered_primes =
             gpu_compact_primes(coord, gpu, batch_idx, gpu_count);
-        const std::vector<std::int32_t> gpu_ordered_cpu_parent =
-            cpu_parent_roots(gpu_ordered_primes);
         const M4ExpectedTile expected =
-            build_m4_expected_tile(gpu_ordered_primes, gpu_ordered_cpu_parent,
-                                   constants);
+            build_m4_expected_tile(gpu_ordered_primes, constants, coord);
         const std::size_t prime_offset =
             batch_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU);
         const std::size_t group_offset = batch_idx * 256U;

@@ -114,6 +114,12 @@ The corrected outer-bound placement was also tested:
 This means the earlier inner/outer placement was wrong, but fixing that
 placement still did not yield a K34 MOAT gate.
 
+The centered placement was tested as well:
+
+| Case | Tiles | Total | CUDA K1-K5 | Compositor | Verdict | Overflow counters |
+|---|---:|---:|---:|---:|---|---|
+| `K_SQ=34`, `R_inner=24285356`, `R_outer=24293548` | `2,479,579` | `27.7603s` | `22.8277s` | `4.01044s` | `SPANNING` | all zero |
+
 ## K34 Cross-K Regression Gate
 
 This is accepted only as implementation regression coverage, not as external
@@ -135,7 +141,7 @@ Expected:
 | Step | Expected |
 |---|---|
 | K34 snapshot smoke | CPU/CUDA SHA match |
-| K34 `cuda_vs_cpu_diff --m4 --k5 --limit 16` on `24289452..24297644` | pass |
+| K34 separate `cuda_vs_cpu_diff --m4 --limit 16` and `--k5 --limit 16` on `24289452..24297644` | pass |
 | K34 shell sentinel `24289452..24297644` | `SPANNING`, zero overflow counters |
 
 Accepted at commit `fc70d43` on the Vast RTX 4090:
@@ -143,7 +149,7 @@ Accepted at commit `fc70d43` on the Vast RTX 4090:
 | Step | Result |
 |---|---|
 | K34 snapshot smoke | PASS, CPU/CUDA SHA `1dc6c4dc031690a8849a59d94f6d2253c4c5b02a0c1b3a2db5d0c9935c2001e5` |
-| K34 `cuda_vs_cpu_diff --m4 --k5 --limit 16` | PASS |
+| K34 separate `cuda_vs_cpu_diff --m4 --limit 16` and `--k5 --limit 16` | PASS |
 | K34 shell sentinel | `SPANNING`, zero overflow counters |
 
 K34 shell sentinel timing at `fc70d43`, chunk `200000`:
@@ -151,6 +157,12 @@ K34 shell sentinel timing at `fc70d43`, chunk `200000`:
 | Tiles | App batches | Total | CUDA K1-K5 | Compositor |
 |---:|---:|---:|---:|---:|
 | `2,479,915` | `13` | `26.3411s` | `21.3462s` | `4.04465s` |
+
+Verifier correction, 2026-05-04: the K34 gate now runs M4 and K5 diff as
+separate commands. The M4 expected surface was corrected to match the actual
+TileOp contract: only roots visible through ports or geo flags receive wire
+labels. Post-fix K34 regression gate passed on the Vast RTX 4090 with
+`SPANNING`, zero overflow counters, `2,479,915` tiles, `27.3446s` total.
 
 ## Baseline Performance
 
