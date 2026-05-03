@@ -90,3 +90,11 @@ This gate checks snapshot parity, `cuda_vs_cpu_diff`, and the observed
 Tsuchimura-scale shell sentinel. It should fail on K-dependent implementation
 drift or nonzero overflow counters. It should not be cited as proof of the
 published K34 moat.
+
+Acceptance run at commit `fc70d43` on the Vast RTX 4090:
+
+- Snapshot smoke: PASS, CPU/CUDA SHA
+  `1dc6c4dc031690a8849a59d94f6d2253c4c5b02a0c1b3a2db5d0c9935c2001e5`.
+- `cuda_vs_cpu_diff --m4 --k5 --limit 16`: PASS.
+- Shell sentinel: `SPANNING`, zero overflow counters, `2,479,915` tiles,
+  `26.3411s` total, `21.3462s` CUDA K1-K5, `4.04465s` compositor.

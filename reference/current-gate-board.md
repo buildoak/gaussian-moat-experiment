@@ -129,6 +129,20 @@ Expected:
 | K34 `cuda_vs_cpu_diff --m4 --k5 --limit 16` on `24289452..24297644` | pass |
 | K34 shell sentinel `24289452..24297644` | `SPANNING`, zero overflow counters |
 
+Accepted at commit `fc70d43` on the Vast RTX 4090:
+
+| Step | Result |
+|---|---|
+| K34 snapshot smoke | PASS, CPU/CUDA SHA `1dc6c4dc031690a8849a59d94f6d2253c4c5b02a0c1b3a2db5d0c9935c2001e5` |
+| K34 `cuda_vs_cpu_diff --m4 --k5 --limit 16` | PASS |
+| K34 shell sentinel | `SPANNING`, zero overflow counters |
+
+K34 shell sentinel timing at `fc70d43`, chunk `200000`:
+
+| Tiles | App batches | Total | CUDA K1-K5 | Compositor |
+|---:|---:|---:|---:|---:|
+| `2,479,915` | `13` | `26.3411s` | `21.3462s` | `4.04465s` |
+
 ## Baseline Performance
 
 Vast RTX 4090 zero-offset correctness gate, chunk `200000`, snapshot disabled:
