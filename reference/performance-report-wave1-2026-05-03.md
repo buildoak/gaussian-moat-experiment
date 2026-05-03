@@ -188,10 +188,10 @@ done
 
 | Gate | Status | Evidence |
 |---|---|---|
-| CPU CTest | PASS | `108/108` passed on compositor patch, 2 pre-existing skips |
+| CPU CTest | PASS | `110/110` passed after face sort-bound patch, 2 expected skips |
 | CUDA CTest | PASS | `13/13` passed on overflow, overlap, stage timing, and MR prefilter patches |
 | CPU/CUDA diff probe | PASS | `cuda_vs_cpu_diff --m4 --k5 --verbose --limit 16` passed for both Tsuchimura cases |
-| Snapshot SHA smoke | PASS | CPU/CUDA snapshot SHA matched |
+| Snapshot SHA smoke | PASS | CPU/CUDA snapshot SHA matched after face sort-bound patch |
 | Snapshot/overlap exclusion | PASS | `--overlap-compositor` with `--snapshot-out` exits `2` |
 | Tsuchimura gate | PASS | `80015782 => SPANNING`, `80015790 => MOAT`, zero overflows |
 | Stage profile gate | PASS | `/workspace/opt-wave1-stage-timing-full-20260503-012121`, all CUDA stage timing fields present |
