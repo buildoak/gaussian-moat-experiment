@@ -193,6 +193,26 @@ __device__ __forceinline__ bool is_prime_fj64_gpu(
       ctx, d, s, static_cast<std::uint64_t>(fj64_table[h & 0x3FFFFULL]));
 }
 
+__device__ __forceinline__ bool is_prime_fj64_prefiltered_gpu(
+    std::uint64_t n, const std::uint16_t* __restrict__ fj64_table) {
+  // Caller guarantees K1 removed the small-prime divisibility cases.
+  std::uint64_t d = n - 1ULL;
+  const std::uint32_t s = ctz64_gpu(d);
+  d >>= s;
+
+  const MontCtxGPU ctx = mont_init_gpu(n);
+  if (!miller_rabin_witness_mont_gpu(ctx, d, s, 2ULL)) {
+    return false;
+  }
+
+  std::uint64_t h = n;
+  h = ((h >> 32) ^ h) * 0x45d9f3b3335b369ULL;
+  h = ((h >> 32) ^ h) * 0x3335b36945d9f3bULL;
+  h = ((h >> 32) ^ h);
+  return miller_rabin_witness_mont_gpu(
+      ctx, d, s, static_cast<std::uint64_t>(fj64_table[h & 0x3FFFFULL]));
+}
+
 __device__ __forceinline__ std::uint64_t abs_i64_to_u64_gpu(std::int64_t value) {
   return value < 0 ? static_cast<std::uint64_t>(-value)
                    : static_cast<std::uint64_t>(value);

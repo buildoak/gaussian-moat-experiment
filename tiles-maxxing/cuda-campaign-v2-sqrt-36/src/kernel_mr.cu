@@ -80,7 +80,8 @@ __global__ void kernel_mr(const campaign::TileCoord* __restrict__ coords,
     }
 
     if ((norm == 2ULL) ||
-        (((norm & 3ULL) == 1ULL) && is_prime_fj64_gpu(norm, d_fj64_table))) {
+        (((norm & 3ULL) == 1ULL) &&
+         is_prime_fj64_prefiltered_gpu(norm, d_fj64_table))) {
       gpu_bitmap_set_global(tile_bitmap, cand_col, cand_row);
     }
   }
