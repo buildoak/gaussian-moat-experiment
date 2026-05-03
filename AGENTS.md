@@ -83,6 +83,21 @@ For long-running optimization work, use:
 Optimization acceptance requires correctness first, performance second. A speedup
 without Tsuchimura and CPU/CUDA parity evidence is not accepted.
 
+### Chunk Size For Gates And Performance
+
+CUDA `--chunk-size` changes both streaming pressure and throughput. Treat it as
+part of the benchmark contract, not an incidental flag.
+
+- Use the default Tsuchimura gate chunk size (`200000` unless the script changes)
+  for the accepted performance baseline. This is the optimized full-pipeline
+  mode and should be used for apples-to-apples tiles/second comparisons.
+- Use small chunks such as `8192` for streaming stress/correctness tests. They
+  create many more app batches and intentionally expose batching/early-exit
+  issues, but they are not the performance baseline.
+- When reporting throughput, always include `chunk-size`, `produced_tiles`,
+  `ingested_tiles`, total wall time, CUDA K1-K5 time, compositor time, and
+  whether early exit was enabled/taken.
+
 ## Default Shell-Probe Contract
 
 The current default shell-probe convention is:
