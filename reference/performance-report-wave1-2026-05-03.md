@@ -3,7 +3,7 @@
 ## Context
 
 - Branch: `opt/performance-wave-1`
-- Measured implementation commit: parallel grid-build candidate in this report
+- Measured implementation commit: `cd5da67 Parallelize grid tower construction`
 - Previous measured implementation commit: `be610f1 Tune UF kernel block size`
 - Previous report commit: `6193ffc Record larger-radius readiness sample`
 - Baseline commit: `8d88f62 Expand performance optimization menu`
