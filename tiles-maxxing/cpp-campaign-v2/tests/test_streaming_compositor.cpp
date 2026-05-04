@@ -445,6 +445,88 @@ TEST(StreamingCompositor, OverflowConservativelyLatchesSpanning) {
   EXPECT_EQ(compositor.finalize(), campaign::Verdict::kSpanning);
 }
 
+TEST(StreamingCompositor, TraceSpanningPathReconstructsFinalBridgeSides) {
+  const campaign::Grid grid = make_grid({{0, 0}, {0, 0}, {0, 0}});
+  const std::vector<std::vector<campaign::TileOp>> columns{
+      {make_tile({}, {}, {}, {1}, {1}, {})},
+      {make_tile({}, {}, {2}, {2}, {}, {})},
+      {make_tile({}, {}, {3}, {}, {}, {3})},
+  };
+
+  campaign::StreamingCompositor compositor;
+  compositor.init(grid);
+  compositor.set_trace_spanning_path(true);
+  for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+    compositor.ingest_column(
+        i, columns[static_cast<std::size_t>(i - grid.i_min)]);
+  }
+
+  ASSERT_TRUE(compositor.has_spanning());
+  const campaign::SpanningTrace trace = compositor.spanning_trace();
+  ASSERT_TRUE(trace.detected);
+  EXPECT_EQ(trace.event, "bridge_lr");
+  EXPECT_EQ(trace.inner_source_tile_index, 0);
+  EXPECT_EQ(trace.inner_source_group_label, 1);
+  EXPECT_EQ(trace.outer_source_tile_index, 2);
+  EXPECT_EQ(trace.outer_source_group_label, 3);
+
+  ASSERT_TRUE(trace.path.enabled);
+  ASSERT_TRUE(trace.path.reconstructed) << trace.path.failure_reason;
+  EXPECT_EQ(trace.path.recorded_edges, 2U);
+  EXPECT_EQ(trace.path.inner_source, (campaign::SpanningStitchVertex{0, 1}));
+  EXPECT_EQ(trace.path.outer_source, (campaign::SpanningStitchVertex{2, 3}));
+  EXPECT_EQ(trace.path.inner_endpoint, (campaign::SpanningStitchVertex{1, 2}));
+  EXPECT_EQ(trace.path.outer_endpoint, (campaign::SpanningStitchVertex{2, 3}));
+  ASSERT_TRUE(trace.path.final_bridge_present);
+  EXPECT_EQ(trace.path.final_bridge.event, "bridge_lr");
+  EXPECT_EQ(trace.path.final_bridge.lhs, (campaign::SpanningStitchVertex{1, 2}));
+  EXPECT_EQ(trace.path.final_bridge.rhs, (campaign::SpanningStitchVertex{2, 3}));
+  EXPECT_EQ(trace.path.final_bridge.lhs_face, campaign::Face::R);
+  EXPECT_EQ(trace.path.final_bridge.rhs_face, campaign::Face::L);
+  EXPECT_EQ(static_cast<int>(trace.path.final_bridge.lhs_ordinal), 1);
+  EXPECT_EQ(static_cast<int>(trace.path.final_bridge.rhs_ordinal), 1);
+
+  ASSERT_EQ(trace.path.inner_path_edges.size(), 1U);
+  EXPECT_EQ(trace.path.outer_path_edges.size(), 0U);
+  const campaign::SpanningStitchEdge& inner_edge =
+      trace.path.inner_path_edges.front();
+  EXPECT_EQ(inner_edge.event, "bridge_lr");
+  EXPECT_EQ(inner_edge.lhs, (campaign::SpanningStitchVertex{0, 1}));
+  EXPECT_EQ(inner_edge.rhs, (campaign::SpanningStitchVertex{1, 2}));
+  EXPECT_EQ(inner_edge.lhs_face, campaign::Face::R);
+  EXPECT_EQ(inner_edge.rhs_face, campaign::Face::L);
+  EXPECT_EQ(static_cast<int>(inner_edge.lhs_ordinal), 1);
+  EXPECT_EQ(static_cast<int>(inner_edge.rhs_ordinal), 1);
+}
+
+TEST(StreamingCompositor, TraceSpanningPathRecordsIoBridgeOrdinal) {
+  const campaign::Grid grid = make_grid({{0, 1}});
+  const std::vector<campaign::TileOp> column{
+      make_tile({}, {1}, {}, {}, {1}, {}),
+      make_tile({2}, {}, {}, {}, {}, {2}),
+  };
+
+  campaign::StreamingCompositor compositor;
+  compositor.init(grid);
+  compositor.set_trace_spanning_path(true);
+  compositor.ingest_column(0, column);
+
+  ASSERT_TRUE(compositor.has_spanning());
+  const campaign::SpanningTrace trace = compositor.spanning_trace();
+  ASSERT_TRUE(trace.path.reconstructed) << trace.path.failure_reason;
+  ASSERT_TRUE(trace.path.final_bridge_present);
+  const campaign::SpanningStitchEdge& bridge = trace.path.final_bridge;
+  EXPECT_EQ(bridge.event, "bridge_io");
+  EXPECT_EQ(bridge.lhs, (campaign::SpanningStitchVertex{0, 1}));
+  EXPECT_EQ(bridge.rhs, (campaign::SpanningStitchVertex{1, 2}));
+  EXPECT_EQ(bridge.lhs_face, campaign::Face::O);
+  EXPECT_EQ(bridge.rhs_face, campaign::Face::I);
+  EXPECT_EQ(static_cast<int>(bridge.lhs_ordinal), 1);
+  EXPECT_EQ(static_cast<int>(bridge.rhs_ordinal), 1);
+  EXPECT_EQ(trace.path.inner_path_edges.size(), 0U);
+  EXPECT_EQ(trace.path.outer_path_edges.size(), 0U);
+}
+
 TEST(StreamingCompositor, MoatFinalizeRequiresAllColumns) {
   const campaign::Grid grid = make_grid({{0, 0}, {0, 0}});
   const std::vector<campaign::TileOp> first{

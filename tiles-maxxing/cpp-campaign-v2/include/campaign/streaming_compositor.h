@@ -28,6 +28,39 @@ struct FrontierPort {
                          const FrontierPort&) = default;
 };
 
+struct SpanningStitchVertex {
+  std::int64_t tile_index = -1;
+  std::int32_t group_label = 0;
+
+  friend bool operator==(const SpanningStitchVertex&,
+                         const SpanningStitchVertex&) = default;
+};
+
+struct SpanningStitchEdge {
+  std::string event;
+  SpanningStitchVertex lhs;
+  SpanningStitchVertex rhs;
+  Face lhs_face = Face::I;
+  Face rhs_face = Face::I;
+  std::uint8_t lhs_ordinal = 0;
+  std::uint8_t rhs_ordinal = 0;
+};
+
+struct SpanningStitchPath {
+  bool enabled = false;
+  bool reconstructed = false;
+  std::string failure_reason;
+  std::uint64_t recorded_edges = 0;
+  SpanningStitchVertex inner_source;
+  SpanningStitchVertex outer_source;
+  SpanningStitchVertex inner_endpoint;
+  SpanningStitchVertex outer_endpoint;
+  bool final_bridge_present = false;
+  SpanningStitchEdge final_bridge;
+  std::vector<SpanningStitchEdge> inner_path_edges;
+  std::vector<SpanningStitchEdge> outer_path_edges;
+};
+
 struct SpanningTrace {
   bool detected = false;
   std::string event;
@@ -47,6 +80,7 @@ struct SpanningTrace {
   std::int32_t inner_source_group_label = 0;
   std::int64_t outer_source_tile_index = -1;
   std::int32_t outer_source_group_label = 0;
+  SpanningStitchPath path;
 };
 
 class StreamingCompositor {
@@ -56,6 +90,7 @@ class StreamingCompositor {
 
   void init(const Grid& grid);
   void ingest_column(std::int32_t i, std::span<const TileOp> column_tileops);
+  void set_trace_spanning_path(bool enabled);
 
   bool has_spanning() const noexcept;
   SpanningTrace spanning_trace() const;

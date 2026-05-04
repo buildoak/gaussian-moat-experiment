@@ -10,11 +10,14 @@
 #include <algorithm>
 #include <array>
 #include <cassert>
+#include <cstddef>
 #include <cstdint>
 #include <limits>
 #include <map>
+#include <queue>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -69,6 +72,8 @@ struct StreamingCompositor::State {
   static constexpr std::uint8_t kReachBoth = kReachInner | kReachOuter;
   using NodeId = std::uint32_t;
   static constexpr NodeId kInvalidNode = std::numeric_limits<NodeId>::max();
+  static constexpr std::size_t kInvalidStitchEdge =
+      std::numeric_limits<std::size_t>::max();
 
   struct FrontierNode {
     std::int32_t j = 0;
@@ -83,9 +88,15 @@ struct StreamingCompositor::State {
     std::int32_t group_label = 0;
   };
 
+  struct PathBackref {
+    std::uint64_t previous_key = 0;
+    std::size_t edge_index = kInvalidStitchEdge;
+  };
+
   Grid grid;
   bool initialized = false;
   bool spanning_detected = false;
+  bool trace_path_enabled = false;
   SpanningTrace trace;
   std::int32_t next_i = 0;
   std::int32_t last_frontier_i = 0;
@@ -99,6 +110,8 @@ struct StreamingCompositor::State {
   std::vector<TileOp> prev_column;
   std::vector<TileCoord> prev_coords;
   std::vector<FrontierNode> frontier;
+  std::vector<SpanningStitchEdge> stitch_edges;
+  std::unordered_map<std::uint64_t, std::vector<std::size_t>> stitch_adjacency;
 
   NodeId make_node() {
     if (parent.size() > std::numeric_limits<NodeId>::max()) {
@@ -151,6 +164,204 @@ struct StreamingCompositor::State {
     return TileCoord{};
   }
 
+  static SpanningStitchVertex make_stitch_vertex(
+      std::int64_t tile_index,
+      std::int32_t group_label) noexcept {
+    return SpanningStitchVertex{tile_index, group_label};
+  }
+
+  static bool is_valid_stitch_vertex(
+      const SpanningStitchVertex& vertex) noexcept {
+    return vertex.tile_index >= 0 && vertex.group_label > 0;
+  }
+
+  static std::uint64_t stitch_vertex_key(
+      const SpanningStitchVertex& vertex) noexcept {
+    return (static_cast<std::uint64_t>(vertex.tile_index) << 8) |
+           static_cast<std::uint64_t>(
+               static_cast<std::uint8_t>(vertex.group_label));
+  }
+
+  std::size_t record_stitch_edge(const char* event,
+                                 std::int64_t lhs_tile_index,
+                                 std::int32_t lhs_group_label,
+                                 Face lhs_face,
+                                 std::uint8_t lhs_ordinal,
+                                 std::int64_t rhs_tile_index,
+                                 std::int32_t rhs_group_label,
+                                 Face rhs_face,
+                                 std::uint8_t rhs_ordinal) {
+    if (!trace_path_enabled || trace.detected) return kInvalidStitchEdge;
+
+    SpanningStitchEdge edge;
+    edge.event = event;
+    edge.lhs = make_stitch_vertex(lhs_tile_index, lhs_group_label);
+    edge.rhs = make_stitch_vertex(rhs_tile_index, rhs_group_label);
+    edge.lhs_face = lhs_face;
+    edge.rhs_face = rhs_face;
+    edge.lhs_ordinal = lhs_ordinal;
+    edge.rhs_ordinal = rhs_ordinal;
+
+    if (!is_valid_stitch_vertex(edge.lhs) ||
+        !is_valid_stitch_vertex(edge.rhs)) {
+      return kInvalidStitchEdge;
+    }
+
+    const std::size_t edge_index = stitch_edges.size();
+    stitch_edges.push_back(edge);
+    stitch_adjacency[stitch_vertex_key(edge.lhs)].push_back(edge_index);
+    stitch_adjacency[stitch_vertex_key(edge.rhs)].push_back(edge_index);
+    trace.path.recorded_edges =
+        static_cast<std::uint64_t>(stitch_edges.size());
+    return edge_index;
+  }
+
+  std::vector<SpanningStitchEdge> find_stitch_path(
+      const SpanningStitchVertex& source,
+      const SpanningStitchVertex& target,
+      std::size_t excluded_edge_index,
+      bool& found) const {
+    found = false;
+    std::vector<SpanningStitchEdge> path;
+    if (!is_valid_stitch_vertex(source) ||
+        !is_valid_stitch_vertex(target)) {
+      return path;
+    }
+
+    const std::uint64_t source_key = stitch_vertex_key(source);
+    const std::uint64_t target_key = stitch_vertex_key(target);
+    if (source_key == target_key) {
+      found = true;
+      return path;
+    }
+
+    std::queue<std::uint64_t> pending;
+    std::unordered_map<std::uint64_t, PathBackref> backrefs;
+    pending.push(source_key);
+    backrefs.emplace(source_key, PathBackref{source_key, kInvalidStitchEdge});
+
+    while (!pending.empty()) {
+      const std::uint64_t current_key = pending.front();
+      pending.pop();
+
+      const auto adj_it = stitch_adjacency.find(current_key);
+      if (adj_it == stitch_adjacency.end()) continue;
+
+      for (std::size_t edge_index : adj_it->second) {
+        if (edge_index == excluded_edge_index ||
+            edge_index >= stitch_edges.size()) {
+          continue;
+        }
+        const SpanningStitchEdge& edge = stitch_edges[edge_index];
+        const std::uint64_t lhs_key = stitch_vertex_key(edge.lhs);
+        const std::uint64_t rhs_key = stitch_vertex_key(edge.rhs);
+        std::uint64_t next_key = 0;
+        if (lhs_key == current_key) {
+          next_key = rhs_key;
+        } else if (rhs_key == current_key) {
+          next_key = lhs_key;
+        } else {
+          continue;
+        }
+
+        if (backrefs.find(next_key) != backrefs.end()) continue;
+        backrefs.emplace(next_key, PathBackref{current_key, edge_index});
+        if (next_key == target_key) {
+          found = true;
+          break;
+        }
+        pending.push(next_key);
+      }
+      if (found) break;
+    }
+
+    if (!found) return path;
+
+    std::vector<std::size_t> edge_indices;
+    for (std::uint64_t key = target_key; key != source_key;) {
+      const auto backref_it = backrefs.find(key);
+      if (backref_it == backrefs.end() ||
+          backref_it->second.edge_index == kInvalidStitchEdge) {
+        found = false;
+        path.clear();
+        return path;
+      }
+      edge_indices.push_back(backref_it->second.edge_index);
+      key = backref_it->second.previous_key;
+    }
+    std::reverse(edge_indices.begin(), edge_indices.end());
+    path.reserve(edge_indices.size());
+    for (std::size_t edge_index : edge_indices) {
+      path.push_back(stitch_edges[edge_index]);
+    }
+    return path;
+  }
+
+  void reconstruct_spanning_path(std::size_t final_edge_index) {
+    trace.path.enabled = trace_path_enabled;
+    trace.path.recorded_edges =
+        static_cast<std::uint64_t>(stitch_edges.size());
+    trace.path.inner_source =
+        make_stitch_vertex(trace.inner_source_tile_index,
+                           trace.inner_source_group_label);
+    trace.path.outer_source =
+        make_stitch_vertex(trace.outer_source_tile_index,
+                           trace.outer_source_group_label);
+
+    if (final_edge_index == kInvalidStitchEdge ||
+        final_edge_index >= stitch_edges.size()) {
+      trace.path.failure_reason =
+          "first spanning event was not a recorded stitch edge";
+      return;
+    }
+    if (!is_valid_stitch_vertex(trace.path.inner_source) ||
+        !is_valid_stitch_vertex(trace.path.outer_source)) {
+      trace.path.failure_reason =
+          "first spanning trace did not retain both reach sources";
+      return;
+    }
+
+    trace.path.final_bridge_present = true;
+    trace.path.final_bridge = stitch_edges[final_edge_index];
+
+    bool inner_found = false;
+    bool outer_found = false;
+    std::vector<SpanningStitchEdge> inner_path = find_stitch_path(
+        trace.path.inner_source, trace.path.final_bridge.lhs, final_edge_index,
+        inner_found);
+    std::vector<SpanningStitchEdge> outer_path = find_stitch_path(
+        trace.path.outer_source, trace.path.final_bridge.rhs, final_edge_index,
+        outer_found);
+    if (inner_found && outer_found) {
+      trace.path.reconstructed = true;
+      trace.path.inner_endpoint = trace.path.final_bridge.lhs;
+      trace.path.outer_endpoint = trace.path.final_bridge.rhs;
+      trace.path.inner_path_edges = std::move(inner_path);
+      trace.path.outer_path_edges = std::move(outer_path);
+      return;
+    }
+
+    inner_path = find_stitch_path(trace.path.inner_source,
+                                  trace.path.final_bridge.rhs,
+                                  final_edge_index,
+                                  inner_found);
+    outer_path = find_stitch_path(trace.path.outer_source,
+                                  trace.path.final_bridge.lhs,
+                                  final_edge_index,
+                                  outer_found);
+    if (inner_found && outer_found) {
+      trace.path.reconstructed = true;
+      trace.path.inner_endpoint = trace.path.final_bridge.rhs;
+      trace.path.outer_endpoint = trace.path.final_bridge.lhs;
+      trace.path.inner_path_edges = std::move(inner_path);
+      trace.path.outer_path_edges = std::move(outer_path);
+      return;
+    }
+
+    trace.path.failure_reason =
+        "could not connect both reach sources to opposite final bridge endpoints";
+  }
+
   void record_spanning(const char* event,
                        NodeId root,
                        std::uint8_t reach_before,
@@ -161,7 +372,8 @@ struct StreamingCompositor::State {
                        std::int64_t lhs_tile_index = -1,
                        std::int32_t lhs_group_label = 0,
                        std::int64_t rhs_tile_index = -1,
-                       std::int32_t rhs_group_label = 0) {
+                       std::int32_t rhs_group_label = 0,
+                       std::size_t final_edge_index = kInvalidStitchEdge) {
     if (trace.detected || (reach_after & kReachBoth) != kReachBoth) return;
     trace.detected = true;
     trace.event = event;
@@ -195,6 +407,7 @@ struct StreamingCompositor::State {
       trace.column_i = coord.i;
       trace.tile_j = coord.j;
     }
+    if (trace_path_enabled) reconstruct_spanning_path(final_edge_index);
   }
 
   NodeId unite(NodeId a,
@@ -203,14 +416,15 @@ struct StreamingCompositor::State {
                std::int64_t lhs_tile_index = -1,
                std::int32_t lhs_group_label = 0,
                std::int64_t rhs_tile_index = -1,
-               std::int32_t rhs_group_label = 0) {
+               std::int32_t rhs_group_label = 0,
+               std::size_t stitch_edge_index = kInvalidStitchEdge) {
     NodeId ra = find(a);
     NodeId rb = find(b);
     if (ra == rb) {
       const std::uint8_t before = reach[ra];
       record_spanning(event, ra, before, before, 0, -1, 0,
                       lhs_tile_index, lhs_group_label, rhs_tile_index,
-                      rhs_group_label);
+                      rhs_group_label, stitch_edge_index);
       latch_if_spanning(ra);
       return ra;
     }
@@ -227,7 +441,7 @@ struct StreamingCompositor::State {
     }
     record_spanning(event, ra, before, reach[ra], added, -1, 0,
                     lhs_tile_index, lhs_group_label, rhs_tile_index,
-                    rhs_group_label);
+                    rhs_group_label, stitch_edge_index);
     latch_if_spanning(ra);
     return ra;
   }
@@ -376,9 +590,14 @@ struct StreamingCompositor::State {
     for (int p = 0; p < a.n[face_o]; ++p) {
       const int a_group = a.face_groups[a_off + p];
       const int b_group = b.face_groups[b_off + p];
+      const auto ordinal = static_cast<std::uint8_t>(p + 1);
+      const std::size_t stitch_edge_index = record_stitch_edge(
+          "bridge_io", a_idx, a_group, Face::O, ordinal, b_idx, b_group,
+          Face::I, ordinal);
       unite(node_for_group(a_idx, a_group),
             node_for_group(b_idx, b_group),
-            "bridge_io", a_idx, a_group, b_idx, b_group);
+            "bridge_io", a_idx, a_group, b_idx, b_group,
+            stitch_edge_index);
     }
   }
 
@@ -421,12 +640,17 @@ struct StreamingCompositor::State {
     require_port_count_equal(a.n[face_r], b.n[face_l], "L/R");
     const int b_off = face_offset(b, Face::L);
     for (int p = 0; p < a.n[face_r]; ++p) {
+      const auto ordinal = static_cast<std::uint8_t>(p + 1);
       const int b_group = b.face_groups[b_off + p];
       const FrontierNode& lhs = frontier_entry_for(
-          frontier_cursor, a_coord.j, static_cast<std::uint8_t>(p + 1));
+          frontier_cursor, a_coord.j, ordinal);
+      const std::size_t stitch_edge_index = record_stitch_edge(
+          "bridge_lr", lhs.tile_index, lhs.group_label, Face::R, ordinal,
+          b_idx, b_group, Face::L, ordinal);
       unite(lhs.node,
             node_for_group(b_idx, b_group),
-            "bridge_lr", lhs.tile_index, lhs.group_label, b_idx, b_group);
+            "bridge_lr", lhs.tile_index, lhs.group_label, b_idx, b_group,
+            stitch_edge_index);
     }
   }
 
@@ -513,10 +737,13 @@ void StreamingCompositor::init(const Grid& grid) {
     throw std::invalid_argument("grid.total_tiles must be non-negative");
   }
 
+  const bool trace_path_enabled = state_ && state_->trace_path_enabled;
   State fresh;
   fresh.grid = grid;
   fresh.initialized = true;
   fresh.next_i = grid.i_min;
+  fresh.trace_path_enabled = trace_path_enabled;
+  fresh.trace.path.enabled = trace_path_enabled;
   *state_ = std::move(fresh);
 }
 
@@ -592,6 +819,17 @@ void StreamingCompositor::ingest_column(
   state_->last_frontier_i = i;
   state_->has_frontier_column = !state_->frontier.empty();
   state_->next_i = static_cast<std::int32_t>(i + 1);
+}
+
+void StreamingCompositor::set_trace_spanning_path(bool enabled) {
+  if (!state_) return;
+  state_->trace_path_enabled = enabled;
+  state_->trace.path.enabled = enabled;
+  if (!enabled) {
+    state_->stitch_edges.clear();
+    state_->stitch_adjacency.clear();
+    state_->trace.path = SpanningStitchPath{};
+  }
 }
 
 bool StreamingCompositor::has_spanning() const noexcept {

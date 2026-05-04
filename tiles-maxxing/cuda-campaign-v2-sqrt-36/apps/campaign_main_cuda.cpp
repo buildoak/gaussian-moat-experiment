@@ -67,6 +67,7 @@ struct BatchDispatchResult {
   cuda_campaign::DispatchStats dispatch;
   Duration cuda = Duration::zero();
   std::uint64_t produced_tiles = 0;
+  std::uint64_t emitted_overflow_tileops = 0;
 };
 
 struct RunStats {
@@ -76,6 +77,7 @@ struct RunStats {
   std::uint64_t app_batches = 0;
   std::uint64_t total_chunk_overshoot_tiles = 0;
   std::uint64_t max_chunk_overshoot_tiles = 0;
+  std::uint64_t emitted_overflow_tileops = 0;
   bool early_exit_taken = false;
   cuda_campaign::DispatchStats dispatch;
 };
@@ -107,6 +109,7 @@ void print_help(const char* prog) {
       << "  --timing               Print timing and chunk accounting\n"
       << "  --profile <path>       Write JSON profile; implies --timing\n"
       << "  --trace-spanning       Print/profile first SPANNING provenance\n"
+      << "  --trace-spanning-path  Reconstruct first SPANNING stitch path\n"
       << "  --overflow-diagnostics Capture first overflow tiles in profile output\n"
       << "  --threads=N            Accepted for CPU CLI compatibility; ignored\n"
       << "\n"
@@ -284,6 +287,49 @@ const char* verdict_name(campaign::Verdict verdict) noexcept {
   return "UNKNOWN";
 }
 
+const char* face_name(campaign::Face face) noexcept {
+  switch (face) {
+    case campaign::Face::I:
+      return "I";
+    case campaign::Face::O:
+      return "O";
+    case campaign::Face::L:
+      return "L";
+    case campaign::Face::R:
+      return "R";
+  }
+  return "?";
+}
+
+nlohmann::json stitch_vertex_json(
+    const campaign::SpanningStitchVertex& vertex) {
+  return {
+      {"tile_index", vertex.tile_index},
+      {"group_label", vertex.group_label},
+  };
+}
+
+nlohmann::json stitch_edge_json(const campaign::SpanningStitchEdge& edge) {
+  return {
+      {"event", edge.event},
+      {"lhs_tile_index", edge.lhs.tile_index},
+      {"lhs_group_label", edge.lhs.group_label},
+      {"lhs_face", face_name(edge.lhs_face)},
+      {"lhs_ordinal", static_cast<int>(edge.lhs_ordinal)},
+      {"rhs_tile_index", edge.rhs.tile_index},
+      {"rhs_group_label", edge.rhs.group_label},
+      {"rhs_face", face_name(edge.rhs_face)},
+      {"rhs_ordinal", static_cast<int>(edge.rhs_ordinal)},
+  };
+}
+
+nlohmann::json stitch_edges_json(
+    const std::vector<campaign::SpanningStitchEdge>& edges) {
+  nlohmann::json out = nlohmann::json::array();
+  for (const auto& edge : edges) out.push_back(stitch_edge_json(edge));
+  return out;
+}
+
 double seconds(Duration duration) {
   return std::chrono::duration<double>(duration).count();
 }
@@ -341,6 +387,15 @@ std::size_t column_tile_count(const campaign::Grid& grid, std::int32_t i) {
   const auto [jlo, jhi] = grid.column_bounds(i);
   if (jhi < jlo) return 0;
   return static_cast<std::size_t>(jhi - jlo + 1);
+}
+
+std::uint64_t count_emitted_overflow_tileops(
+    std::span<const campaign::TileOp> tileops) {
+  std::uint64_t count = 0;
+  for (const campaign::TileOp& op : tileops) {
+    if ((op.tile_flags & campaign::OVERFLOW_BIT) != 0) ++count;
+  }
+  return count;
 }
 
 void append_column_to_batch(ColumnBatch& batch,
@@ -442,6 +497,8 @@ void write_profile_json(const std::filesystem::path& path,
         {"k4_prime_overflow_count", stats.dispatch.k4_prime_overflow_count},
         {"k4_group_overflow_count", stats.dispatch.k4_group_overflow_count},
         {"k5_port_overflow_count", stats.dispatch.k5_port_overflow_count}}},
+      {"host_tileop_counters",
+       {{"emitted_overflow_bit_count", stats.emitted_overflow_tileops}}},
       {"device",
        {{"name", stats.dispatch.device_name},
         {"stream_count", stats.dispatch.stream_count},
@@ -474,6 +531,33 @@ void write_profile_json(const std::filesystem::path& path,
         {"outer_source_tile_index", spanning_trace.outer_source_tile_index},
         {"outer_source_group_label", spanning_trace.outer_source_group_label},
     };
+    if (spanning_trace.path.enabled) {
+      profile["spanning_trace"]["stitch_path"] = {
+          {"enabled", spanning_trace.path.enabled},
+          {"reconstructed", spanning_trace.path.reconstructed},
+          {"failure_reason", spanning_trace.path.failure_reason},
+          {"recorded_edges", spanning_trace.path.recorded_edges},
+          {"inner_source", stitch_vertex_json(spanning_trace.path.inner_source)},
+          {"outer_source", stitch_vertex_json(spanning_trace.path.outer_source)},
+          {"inner_endpoint",
+           stitch_vertex_json(spanning_trace.path.inner_endpoint)},
+          {"outer_endpoint",
+           stitch_vertex_json(spanning_trace.path.outer_endpoint)},
+          {"final_bridge_present", spanning_trace.path.final_bridge_present},
+          {"inner_path_edge_count",
+           spanning_trace.path.inner_path_edges.size()},
+          {"outer_path_edge_count",
+           spanning_trace.path.outer_path_edges.size()},
+          {"inner_path_edges",
+           stitch_edges_json(spanning_trace.path.inner_path_edges)},
+          {"outer_path_edges",
+           stitch_edges_json(spanning_trace.path.outer_path_edges)},
+      };
+      if (spanning_trace.path.final_bridge_present) {
+        profile["spanning_trace"]["stitch_path"]["final_bridge"] =
+            stitch_edge_json(spanning_trace.path.final_bridge);
+      }
+    }
   }
 
   std::ofstream out(path);
@@ -533,6 +617,7 @@ bool flush_batch(ColumnBatch& batch,
 
   stats.produced_tiles += static_cast<std::uint64_t>(batch.tiles.size());
   stats.app_batches += 1;
+  stats.emitted_overflow_tileops += count_emitted_overflow_tileops(tileops);
   accumulate_dispatch_stats(stats.dispatch, batch_stats);
 
   std::size_t offset = 0;
@@ -578,6 +663,8 @@ BatchDispatchResult dispatch_batch(
   dispatcher.dispatch(batch.tiles.data(), batch.tiles.size(),
                       result.tileops.data(), &result.dispatch);
   result.cuda = Clock::now() - cuda_start;
+  result.emitted_overflow_tileops =
+      count_emitted_overflow_tileops(result.tileops);
 
   return result;
 }
@@ -605,6 +692,7 @@ bool ingest_dispatch_result(BatchDispatchResult result,
   timings.cuda += result.cuda;
   stats.produced_tiles += result.produced_tiles;
   stats.app_batches += 1;
+  stats.emitted_overflow_tileops += result.emitted_overflow_tileops;
   accumulate_dispatch_stats(stats.dispatch, result.dispatch);
 
   std::size_t offset = 0;
@@ -711,6 +799,7 @@ int main(int argc, char** argv) {
   bool overlap_compositor = false;
   bool overflow_diagnostics = false;
   bool trace_spanning = false;
+  bool trace_spanning_path = false;
   bool timing = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -780,6 +869,9 @@ int main(int argc, char** argv) {
       overflow_diagnostics = true;
     } else if (a == "--trace-spanning") {
       trace_spanning = true;
+    } else if (a == "--trace-spanning-path") {
+      trace_spanning = true;
+      trace_spanning_path = true;
     } else if (a == "--timing") {
       timing = true;
     } else if (take_val("--profile", val)) {
@@ -924,6 +1016,7 @@ int main(int argc, char** argv) {
     cuda_campaign::TileBatchDispatcher dispatcher(constants, config);
     campaign::StreamingCompositor compositor;
     compositor.init(grid);
+    compositor.set_trace_spanning_path(trace_spanning_path);
 
     std::unique_ptr<campaign::SnapshotWriter> snapshot_writer;
     if (snapshot_enabled) {
@@ -1100,6 +1193,8 @@ int main(int argc, char** argv) {
             << run_stats.dispatch.k4_group_overflow_count << "\n"
             << "  k5_port_overflow_count: "
             << run_stats.dispatch.k5_port_overflow_count << "\n"
+            << "  emitted_overflow_bit_count: "
+            << run_stats.emitted_overflow_tileops << "\n"
             << "  constants_hash: " << constants.canonical_hash() << "\n"
             << "  mr_witness_sha256: "
             << campaign::CampaignConstants::mr_witness_set_sha256() << "\n";
@@ -1162,6 +1257,43 @@ int main(int argc, char** argv) {
               << " outer_source_group_label="
               << spanning_trace.outer_source_group_label
               << "\n";
+    if (spanning_trace.path.enabled) {
+      std::cout << "SPANNING_PATH:"
+                << " reconstructed="
+                << (spanning_trace.path.reconstructed ? 1 : 0)
+                << " recorded_edges=" << spanning_trace.path.recorded_edges
+                << " inner_path_edges="
+                << spanning_trace.path.inner_path_edges.size()
+                << " outer_path_edges="
+                << spanning_trace.path.outer_path_edges.size()
+                << " inner_source="
+                << spanning_trace.path.inner_source.tile_index << "/"
+                << spanning_trace.path.inner_source.group_label
+                << " inner_endpoint="
+                << spanning_trace.path.inner_endpoint.tile_index << "/"
+                << spanning_trace.path.inner_endpoint.group_label
+                << " outer_source="
+                << spanning_trace.path.outer_source.tile_index << "/"
+                << spanning_trace.path.outer_source.group_label
+                << " outer_endpoint="
+                << spanning_trace.path.outer_endpoint.tile_index << "/"
+                << spanning_trace.path.outer_endpoint.group_label;
+      if (spanning_trace.path.final_bridge_present) {
+        const auto& edge = spanning_trace.path.final_bridge;
+        std::cout << " final_bridge_event=" << edge.event
+                  << " final_bridge_lhs=" << edge.lhs.tile_index << "/"
+                  << edge.lhs.group_label << ":" << face_name(edge.lhs_face)
+                  << "#" << static_cast<int>(edge.lhs_ordinal)
+                  << " final_bridge_rhs=" << edge.rhs.tile_index << "/"
+                  << edge.rhs.group_label << ":" << face_name(edge.rhs_face)
+                  << "#" << static_cast<int>(edge.rhs_ordinal);
+      }
+      if (!spanning_trace.path.failure_reason.empty()) {
+        std::cout << " failure_reason=\""
+                  << spanning_trace.path.failure_reason << "\"";
+      }
+      std::cout << "\n";
+    }
   }
   if (profile_path.has_value() &&
       !run_stats.dispatch.first_overflow_tiles.empty()) {
