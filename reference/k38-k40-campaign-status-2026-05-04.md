@@ -292,6 +292,7 @@ Confirmed radius-refine rows:
 | ---: | ---: | --- | ---: | ---: | ---: |
 | 970000000 | 32768 | SPANNING | 378065743 | 377947112 | 0 |
 | 975000000 | 32768 | SPANNING | 310493669 | 310334578 | 0 |
+| 978000000 | 32768 | SPANNING | 76775720 | 76599114 | 0 |
 
 The `R_inner=970000000, width=32768` row is a near-full late SPANNING result:
 
@@ -311,13 +312,22 @@ The `R_inner=975000000, width=32768` row is another late SPANNING result:
 - all overflow counters: `0`
 - total runtime: `3636.51s`
 
-The active K40 radius bracket at width `32768` is now:
+The `R_inner=978000000, width=32768` row is a SPANNING result:
 
-- `R_inner=975000000`: SPANNING
+- `active tiles = 387886841`
+- `produced tiles = 76775720`
+- `ingested tiles = 76599114`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- total runtime: `901.436s`
+
+The final K40 radius bracket from this campaign at width `32768` is:
+
+- `R_inner=978000000`: SPANNING
 - `R_inner=980000000`: MOAT
 
-As of the latest live checks, `R_inner=978000000, width=32768` was running with
-the GPU active and had not yet emitted a verdict row.
+The radius-refine campaign completed after the `978M` row. It did not run a
+`979M` midpoint, so the current bracket width is `2M`.
 
 ## Remaining Work
 
