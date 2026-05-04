@@ -158,8 +158,23 @@ Strategy:
 - per-run BZ before CUDA
 - stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
 
-As of the launch check, `R_inner=300000000, width=32768` was running on the 4090
-and had not yet emitted a verdict row.
+Confirmed K38 rows:
+
+| R_inner | width | verdict | produced | ingested | overflow counters |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 300000000 | 32768 | MOAT | 118987826 | 118987826 | 0 |
+
+The `R_inner=300000000, width=32768` row is a full-ingest MOAT:
+
+- `active tiles = produced tiles = ingested tiles = 118987826`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- `SPANNING_TRACE detected=0`
+- total runtime: `1446.47s`
+
+The campaign moved lower after this row. As of the latest live checks,
+`R_inner=200000000, width=32768` was running on the 4090 and had not yet emitted
+a verdict row.
 
 ## K40 Overnight Campaign
 
