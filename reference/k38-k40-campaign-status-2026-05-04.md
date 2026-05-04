@@ -209,14 +209,44 @@ Confirmed low-bracket rows:
 | R_inner | width | verdict | produced | ingested | overflow counters |
 | ---: | ---: | --- | ---: | ---: | ---: |
 | 50000000 | 32768 | SPANNING | 199959 | 1161 | 0 |
+| 75000000 | 32768 | MOAT | 29752094 | 29752094 | 0 |
+
+The `R_inner=75000000, width=32768` row is a full-ingest MOAT:
+
+- `active tiles = produced tiles = ingested tiles = 29752094`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- `SPANNING_TRACE detected=0`
+- total runtime: `362.471s`
 
 The active K38 radius bracket at width `32768` is now:
 
 - `R_inner=50000000`: SPANNING
-- `R_inner=100000000`: MOAT
+- `R_inner=75000000`: MOAT
 
-As of the latest live checks, `R_inner=75000000, width=32768` was running on the
-4090 and had not yet emitted a verdict row.
+The low-bracket campaign completed after the `75M` row.
+
+## K38 Radius-Refine Campaign
+
+Campaign tag:
+
+- `k38-radius-refine-20260504T120611Z`
+
+Remote campaign dir:
+
+- `/workspace/k38-radius-refine-20260504T120611Z`
+
+Primary index:
+
+- `/workspace/k38-radius-refine-20260504T120611Z/run-index.tsv`
+
+Strategy:
+
+- width `32768`
+- radius refinement inside the `50M` to `75M` bracket
+- first probe: `R_inner=62500000`
+- per-run BZ before CUDA
+- stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
 
 ## K40 Overnight Campaign
 
