@@ -135,6 +135,32 @@ BZ/diff probes all returned zero status:
 | R1000000000_W10000 | 1000000000 | 10000 | 1000010000 | 0 | 0 | 0 | 0 |
 | R1500000000_W10000 | 1500000000 | 10000 | 1500010000 | 0 | 0 | 0 | 0 |
 
+## K38 Broad Bracket Campaign
+
+Campaign tag:
+
+- `k38-broad-bracket-20260504T105733Z`
+
+Remote campaign dir:
+
+- `/workspace/k38-broad-bracket-20260504T105733Z`
+
+Primary index:
+
+- `/workspace/k38-broad-bracket-20260504T105733Z/run-index.tsv`
+
+Strategy:
+
+- width `32768`
+- broad screen starting at `R_inner=300000000`
+- adaptive follow-up at `500M`, `800M`, and bracket midpoints depending on
+  whether the first rows SPAN or MOAT
+- per-run BZ before CUDA
+- stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
+
+As of the launch check, `R_inner=300000000, width=32768` was running on the 4090
+and had not yet emitted a verdict row.
+
 ## K40 Overnight Campaign
 
 Campaign tag:
