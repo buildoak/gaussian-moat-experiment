@@ -164,17 +164,61 @@ Strategy:
 - radii include `800M`, `860M`, `1B`, `1.2B`, and `1.5B`
 - if budget survives, focus around the old `~860M` signal and then narrow widths
 
-Initial live rows:
+Completed evidence rows from the broad run:
 
 | R_inner | width | verdict | produced | ingested | overflow counters |
 | ---: | ---: | --- | ---: | ---: | ---: |
 | 800000000 | 32768 | SPANNING | 199951 | 16642 | 0 |
 | 860000000 | 32768 | SPANNING | 199951 | 20770 | 0 |
+| 1000000000 | 32768 | MOAT | 396611825 | 396611825 | 0 |
 
-As of the first live checks, `R_inner=1000000000, width=32768` was still running
-with the GPU saturated. This is the first nontrivial full-annulus-scale K40 case
-in the campaign and should not be interpreted until the runner writes a verdict
-row or exits.
+The `R_inner=1000000000, width=32768` row is a full-ingest MOAT:
+
+- `active tiles = produced tiles = ingested tiles = 396611825`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- `SPANNING_TRACE detected=0`
+- total runtime: `4635.01s`
+
+The broad runner then started `R_inner=1200000000, width=32768`, but that row
+was deliberately stopped after the `1B` MOAT established a more valuable bracket.
+The aborted row is recorded as `NO_VERDICT`, `rc=143`, and must not be used as
+mathematical evidence.
+
+The resulting K40 radius bracket at width `32768` is:
+
+- `R_inner=860000000`: SPANNING
+- `R_inner=1000000000`: MOAT
+
+## K40 Focused Bracket Campaign
+
+Campaign tag:
+
+- `k40-focused-bracket-20260504T051242Z`
+
+Remote campaign dir:
+
+- `/workspace/k40-focused-bracket-20260504T051242Z`
+
+Primary index:
+
+- `/workspace/k40-focused-bracket-20260504T051242Z/run-index.tsv`
+
+Strategy:
+
+- adaptive radius narrowing between `860M` and `1B` at width `32768`
+- then width narrowing at the confirmed MOAT radius `1B` if budget remains
+- per-run BZ before CUDA
+- stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
+
+Initial focused row:
+
+| R_inner | width | verdict | produced | ingested | overflow counters |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 900000000 | 32768 | SPANNING | 999761 | 892301 | 0 |
+
+As of the first live checks, `R_inner=930000000, width=32768` was running with
+the GPU saturated and had not yet emitted a verdict row.
 
 ## Remaining Work
 
