@@ -524,10 +524,26 @@ The final K40 radius bracket from this campaign at width `32768` is:
 The radius-refine campaign completed after the `978M` row. It did not run a
 `979M` midpoint, so the current bracket width is `2M`.
 
+## K40 980M Diagnostic Confirmation
+
+Campaign tag:
+
+- `k40-980m-diag-20260504T124022Z`
+
+Remote campaign dir:
+
+- `/workspace/k40-980m-diag-20260504T124022Z`
+
+Purpose:
+
+- diagnostic confirmation of the K40 `R_inner=980000000, width=32768` MOAT
+  endpoint
+- command includes `--no-early-exit`, `--overflow-diagnostics`, and
+  `--trace-spanning-path`
+- per-run BZ before CUDA
+
 ## Remaining Work
 
-- Finish or collect the K40 overnight campaign.
-- Confirm any K40 MOAT rows with no-early diagnostics and overflow diagnostics.
-- Launch the K38 campaign after the 4090 is free.
+- Finish or collect the K40 diagnostic confirmation.
 - Pull remote artifacts or preserve remote paths in the next report.
 - Perform a completion audit before marking the larger K38/K40 objective complete.
