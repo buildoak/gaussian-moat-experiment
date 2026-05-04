@@ -291,6 +291,7 @@ Confirmed radius-refine rows:
 | R_inner | width | verdict | produced | ingested | overflow counters |
 | ---: | ---: | --- | ---: | ---: | ---: |
 | 970000000 | 32768 | SPANNING | 378065743 | 377947112 | 0 |
+| 975000000 | 32768 | SPANNING | 310493669 | 310334578 | 0 |
 
 The `R_inner=970000000, width=32768` row is a near-full late SPANNING result:
 
@@ -301,12 +302,21 @@ The `R_inner=970000000, width=32768` row is a near-full late SPANNING result:
 - all overflow counters: `0`
 - total runtime: `4419.79s`
 
+The `R_inner=975000000, width=32768` row is another late SPANNING result:
+
+- `active tiles = 386697074`
+- `produced tiles = 310493669`
+- `ingested tiles = 310334578`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- total runtime: `3636.51s`
+
 The active K40 radius bracket at width `32768` is now:
 
-- `R_inner=970000000`: SPANNING
+- `R_inner=975000000`: SPANNING
 - `R_inner=980000000`: MOAT
 
-As of the latest live checks, `R_inner=975000000, width=32768` was running with
+As of the latest live checks, `R_inner=978000000, width=32768` was running with
 the GPU active and had not yet emitted a verdict row.
 
 ## Remaining Work
