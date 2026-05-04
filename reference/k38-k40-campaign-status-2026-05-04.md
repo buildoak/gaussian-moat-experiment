@@ -248,6 +248,38 @@ Strategy:
 - per-run BZ before CUDA
 - stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
 
+Confirmed radius-refine rows:
+
+| R_inner | width | verdict | produced | ingested | overflow counters |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 62500000 | 32768 | SPANNING | 199956 | 10320 | 0 |
+| 68750000 | 32768 | SPANNING | 199954 | 21801 | 0 |
+
+The active K38 radius bracket at width `32768` is now:
+
+- `R_inner=68750000`: SPANNING
+- `R_inner=75000000`: MOAT
+
+## K38 Radius-Refine 2 Campaign
+
+Campaign tag:
+
+- `k38-radius-refine2-20260504T121714Z`
+
+Remote campaign dir:
+
+- `/workspace/k38-radius-refine2-20260504T121714Z`
+
+Primary index:
+
+- `/workspace/k38-radius-refine2-20260504T121714Z/run-index.tsv`
+
+Strategy:
+
+- single midpoint at `R_inner=71875000`, width `32768`
+- per-run BZ before CUDA
+- stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
+
 ## K40 Overnight Campaign
 
 Campaign tag:
