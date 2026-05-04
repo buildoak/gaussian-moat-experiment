@@ -218,6 +218,7 @@ Initial focused row:
 | 900000000 | 32768 | SPANNING | 999761 | 892301 | 0 |
 | 930000000 | 32768 | SPANNING | 27592008 | 27567314 | 0 |
 | 960000000 | 32768 | SPANNING | 245918441 | 245896833 | 0 |
+| 980000000 | 32768 | MOAT | 388679866 | 388679866 | 0 |
 
 The `R_inner=930000000, width=32768` row is a late SPANNING result:
 
@@ -237,14 +238,45 @@ The `R_inner=960000000, width=32768` row is an extremely late SPANNING result:
 - all overflow counters: `0`
 - total runtime: `2873.14s`
 
+The `R_inner=980000000, width=32768` row is a full-ingest MOAT:
+
+- `active tiles = produced tiles = ingested tiles = 388679866`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- `SPANNING_TRACE detected=0`
+- total runtime: `4533.3s`
+
 The active K40 radius bracket at width `32768` is now:
 
 - `R_inner=960000000`: SPANNING
-- `R_inner=1000000000`: MOAT
+- `R_inner=980000000`: MOAT
 
-As of the latest live checks, `R_inner=980000000, width=32768` was running with
-the GPU saturated and had not yet emitted a verdict row. This is the current
-hard boundary case.
+The focused runner then started width narrowing at `R_inner=1000000000,
+width=24576`, but that row was deliberately stopped after the `980M` MOAT made
+radius refinement the higher-value next experiment. The aborted width row is
+recorded as `NO_VERDICT`, `rc=143`, and must not be used as mathematical
+evidence.
+
+## K40 Radius-Refine Campaign
+
+Campaign tag:
+
+- `k40-radius-refine-20260504T073258Z`
+
+Remote campaign dir:
+
+- `/workspace/k40-radius-refine-20260504T073258Z`
+
+Primary index:
+
+- `/workspace/k40-radius-refine-20260504T073258Z/run-index.tsv`
+
+Strategy:
+
+- adaptive radius refinement between `960M` and `980M` at width `32768`
+- first probe: `R_inner=970000000`
+- per-run BZ before CUDA
+- stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
 
 ## Remaining Work
 
