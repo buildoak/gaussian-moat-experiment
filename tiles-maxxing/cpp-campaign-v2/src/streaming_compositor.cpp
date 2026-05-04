@@ -73,11 +73,14 @@ struct StreamingCompositor::State {
     std::int32_t j = 0;
     std::uint8_t port_ordinal = 0;
     NodeId node = 0;
+    std::int64_t tile_index = -1;
+    std::int32_t group_label = 0;
   };
 
   Grid grid;
   bool initialized = false;
   bool spanning_detected = false;
+  SpanningTrace trace;
   std::int32_t next_i = 0;
   std::int32_t last_frontier_i = 0;
   bool has_frontier_column = false;
@@ -116,23 +119,109 @@ struct StreamingCompositor::State {
     return x;
   }
 
-  NodeId unite(NodeId a, NodeId b) {
+  TileCoord coord_from_flat_index(std::int64_t tile_index) const {
+    if (tile_index < 0 || tile_index >= grid.total_tiles) {
+      return TileCoord{};
+    }
+    for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+      const std::size_t k = static_cast<std::size_t>(i - grid.i_min);
+      if (k + 1 >= grid.tower_offset.size()) break;
+      const std::int64_t begin = grid.tower_offset[k];
+      const std::int64_t end = grid.tower_offset[k + 1];
+      if (tile_index < begin || tile_index >= end) continue;
+      const std::int32_t j =
+          static_cast<std::int32_t>(grid.j_low[k] + (tile_index - begin));
+      return TileCoord{
+          i,
+          j,
+          static_cast<std::int64_t>(grid.o_x) +
+              static_cast<std::int64_t>(grid.S_value) * i,
+          static_cast<std::int64_t>(grid.o_y) +
+              static_cast<std::int64_t>(grid.S_value) * j,
+      };
+    }
+    return TileCoord{};
+  }
+
+  void record_spanning(const char* event,
+                       NodeId root,
+                       std::uint8_t reach_before,
+                       std::uint8_t reach_after,
+                       std::uint8_t added_bits,
+                       std::int64_t tile_index = -1,
+                       std::int32_t group_label = 0,
+                       std::int64_t lhs_tile_index = -1,
+                       std::int32_t lhs_group_label = 0,
+                       std::int64_t rhs_tile_index = -1,
+                       std::int32_t rhs_group_label = 0) {
+    if (trace.detected || (reach_after & kReachBoth) != kReachBoth) return;
+    trace.detected = true;
+    trace.event = event;
+    trace.column_i = next_i;
+    trace.tile_index = tile_index;
+    trace.group_label = group_label;
+    trace.lhs_tile_index = lhs_tile_index;
+    trace.lhs_group_label = lhs_group_label;
+    trace.rhs_tile_index = rhs_tile_index;
+    trace.rhs_group_label = rhs_group_label;
+    trace.component = root;
+    trace.reach_before = reach_before;
+    trace.reach_after = reach_after;
+    trace.added_bits = added_bits;
+    if (tile_index >= 0) {
+      const TileCoord coord = coord_from_flat_index(tile_index);
+      trace.column_i = coord.i;
+      trace.tile_j = coord.j;
+    } else if (rhs_tile_index >= 0) {
+      const TileCoord coord = coord_from_flat_index(rhs_tile_index);
+      trace.column_i = coord.i;
+      trace.tile_j = coord.j;
+    } else if (lhs_tile_index >= 0) {
+      const TileCoord coord = coord_from_flat_index(lhs_tile_index);
+      trace.column_i = coord.i;
+      trace.tile_j = coord.j;
+    }
+  }
+
+  NodeId unite(NodeId a,
+               NodeId b,
+               const char* event = "unite",
+               std::int64_t lhs_tile_index = -1,
+               std::int32_t lhs_group_label = 0,
+               std::int64_t rhs_tile_index = -1,
+               std::int32_t rhs_group_label = 0) {
     NodeId ra = find(a);
     NodeId rb = find(b);
     if (ra == rb) {
+      const std::uint8_t before = reach[ra];
+      record_spanning(event, ra, before, before, 0, -1, 0,
+                      lhs_tile_index, lhs_group_label, rhs_tile_index,
+                      rhs_group_label);
       latch_if_spanning(ra);
       return ra;
     }
     if (rb < ra) std::swap(ra, rb);
+    const std::uint8_t before = reach[ra];
+    const std::uint8_t added = reach[rb];
     parent[rb] = ra;
-    reach[ra] = static_cast<std::uint8_t>(reach[ra] | reach[rb]);
+    reach[ra] = static_cast<std::uint8_t>(before | added);
+    record_spanning(event, ra, before, reach[ra], added, -1, 0,
+                    lhs_tile_index, lhs_group_label, rhs_tile_index,
+                    rhs_group_label);
     latch_if_spanning(ra);
     return ra;
   }
 
-  void mark(NodeId node, std::uint8_t bits) {
+  void mark(NodeId node,
+            std::uint8_t bits,
+            std::int64_t tile_index = -1,
+            std::int32_t group_label = 0,
+            const char* event = "mark") {
     const NodeId root = find(node);
+    const std::uint8_t before = reach[root];
     reach[root] = static_cast<std::uint8_t>(reach[root] | bits);
+    record_spanning(event, root, before, reach[root], bits, tile_index,
+                    group_label);
     latch_if_spanning(root);
   }
 
@@ -214,7 +303,8 @@ struct StreamingCompositor::State {
       for (int p = 0; p < op.n[f]; ++p) {
         const int group_label = op.face_groups[off + p];
         if (group_label != 0) {
-          mark(node_for_group(tile_index, group_label), bits);
+          mark(node_for_group(tile_index, group_label), bits, tile_index,
+               group_label, "overflow_mark");
         }
       }
     }
@@ -222,6 +312,9 @@ struct StreamingCompositor::State {
 
   void mark_tile_ports(std::int64_t tile_index, const TileOp& op) {
     if (op.tile_flags & OVERFLOW_BIT) {
+      if (!trace.detected) {
+        record_spanning("overflow", 0, 0, kReachBoth, kReachBoth, tile_index);
+      }
       spanning_detected = true;
       mark_all_present_ports(tile_index, op, kReachBoth);
       return;
@@ -235,7 +328,7 @@ struct StreamingCompositor::State {
         const int group_label = op.face_groups[off + p];
         const NodeId node = node_for_group(tile_index, group_label);
         const std::uint8_t bits = reach_for_group(op, group_label);
-        if (bits != 0) mark(node, bits);
+        if (bits != 0) mark(node, bits, tile_index, group_label, "mark");
       }
     }
   }
@@ -253,8 +346,11 @@ struct StreamingCompositor::State {
     const int a_off = face_offset(a, Face::O);
     const int b_off = face_offset(b, Face::I);
     for (int p = 0; p < a.n[face_o]; ++p) {
-      unite(node_for_group(a_idx, a.face_groups[a_off + p]),
-            node_for_group(b_idx, b.face_groups[b_off + p]));
+      const int a_group = a.face_groups[a_off + p];
+      const int b_group = b.face_groups[b_off + p];
+      unite(node_for_group(a_idx, a_group),
+            node_for_group(b_idx, b_group),
+            "bridge_io", a_idx, a_group, b_idx, b_group);
     }
   }
 
@@ -265,9 +361,9 @@ struct StreamingCompositor::State {
            (entry.j == j && entry.port_ordinal < port_ordinal);
   }
 
-  NodeId frontier_node_for(std::size_t& frontier_cursor,
-                           std::int32_t j,
-                           std::uint8_t port_ordinal) const {
+  const FrontierNode& frontier_entry_for(std::size_t& frontier_cursor,
+                                         std::int32_t j,
+                                         std::uint8_t port_ordinal) const {
     while (frontier_cursor < frontier.size() &&
            frontier_key_less(frontier[frontier_cursor], j, port_ordinal)) {
       ++frontier_cursor;
@@ -275,7 +371,7 @@ struct StreamingCompositor::State {
     if (frontier_cursor < frontier.size()) {
       const FrontierNode& entry = frontier[frontier_cursor];
       if (entry.j == j && entry.port_ordinal == port_ordinal) {
-        return entry.node;
+        return entry;
       }
     }
     throw std::runtime_error("previous right-face frontier node missing");
@@ -297,10 +393,12 @@ struct StreamingCompositor::State {
     require_port_count_equal(a.n[face_r], b.n[face_l], "L/R");
     const int b_off = face_offset(b, Face::L);
     for (int p = 0; p < a.n[face_r]; ++p) {
-      unite(frontier_node_for(frontier_cursor,
-                              a_coord.j,
-                              static_cast<std::uint8_t>(p + 1)),
-            node_for_group(b_idx, b.face_groups[b_off + p]));
+      const int b_group = b.face_groups[b_off + p];
+      const FrontierNode& lhs = frontier_entry_for(
+          frontier_cursor, a_coord.j, static_cast<std::uint8_t>(p + 1));
+      unite(lhs.node,
+            node_for_group(b_idx, b_group),
+            "bridge_lr", lhs.tile_index, lhs.group_label, b_idx, b_group);
     }
   }
 
@@ -316,10 +414,13 @@ struct StreamingCompositor::State {
       const int face_r = face_index(Face::R);
       const int off = face_offset(op, Face::R);
       for (int p = 0; p < op.n[face_r]; ++p) {
+        const int group_label = op.face_groups[off + p];
         out.push_back(FrontierNode{
             coord.j,
             static_cast<std::uint8_t>(p + 1),
-            node_for_group(idx, op.face_groups[off + p]),
+            node_for_group(idx, group_label),
+            idx,
+            group_label,
         });
       }
     }
@@ -463,6 +564,10 @@ void StreamingCompositor::ingest_column(
 
 bool StreamingCompositor::has_spanning() const noexcept {
   return state_ ? state_->spanning_detected : false;
+}
+
+SpanningTrace StreamingCompositor::spanning_trace() const {
+  return state_ ? state_->trace : SpanningTrace{};
 }
 
 Verdict StreamingCompositor::finalize() {

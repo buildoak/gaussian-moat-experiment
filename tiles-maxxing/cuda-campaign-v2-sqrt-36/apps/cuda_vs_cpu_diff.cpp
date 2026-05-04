@@ -33,6 +33,7 @@ struct Options {
   std::optional<std::size_t> sample;
   std::optional<std::pair<int, int>> tile;
   bool compact_primes = false;
+  bool geo_flags = false;
   bool m4 = false;
   bool k5 = false;
   bool verbose = false;
@@ -52,7 +53,8 @@ void print_usage(const char* argv0) {
   std::cerr << "usage: " << argv0
             << " [--r-inner N] [--r-outer N] [--start-index N]"
             << " [--limit N] [--sample N] [--tile i,j]"
-            << " [--compact-primes] [--m4] [--k5] [--verbose]\n";
+            << " [--compact-primes] [--geo-flags] [--m4] [--k5]"
+            << " [--verbose]\n";
 }
 
 bool parse_u64(const char* text, std::uint64_t* out) {
@@ -121,6 +123,10 @@ bool parse_args(int argc, char** argv, Options* options) {
     }
     if (arg == "--compact-primes") {
       options->compact_primes = true;
+      continue;
+    }
+    if (arg == "--geo-flags") {
+      options->geo_flags = true;
       continue;
     }
     if (arg == "--k5") {
@@ -405,6 +411,35 @@ int compare_compact_primes(const std::vector<campaign::Prime>& cpu_compact,
 }
 
 std::uint8_t prime_geo_bits(const campaign::Prime& prime,
+                            const campaign::CampaignConstants& constants);
+
+int compare_geo_flags(const std::vector<campaign::Prime>& cpu_compact,
+                      const campaign::CampaignConstants& constants,
+                      const cuda_campaign::K1K4DebugDownload& gpu,
+                      std::size_t batch_idx,
+                      std::size_t tile_idx,
+                      const campaign::TileCoord& coord) {
+  const std::size_t prime_offset =
+      batch_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU);
+  for (std::size_t prime_idx = 0; prime_idx < cpu_compact.size();
+       ++prime_idx) {
+    const std::uint8_t expected =
+        prime_geo_bits(cpu_compact[prime_idx], constants);
+    const std::uint8_t actual =
+        gpu.prime_geo_bits[prime_offset + prime_idx] & 0x3U;
+    if (expected == actual) continue;
+    std::cerr << "diff at tile " << tile_idx << " (i=" << coord.i
+              << ", j=" << coord.j << "), geo_flags prime " << prime_idx
+              << ": cpu=" << static_cast<int>(expected)
+              << " cuda=" << static_cast<int>(actual) << " prime{";
+    print_prime_record(std::cerr, cpu_compact[prime_idx]);
+    std::cerr << "}\n";
+    return 1;
+  }
+  return 0;
+}
+
+std::uint8_t prime_geo_bits(const campaign::Prime& prime,
                             const campaign::CampaignConstants& constants) {
   std::uint8_t bits = 0;
   if (campaign::is_inner_prime(static_cast<std::int64_t>(prime.norm_sq),
@@ -616,18 +651,25 @@ int main(int argc, char** argv) {
         return 1;
       }
 
-      if (options.compact_primes) {
+      if (options.compact_primes || options.geo_flags) {
         const std::vector<campaign::Prime> cpu_compact =
             cpu_primes_in_compact_order(primes);
         if (compare_compact_primes(cpu_compact, gpu, batch_idx, global_idx,
                                    coord) != 0) {
           return 1;
         }
+        if (options.geo_flags &&
+            compare_geo_flags(cpu_compact, constants, gpu, batch_idx,
+                              global_idx, coord) != 0) {
+          return 1;
+        }
         if (options.verbose) {
           std::cout << "cuda_vs_cpu_diff: tile " << global_idx
                     << " (i=" << coord.i << ", j=" << coord.j
-                    << ") matched " << cpu_compact.size()
-                    << " compact prime(s)\n";
+                    << ") matched " << cpu_compact.size() << " "
+                    << (options.geo_flags ? "compact prime/geo flag"
+                                          : "compact prime")
+                    << "(s)\n";
         }
         continue;
       }
@@ -693,8 +735,10 @@ int main(int argc, char** argv) {
     std::cout << "cuda_vs_cpu_diff: " << batch.size() << " tile(s) matched "
               << (options.compact_primes
                       ? "K1 compact-prime parity"
-                      : (options.m4 ? "M4 debug parity"
-                                    : "K1-K4 parent parity"))
+                      : (options.geo_flags
+                             ? "K3 geo-flag parity"
+                             : (options.m4 ? "M4 debug parity"
+                                           : "K1-K4 parent parity")))
               << "\n";
     return 0;
   } catch (const std::exception& e) {

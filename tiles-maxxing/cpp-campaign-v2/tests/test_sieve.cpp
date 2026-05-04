@@ -46,6 +46,16 @@ bool has_point(const std::vector<campaign::Prime>& ps, std::int64_t a,
   });
 }
 
+std::uint32_t expected_packed_pos(const campaign::TileCoord& coord,
+                                  const campaign::CampaignConstants& constants,
+                                  std::int64_t a,
+                                  std::int64_t b) {
+  const std::int64_t col = a - (coord.a_lo - constants.C_value);
+  const std::int64_t row = b - (coord.b_lo - constants.C_value);
+  const std::int64_t side = constants.S_value + 1 + 2 * constants.C_value;
+  return static_cast<std::uint32_t>(row * side + col);
+}
+
 TEST(Sieve, TinyRadiusMatchesCommittedReference) {
   const campaign::TileCoord coord{20, 32, 5120, 8192};
   const auto constants = constants_for(kRinner, kRouter);
@@ -92,7 +102,10 @@ TEST(Sieve, TinyRadiusMatchesCommittedReference) {
     EXPECT_EQ(got[i].a, kExpected[i].a) << i;
     EXPECT_EQ(got[i].b, kExpected[i].b) << i;
     EXPECT_EQ(got[i].norm_sq, kExpected[i].norm_sq) << i;
-    EXPECT_EQ(got[i].packed_pos, kExpected[i].packed_pos) << i;
+    EXPECT_EQ(got[i].packed_pos,
+              expected_packed_pos(coord, constants, kExpected[i].a,
+                                  kExpected[i].b))
+        << i;
   }
 }
 

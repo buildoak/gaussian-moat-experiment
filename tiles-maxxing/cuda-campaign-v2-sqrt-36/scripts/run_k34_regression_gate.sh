@@ -9,8 +9,9 @@ Usage:
 Runs the honest K34 cross-K regression gate:
   1. K34 CPU/CUDA snapshot SHA smoke.
   2. K34 cuda_vs_cpu_diff compact-prime parity on sampled Tsuchimura-scale shell tiles.
-  3. K34 cuda_vs_cpu_diff M4+K5 parity on the Tsuchimura-scale shell.
-  4. K34 Tsuchimura-scale shell sentinel:
+  3. K34 cuda_vs_cpu_diff geo-flag parity on the same shell.
+  4. K34 cuda_vs_cpu_diff M4+K5 parity on the Tsuchimura-scale shell.
+  5. K34 Tsuchimura-scale shell sentinel:
        R_inner=24289452 R_outer=24297644 => observed SPANNING, zero overflows.
 
 This is NOT an external Tsuchimura truth gate. Tsuchimura's K34 result bounds
@@ -223,7 +224,15 @@ echo "k34-regression-gate: cuda_vs_cpu_diff compact-prime parity"
   --r-outer "$r_outer" \
   --compact-primes \
   --verbose \
-  --sample 16 | tee "$work_dir/cuda_vs_cpu_diff_compact_primes.log"
+  --sample 64 | tee "$work_dir/cuda_vs_cpu_diff_compact_primes.log"
+
+echo "k34-regression-gate: cuda_vs_cpu_diff geo-flag parity"
+"$diff_bin" \
+  --r-inner "$r_inner" \
+  --r-outer "$r_outer" \
+  --geo-flags \
+  --verbose \
+  --sample 64 | tee "$work_dir/cuda_vs_cpu_diff_geo_flags.log"
 
 echo "k34-regression-gate: cuda_vs_cpu_diff M4+K5 parity"
 "$diff_bin" \
@@ -231,13 +240,13 @@ echo "k34-regression-gate: cuda_vs_cpu_diff M4+K5 parity"
   --r-outer "$r_outer" \
   --m4 \
   --verbose \
-  --limit 16 | tee "$work_dir/cuda_vs_cpu_diff.log"
+  --sample 32 | tee "$work_dir/cuda_vs_cpu_diff.log"
 "$diff_bin" \
   --r-inner "$r_inner" \
   --r-outer "$r_outer" \
   --k5 \
   --verbose \
-  --limit 16 | tee "$work_dir/cuda_vs_cpu_diff_k5.log"
+  --sample 32 | tee "$work_dir/cuda_vs_cpu_diff_k5.log"
 
 log="$work_dir/R24289452_shell_spanning.log"
 profile="$work_dir/R24289452_shell_spanning.profile.json"
@@ -257,6 +266,9 @@ cmd=(
 )
 if [[ "$timing" -eq 1 ]] && supports_flag "$cuda_bin" "--timing"; then
   cmd+=(--timing)
+fi
+if supports_flag "$cuda_bin" "--trace-spanning"; then
+  cmd+=(--trace-spanning)
 fi
 if [[ -n "$profile_dir" ]] && supports_flag "$cuda_bin" "--profile"; then
   cmd+=(--profile "$profile")

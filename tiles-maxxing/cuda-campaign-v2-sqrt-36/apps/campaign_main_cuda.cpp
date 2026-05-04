@@ -106,6 +106,7 @@ void print_help(const char* prog) {
       << "  --no-early-exit        Ingest all columns even after SPANNING is found\n"
       << "  --timing               Print timing and chunk accounting\n"
       << "  --profile <path>       Write JSON profile; implies --timing\n"
+      << "  --trace-spanning       Print/profile first SPANNING provenance\n"
       << "  --overflow-diagnostics Capture first overflow tiles in profile output\n"
       << "  --threads=N            Accepted for CPU CLI compatibility; ignored\n"
       << "\n"
@@ -376,7 +377,9 @@ void write_profile_json(const std::filesystem::path& path,
                         const Timings& timings,
                         campaign::Verdict verdict,
                         bool snapshot_enabled,
-                        bool early_exit_enabled) {
+                        bool early_exit_enabled,
+                        bool trace_spanning,
+                        const campaign::SpanningTrace& spanning_trace) {
   nlohmann::json overflow_diags = nlohmann::json::array();
   for (const auto& diag : stats.dispatch.first_overflow_tiles) {
     overflow_diags.push_back({
@@ -449,6 +452,25 @@ void write_profile_json(const std::filesystem::path& path,
         {"pinned_host_bytes", stats.dispatch.pinned_host_bytes}}},
       {"overflow_diagnostics", overflow_diags},
   };
+
+  if (trace_spanning) {
+    profile["spanning_trace"] = {
+        {"detected", spanning_trace.detected},
+        {"event", spanning_trace.event},
+        {"column_i", spanning_trace.column_i},
+        {"tile_j", spanning_trace.tile_j},
+        {"tile_index", spanning_trace.tile_index},
+        {"group_label", spanning_trace.group_label},
+        {"lhs_tile_index", spanning_trace.lhs_tile_index},
+        {"lhs_group_label", spanning_trace.lhs_group_label},
+        {"rhs_tile_index", spanning_trace.rhs_tile_index},
+        {"rhs_group_label", spanning_trace.rhs_group_label},
+        {"component", spanning_trace.component},
+        {"reach_before", spanning_trace.reach_before},
+        {"reach_after", spanning_trace.reach_after},
+        {"added_bits", spanning_trace.added_bits},
+    };
+  }
 
   std::ofstream out(path);
   if (!out.is_open()) {
@@ -684,6 +706,7 @@ int main(int argc, char** argv) {
   bool no_early_exit = false;
   bool overlap_compositor = false;
   bool overflow_diagnostics = false;
+  bool trace_spanning = false;
   bool timing = false;
 
   for (int i = 1; i < argc; ++i) {
@@ -751,6 +774,8 @@ int main(int argc, char** argv) {
       overlap_compositor = true;
     } else if (a == "--overflow-diagnostics") {
       overflow_diagnostics = true;
+    } else if (a == "--trace-spanning") {
+      trace_spanning = true;
     } else if (a == "--timing") {
       timing = true;
     } else if (take_val("--profile", val)) {
@@ -883,6 +908,7 @@ int main(int argc, char** argv) {
   const bool snapshot_enabled = snapshot_path.has_value();
   const bool early_exit_enabled = !snapshot_enabled && !no_early_exit;
   campaign::Verdict verdict = campaign::Verdict::kUnknown;
+  campaign::SpanningTrace spanning_trace;
 
   try {
     cuda_campaign::DispatchConfig config;
@@ -1020,6 +1046,7 @@ int main(int argc, char** argv) {
 
     verdict = run_stats.early_exit_taken ? campaign::Verdict::kSpanning
                                          : compositor.finalize();
+    spanning_trace = compositor.spanning_trace();
   } catch (const std::exception& e) {
     std::cerr << "Error in CUDA streaming campaign: " << e.what() << "\n";
     return 5;
@@ -1033,7 +1060,7 @@ int main(int argc, char** argv) {
                          *r_inner, *r_outer, *region_spec, chunk_size,
                          static_cast<std::uint64_t>(grid.total_tiles),
                          run_stats, timings, verdict, snapshot_enabled,
-                         early_exit_enabled);
+                         early_exit_enabled, trace_spanning, spanning_trace);
     } catch (const std::exception& e) {
       std::cerr << "Error writing profile: " << e.what() << "\n";
       return 7;
@@ -1106,6 +1133,24 @@ int main(int argc, char** argv) {
   }
 
   std::cout << "VERDICT: " << verdict_name(verdict) << "\n";
+  if (trace_spanning) {
+    std::cout << "SPANNING_TRACE:"
+              << " detected=" << (spanning_trace.detected ? 1 : 0)
+              << " event=" << spanning_trace.event
+              << " column_i=" << spanning_trace.column_i
+              << " tile_j=" << spanning_trace.tile_j
+              << " tile_index=" << spanning_trace.tile_index
+              << " group_label=" << spanning_trace.group_label
+              << " lhs_tile_index=" << spanning_trace.lhs_tile_index
+              << " lhs_group_label=" << spanning_trace.lhs_group_label
+              << " rhs_tile_index=" << spanning_trace.rhs_tile_index
+              << " rhs_group_label=" << spanning_trace.rhs_group_label
+              << " component=" << spanning_trace.component
+              << " reach_before=" << static_cast<int>(spanning_trace.reach_before)
+              << " reach_after=" << static_cast<int>(spanning_trace.reach_after)
+              << " added_bits=" << static_cast<int>(spanning_trace.added_bits)
+              << "\n";
+  }
   if (profile_path.has_value() &&
       !run_stats.dispatch.first_overflow_tiles.empty()) {
     std::cout << "OVERFLOW_DIAGNOSTICS:\n";

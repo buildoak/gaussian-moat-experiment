@@ -2,6 +2,7 @@
 #include <iostream>
 #include <vector>
 
+#include "campaign/constants.h"
 #include "support/k3k4_parity_support.h"
 
 int main() {
@@ -14,7 +15,10 @@ int main() {
     return 1;
   }
 
-  const std::vector<std::int32_t> expected = {0, 0, 0, 3, 3, 5, 5, 7};
+  const std::vector<std::int32_t> expected =
+      campaign::k_sq_value >= 36
+          ? std::vector<std::int32_t>{0, 0, 0, 3, 3, 5, 5, 7}
+          : std::vector<std::int32_t>{0, 0, 2, 3, 3, 5, 6, 7};
   if (fixture.cpu_parent != expected) {
     std::cerr << "unexpected CPU parent roots:";
     for (const std::int32_t root : fixture.cpu_parent) {

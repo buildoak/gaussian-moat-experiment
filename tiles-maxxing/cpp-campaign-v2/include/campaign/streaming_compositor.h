@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <span>
+#include <string>
 #include <vector>
 
 #include "campaign/compositor.h"
@@ -27,6 +28,23 @@ struct FrontierPort {
                          const FrontierPort&) = default;
 };
 
+struct SpanningTrace {
+  bool detected = false;
+  std::string event;
+  std::int32_t column_i = 0;
+  std::int32_t tile_j = 0;
+  std::int64_t tile_index = -1;
+  std::int32_t group_label = 0;
+  std::int64_t lhs_tile_index = -1;
+  std::int32_t lhs_group_label = 0;
+  std::int64_t rhs_tile_index = -1;
+  std::int32_t rhs_group_label = 0;
+  std::uint32_t component = 0;
+  std::uint8_t reach_before = 0;
+  std::uint8_t reach_after = 0;
+  std::uint8_t added_bits = 0;
+};
+
 class StreamingCompositor {
  public:
   StreamingCompositor();
@@ -36,6 +54,7 @@ class StreamingCompositor {
   void ingest_column(std::int32_t i, std::span<const TileOp> column_tileops);
 
   bool has_spanning() const noexcept;
+  SpanningTrace spanning_trace() const;
   Verdict finalize();
 
   // Test/proof hook: canonical equality + reach state for live right-face
