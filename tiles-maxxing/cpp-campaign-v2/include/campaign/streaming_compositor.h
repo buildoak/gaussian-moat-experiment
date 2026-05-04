@@ -43,6 +43,10 @@ struct SpanningTrace {
   std::uint8_t reach_before = 0;
   std::uint8_t reach_after = 0;
   std::uint8_t added_bits = 0;
+  std::int64_t inner_source_tile_index = -1;
+  std::int32_t inner_source_group_label = 0;
+  std::int64_t outer_source_tile_index = -1;
+  std::int32_t outer_source_group_label = 0;
 };
 
 class StreamingCompositor {

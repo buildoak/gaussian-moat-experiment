@@ -34,11 +34,13 @@ struct Options {
   std::optional<std::pair<int, int>> tile;
   bool compact_primes = false;
   bool geo_flags = false;
+  bool dump_tile = false;
   bool m4 = false;
   bool k5 = false;
   bool verbose = false;
   bool self_test_parse = false;
   bool self_test_verbose_mismatch = false;
+  std::vector<int> dump_labels;
 };
 
 struct M4ExpectedTile {
@@ -53,8 +55,8 @@ void print_usage(const char* argv0) {
   std::cerr << "usage: " << argv0
             << " [--r-inner N] [--r-outer N] [--start-index N]"
             << " [--limit N] [--sample N] [--tile i,j]"
-            << " [--compact-primes] [--geo-flags] [--m4] [--k5]"
-            << " [--verbose]\n";
+            << " [--compact-primes] [--geo-flags] [--dump-tile]"
+            << " [--dump-label N] [--m4] [--k5] [--verbose]\n";
 }
 
 bool parse_u64(const char* text, std::uint64_t* out) {
@@ -129,6 +131,10 @@ bool parse_args(int argc, char** argv, Options* options) {
       options->geo_flags = true;
       continue;
     }
+    if (arg == "--dump-tile") {
+      options->dump_tile = true;
+      continue;
+    }
     if (arg == "--k5") {
       options->k5 = true;
       continue;
@@ -162,6 +168,13 @@ bool parse_args(int argc, char** argv, Options* options) {
       std::pair<int, int> tile;
       if (!parse_tile_coord(argv[++i], &tile)) return false;
       options->tile = tile;
+    } else if (arg == "--dump-label") {
+      int label = 0;
+      if (!parse_int32(argv[++i], &label) || label <= 0 ||
+          label > campaign::MAX_GROUPS_PER_TILE) {
+        return false;
+      }
+      options->dump_labels.push_back(label);
     } else {
       return false;
     }
@@ -453,6 +466,170 @@ std::uint8_t prime_geo_bits(const campaign::Prime& prime,
   return bits;
 }
 
+const char* face_name(campaign::Face face) {
+  switch (face) {
+    case campaign::Face::I:
+      return "I";
+    case campaign::Face::O:
+      return "O";
+    case campaign::Face::L:
+      return "L";
+    case campaign::Face::R:
+      return "R";
+  }
+  return "?";
+}
+
+std::int64_t rel_col(const campaign::Prime& prime,
+                     const campaign::TileCoord& coord) {
+  return prime.a - coord.a_lo;
+}
+
+std::int64_t rel_row(const campaign::Prime& prime,
+                     const campaign::TileCoord& coord) {
+  return prime.b - coord.b_lo;
+}
+
+std::int64_t face_perp(const campaign::Prime& prime,
+                       const campaign::TileCoord& coord,
+                       campaign::Face face) {
+  switch (face) {
+    case campaign::Face::I:
+      return rel_row(prime, coord);
+    case campaign::Face::O:
+      return rel_row(prime, coord) - campaign::S;
+    case campaign::Face::L:
+      return rel_col(prime, coord);
+    case campaign::Face::R:
+      return rel_col(prime, coord) - campaign::S;
+  }
+  return 0;
+}
+
+bool on_face_strip(const campaign::Prime& prime,
+                   const campaign::TileCoord& coord,
+                   campaign::Face face) {
+  const std::int64_t p_perp = face_perp(prime, coord, face);
+  return -static_cast<std::int64_t>(campaign::C) <= p_perp &&
+         p_perp <= static_cast<std::int64_t>(campaign::C);
+}
+
+std::string face_mask_for_prime(const campaign::Prime& prime,
+                                const campaign::TileCoord& coord) {
+  std::string out;
+  for (int f = 0; f < campaign::NUM_FACES; ++f) {
+    const campaign::Face face = static_cast<campaign::Face>(f);
+    if (!on_face_strip(prime, coord, face)) continue;
+    if (!out.empty()) out.push_back(',');
+    out += face_name(face);
+  }
+  if (out.empty()) return "-";
+  return out;
+}
+
+std::uint8_t group_geo_bits(const std::vector<campaign::Prime>& primes,
+                            campaign::DSU* dsu,
+                            const campaign::internal::DenseRemap& remap,
+                            const campaign::CampaignConstants& constants,
+                            int label) {
+  std::uint8_t bits = 0;
+  for (std::int32_t i = 0; i < static_cast<std::int32_t>(primes.size()); ++i) {
+    const std::int32_t root = dsu->find(i);
+    if (remap.wire_label_by_raw_root[static_cast<std::size_t>(root)] != label) {
+      continue;
+    }
+    bits |= prime_geo_bits(primes[static_cast<std::size_t>(i)], constants);
+  }
+  return bits;
+}
+
+void dump_face_ports(const campaign::TileOp& op, int label) {
+  for (int f = 0; f < campaign::NUM_FACES; ++f) {
+    const campaign::Face face = static_cast<campaign::Face>(f);
+    const int off = campaign::face_offset(op, face);
+    bool printed = false;
+    std::cout << "  face_" << face_name(face)
+              << " count=" << static_cast<int>(op.n[f]) << " label_" << label
+              << "_ordinals=";
+    for (int p = 0; p < op.n[f]; ++p) {
+      if (op.face_groups[off + p] != label) continue;
+      if (printed) std::cout << ",";
+      std::cout << (p + 1);
+      printed = true;
+    }
+    if (!printed) std::cout << "-";
+    std::cout << "\n";
+  }
+}
+
+int dump_tile_debug(const std::vector<campaign::Prime>& primes,
+                    const campaign::CampaignConstants& constants,
+                    const campaign::TileCoord& coord,
+                    std::size_t global_idx,
+                    const std::vector<int>& requested_labels) {
+  std::vector<campaign::internal::PrimeGeoFlags> flags;
+  flags.reserve(primes.size());
+  for (const campaign::Prime& prime : primes) {
+    const std::uint8_t bits = prime_geo_bits(prime, constants);
+    flags.push_back(campaign::internal::PrimeGeoFlags{
+        (bits & 0x1U) != 0,
+        (bits & 0x2U) != 0,
+    });
+  }
+
+  campaign::DSU dsu = campaign::internal::build_local_dsu(primes);
+  const campaign::internal::DenseRemap remap =
+      campaign::internal::dense_remap_visible_roots(&dsu, primes, flags, coord);
+  const campaign::TileOp op =
+      campaign::internal::build_tileop_for_primes_in_input_order(
+          std::vector<campaign::Prime>(primes),
+          std::vector<campaign::internal::PrimeGeoFlags>(flags), coord,
+          constants);
+
+  std::cout << "DUMP_TILE global_idx=" << global_idx << " i=" << coord.i
+            << " j=" << coord.j << " a_lo=" << coord.a_lo
+            << " b_lo=" << coord.b_lo << " prime_count=" << primes.size()
+            << " max_label=" << remap.max_label
+            << " overflow=" << (remap.overflow ? 1 : 0)
+            << " tile_flags=" << static_cast<int>(op.tile_flags) << "\n";
+
+  std::vector<int> labels = requested_labels;
+  if (labels.empty()) {
+    labels.reserve(static_cast<std::size_t>(remap.max_label));
+    for (int label = 1; label <= remap.max_label; ++label) {
+      labels.push_back(label);
+    }
+  }
+
+  for (const int label : labels) {
+    const std::uint8_t bits = group_geo_bits(primes, &dsu, remap, constants, label);
+    const bool tile_inner = campaign::bit_test(op.inner_flags, label);
+    const bool tile_outer = campaign::bit_test(op.outer_flags, label);
+    std::cout << "GROUP label=" << label << " geo_bits="
+              << static_cast<int>(bits) << " tile_inner="
+              << (tile_inner ? 1 : 0) << " tile_outer="
+              << (tile_outer ? 1 : 0) << "\n";
+    dump_face_ports(op, label);
+    for (std::int32_t i = 0; i < static_cast<std::int32_t>(primes.size());
+         ++i) {
+      const std::int32_t root = dsu.find(i);
+      if (remap.wire_label_by_raw_root[static_cast<std::size_t>(root)] !=
+          label) {
+        continue;
+      }
+      const campaign::Prime& prime = primes[static_cast<std::size_t>(i)];
+      std::cout << "  prime idx=" << i << " root=" << root << " ";
+      print_prime_record(std::cout, prime);
+      std::cout << " geo_bits="
+                << static_cast<int>(prime_geo_bits(prime, constants))
+                << " rel_col=" << rel_col(prime, coord)
+                << " rel_row=" << rel_row(prime, coord)
+                << " faces=" << face_mask_for_prime(prime, coord) << "\n";
+    }
+  }
+  return 0;
+}
+
 campaign::TileOp build_k5_cpu_tileop_from_gpu_order(
     const campaign::TileCoord& coord,
     const campaign::CampaignConstants& constants,
@@ -651,6 +828,16 @@ int main(int argc, char** argv) {
         return 1;
       }
 
+      if (options.dump_tile) {
+        const std::vector<campaign::Prime> gpu_ordered_primes =
+            gpu_compact_primes(coord, gpu, batch_idx, gpu_count);
+        if (dump_tile_debug(gpu_ordered_primes, constants, coord, global_idx,
+                            options.dump_labels) != 0) {
+          return 1;
+        }
+        continue;
+      }
+
       if (options.compact_primes || options.geo_flags) {
         const std::vector<campaign::Prime> cpu_compact =
             cpu_primes_in_compact_order(primes);
@@ -733,12 +920,14 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "cuda_vs_cpu_diff: " << batch.size() << " tile(s) matched "
-              << (options.compact_primes
+              << (options.dump_tile
+                      ? "debug dump"
+                      : (options.compact_primes
                       ? "K1 compact-prime parity"
                       : (options.geo_flags
                              ? "K3 geo-flag parity"
                              : (options.m4 ? "M4 debug parity"
-                                           : "K1-K4 parent parity")))
+                                           : "K1-K4 parent parity"))))
               << "\n";
     return 0;
   } catch (const std::exception& e) {

@@ -469,6 +469,10 @@ void write_profile_json(const std::filesystem::path& path,
         {"reach_before", spanning_trace.reach_before},
         {"reach_after", spanning_trace.reach_after},
         {"added_bits", spanning_trace.added_bits},
+        {"inner_source_tile_index", spanning_trace.inner_source_tile_index},
+        {"inner_source_group_label", spanning_trace.inner_source_group_label},
+        {"outer_source_tile_index", spanning_trace.outer_source_tile_index},
+        {"outer_source_group_label", spanning_trace.outer_source_group_label},
     };
   }
 
@@ -1149,6 +1153,14 @@ int main(int argc, char** argv) {
               << " reach_before=" << static_cast<int>(spanning_trace.reach_before)
               << " reach_after=" << static_cast<int>(spanning_trace.reach_after)
               << " added_bits=" << static_cast<int>(spanning_trace.added_bits)
+              << " inner_source_tile_index="
+              << spanning_trace.inner_source_tile_index
+              << " inner_source_group_label="
+              << spanning_trace.inner_source_group_label
+              << " outer_source_tile_index="
+              << spanning_trace.outer_source_tile_index
+              << " outer_source_group_label="
+              << spanning_trace.outer_source_group_label
               << "\n";
   }
   if (profile_path.has_value() &&

@@ -8,6 +8,7 @@
 #include "campaign/streaming_compositor.h"
 
 #include <algorithm>
+#include <array>
 #include <cassert>
 #include <cstdint>
 #include <limits>
@@ -77,6 +78,11 @@ struct StreamingCompositor::State {
     std::int32_t group_label = 0;
   };
 
+  struct ReachSource {
+    std::int64_t tile_index = -1;
+    std::int32_t group_label = 0;
+  };
+
   Grid grid;
   bool initialized = false;
   bool spanning_detected = false;
@@ -89,6 +95,7 @@ struct StreamingCompositor::State {
   std::vector<NodeId> current_group_nodes;
   std::vector<NodeId> parent;
   std::vector<std::uint8_t> reach;
+  std::vector<std::array<ReachSource, 2>> reach_sources;
   std::vector<TileOp> prev_column;
   std::vector<TileCoord> prev_coords;
   std::vector<FrontierNode> frontier;
@@ -100,6 +107,7 @@ struct StreamingCompositor::State {
     const NodeId id = static_cast<NodeId>(parent.size());
     parent.push_back(id);
     reach.push_back(0);
+    reach_sources.push_back({});
     return id;
   }
 
@@ -168,6 +176,12 @@ struct StreamingCompositor::State {
     trace.reach_before = reach_before;
     trace.reach_after = reach_after;
     trace.added_bits = added_bits;
+    if (root < reach_sources.size()) {
+      trace.inner_source_tile_index = reach_sources[root][0].tile_index;
+      trace.inner_source_group_label = reach_sources[root][0].group_label;
+      trace.outer_source_tile_index = reach_sources[root][1].tile_index;
+      trace.outer_source_group_label = reach_sources[root][1].group_label;
+    }
     if (tile_index >= 0) {
       const TileCoord coord = coord_from_flat_index(tile_index);
       trace.column_i = coord.i;
@@ -205,6 +219,12 @@ struct StreamingCompositor::State {
     const std::uint8_t added = reach[rb];
     parent[rb] = ra;
     reach[ra] = static_cast<std::uint8_t>(before | added);
+    for (int bit = 0; bit < 2; ++bit) {
+      const std::uint8_t mask = static_cast<std::uint8_t>(1U << bit);
+      if ((reach[rb] & mask) == 0) continue;
+      if (reach_sources[ra][bit].tile_index >= 0) continue;
+      reach_sources[ra][bit] = reach_sources[rb][bit];
+    }
     record_spanning(event, ra, before, reach[ra], added, -1, 0,
                     lhs_tile_index, lhs_group_label, rhs_tile_index,
                     rhs_group_label);
@@ -219,6 +239,14 @@ struct StreamingCompositor::State {
             const char* event = "mark") {
     const NodeId root = find(node);
     const std::uint8_t before = reach[root];
+    if ((bits & kReachInner) != 0 &&
+        reach_sources[root][0].tile_index < 0) {
+      reach_sources[root][0] = ReachSource{tile_index, group_label};
+    }
+    if ((bits & kReachOuter) != 0 &&
+        reach_sources[root][1].tile_index < 0) {
+      reach_sources[root][1] = ReachSource{tile_index, group_label};
+    }
     reach[root] = static_cast<std::uint8_t>(reach[root] | bits);
     record_spanning(event, root, before, reach[root], bits, tile_index,
                     group_label);
@@ -433,6 +461,7 @@ struct StreamingCompositor::State {
       current_group_tile_count = 0;
       parent.clear();
       reach.clear();
+      reach_sources.clear();
       frontier.clear();
       return;
     }
@@ -440,6 +469,7 @@ struct StreamingCompositor::State {
     std::vector<NodeId> root_to_compact(parent.size(), kInvalidNode);
     std::vector<NodeId> compact_parent;
     std::vector<std::uint8_t> compact_reach;
+    std::vector<std::array<ReachSource, 2>> compact_reach_sources;
 
     for (FrontierNode& entry : next_frontier) {
       const NodeId root = find(entry.node);
@@ -456,6 +486,7 @@ struct StreamingCompositor::State {
         root_to_compact[root] = compact;
         compact_parent.push_back(compact);
         compact_reach.push_back(reach[root]);
+        compact_reach_sources.push_back(reach_sources[root]);
       }
       entry.node = compact;
     }
@@ -464,6 +495,7 @@ struct StreamingCompositor::State {
     current_group_tile_count = 0;
     parent = std::move(compact_parent);
     reach = std::move(compact_reach);
+    reach_sources = std::move(compact_reach_sources);
     frontier = std::move(next_frontier);
   }
 
