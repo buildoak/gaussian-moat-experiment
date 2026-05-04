@@ -73,6 +73,9 @@ static_assert(k_sq_value != 36 || (C == 6 && SIDE_EXP == 269 &&
 static_assert(k_sq_value != 34 || (C == 5 && SIDE_EXP == 267 &&
                                    NUM_BACKWARD_OFFSETS == 54),
               "K_SQ=34 CUDA constants mismatch");
+static_assert(k_sq_value != 38 || (C == 6 && SIDE_EXP == 269 &&
+                                   NUM_BACKWARD_OFFSETS == 60),
+              "K_SQ=38 CUDA constants mismatch");
 static_assert(k_sq_value != 40 || (C == 6 && SIDE_EXP == 269 &&
                                    NUM_BACKWARD_OFFSETS == 64),
               "K_SQ=40 CUDA constants mismatch");

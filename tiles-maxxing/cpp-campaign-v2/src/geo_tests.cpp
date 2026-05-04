@@ -9,6 +9,7 @@
 namespace campaign {
 
 static_assert(ceil_isqrt(36) == 6, "ceil_isqrt(36) must be 6");
+static_assert(ceil_isqrt(38) == 7, "ceil_isqrt(38) must be 7");
 static_assert(ceil_isqrt(40) == 7, "ceil_isqrt(40) must be 7");
 
 namespace {
@@ -30,8 +31,9 @@ bool is_inner_prime(std::int64_t norm_sq,
   //   integer test: (norm_sq - R_inner^2 - K)^2 <= 4*R_inner^2*K
   // The `p in V(G_full)` clause implies ||p||^2 >= R_inner^2 (spec line 321).
   // So membership = R_inner^2 <= norm_sq <= (R_inner + sqrt(K))^2.
-  // At K=36 this matches the prior ceil_isqrt(K) band exactly. At K=40 the
-  // band was strictly wider than spec; norm-form is canonical.
+  // At K=36 this matches the prior ceil_isqrt(K) band exactly. At non-square
+  // K values such as 38 and 40 the widened ceil band diverges from spec;
+  // norm-form is canonical.
   const __int128 norm = static_cast<__int128>(norm_sq);
   const __int128 r_sq = to_i128(constants.R_inner_sq);
   if (norm < r_sq) {

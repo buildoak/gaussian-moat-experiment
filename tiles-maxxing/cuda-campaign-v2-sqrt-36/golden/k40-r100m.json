@@ -11,19 +11,19 @@
   "tile_count": 1024,
   "i_min": 138118,
   "i_max": 138146,
-  "candidate_count_total": 5735534,
-  "prime_count_total": 2461317,
+  "candidate_count_total": 5736350,
+  "prime_count_total": 2461618,
   "overflow_tile_count": 0,
   "verdict": "SPANNING",
-  "constants_hash": "ae5ec230e2d71c12c8c5f520f6e3d7c3b1233c191a43b6635c62a7096750a637",
+  "constants_hash": "4819bffdc0f7d1236f230124c22dbef6fdfd820a9df5b7d5b002f2ca4cf54d3c",
   "hashes": {
-    "prime_bitmap_sha256": "c3db55c8a29e3270940e969439ba1449f582949aeaec324d99e30a7efb0e362e",
-    "face_encoding_sha256": "4ec2bb326124c6ca30615b3eef8c42bc65dae3066e013286ad7c6d7233b7bfd1",
-    "connectivity_labels_sha256": "942c1bf881586aa648a26a60a1ca00bb7a4c0c5a0a2fe57a7b020e4c54368af6",
-    "tileop_sha256": "01bcc23a7c505f0d04dcb5579b0876ae9d4864a46b61be65cbe61f403f7e246d"
+    "prime_bitmap_sha256": "94da04388b755971785f4f910e4827911f5e7302cc1cc5acf46d3e235b6468de",
+    "face_encoding_sha256": "52ec506071216b820e44846e6e7995608b5e2a7fe03c7a2de35727a17972c1d2",
+    "connectivity_labels_sha256": "dbb51ffc4ef490397175f2eda7be4ff8cac9fbe308d5f59d2cb4588bc039c8d3",
+    "tileop_sha256": "f128b051f6ddbf027d21738966cf9a0eb4bf8dbf781970ceaf349937457ddf09"
   },
   "samples": {
-    "prime_bitmap_nonzero_words": [{"tile":0,"word":1466,"value":"0x00000200"},{"tile":0,"word":1475,"value":"0x00001000"},{"tile":0,"word":1528,"value":"0x44000000"},{"tile":0,"word":1529,"value":"0x00000001"},{"tile":0,"word":1555,"value":"0x00200000"},{"tile":0,"word":1556,"value":"0x00000008"},{"tile":0,"word":1573,"value":"0x00000200"},{"tile":0,"word":1591,"value":"0x00200000"},{"tile":0,"word":1600,"value":"0x00010000"},{"tile":0,"word":1609,"value":"0x00002000"},{"tile":0,"word":1610,"value":"0x00000800"},{"tile":0,"word":1618,"value":"0x00000041"},{"tile":0,"word":1626,"value":"0x02000000"},{"tile":0,"word":1627,"value":"0x00000008"},{"tile":0,"word":1628,"value":"0x00000020"},{"tile":0,"word":1635,"value":"0x00400000"}],
-    "prime_counts": [{"tile":0,"coord":[138118,365391],"prime_count":533},{"tile":1,"coord":[138118,365392],"prime_count":2481},{"tile":2,"coord":[138118,365393],"prime_count":2517},{"tile":3,"coord":[138118,365394],"prime_count":2468},{"tile":4,"coord":[138118,365395],"prime_count":2438},{"tile":5,"coord":[138118,365396],"prime_count":2555},{"tile":6,"coord":[138118,365397],"prime_count":2514},{"tile":7,"coord":[138118,365398],"prime_count":2523},{"tile":8,"coord":[138118,365399],"prime_count":2470},{"tile":9,"coord":[138118,365400],"prime_count":2592},{"tile":10,"coord":[138118,365401],"prime_count":2448},{"tile":11,"coord":[138118,365402],"prime_count":2500},{"tile":12,"coord":[138118,365403],"prime_count":2552},{"tile":13,"coord":[138118,365404],"prime_count":2443},{"tile":14,"coord":[138118,365405],"prime_count":2440},{"tile":15,"coord":[138118,365406],"prime_count":2492}]
+    "prime_bitmap_nonzero_words": [{"tile":0,"word":1475,"value":"0x00000400"},{"tile":0,"word":1537,"value":"0x88000000"},{"tile":0,"word":1538,"value":"0x00000002"},{"tile":0,"word":1564,"value":"0x00400000"},{"tile":0,"word":1565,"value":"0x00000010"},{"tile":0,"word":1582,"value":"0x00000400"},{"tile":0,"word":1600,"value":"0x00400000"},{"tile":0,"word":1609,"value":"0x00020000"},{"tile":0,"word":1618,"value":"0x00004000"},{"tile":0,"word":1619,"value":"0x00001000"},{"tile":0,"word":1627,"value":"0x00000082"},{"tile":0,"word":1635,"value":"0x04000000"},{"tile":0,"word":1636,"value":"0x00000010"},{"tile":0,"word":1637,"value":"0x00000040"},{"tile":0,"word":1644,"value":"0x00800000"},{"tile":0,"word":1645,"value":"0x08000000"}],
+    "prime_counts": [{"tile":0,"coord":[138118,365391],"prime_count":520},{"tile":1,"coord":[138118,365392],"prime_count":2488},{"tile":2,"coord":[138118,365393],"prime_count":2526},{"tile":3,"coord":[138118,365394],"prime_count":2466},{"tile":4,"coord":[138118,365395],"prime_count":2443},{"tile":5,"coord":[138118,365396],"prime_count":2561},{"tile":6,"coord":[138118,365397],"prime_count":2505},{"tile":7,"coord":[138118,365398],"prime_count":2530},{"tile":8,"coord":[138118,365399],"prime_count":2474},{"tile":9,"coord":[138118,365400],"prime_count":2593},{"tile":10,"coord":[138118,365401],"prime_count":2452},{"tile":11,"coord":[138118,365402],"prime_count":2502},{"tile":12,"coord":[138118,365403],"prime_count":2543},{"tile":13,"coord":[138118,365404],"prime_count":2454},{"tile":14,"coord":[138118,365405],"prime_count":2443},{"tile":15,"coord":[138118,365406],"prime_count":2490}]
   }
 }
