@@ -259,17 +259,25 @@ evidence.
 
 ## K40 Radius-Refine Campaign
 
-Campaign tag:
+First attempted campaign tag:
 
 - `k40-radius-refine-20260504T073258Z`
 
+This first attempt failed before launching CUDA because the runner script used
+`set -u` with a same-line local variable initialization bug. It produced no
+evidence rows and should be ignored except as an operational record.
+
+Active campaign tag:
+
+- `k40-radius-refine2-20260504T073415Z`
+
 Remote campaign dir:
 
-- `/workspace/k40-radius-refine-20260504T073258Z`
+- `/workspace/k40-radius-refine2-20260504T073415Z`
 
 Primary index:
 
-- `/workspace/k40-radius-refine-20260504T073258Z/run-index.tsv`
+- `/workspace/k40-radius-refine2-20260504T073415Z/run-index.tsv`
 
 Strategy:
 
