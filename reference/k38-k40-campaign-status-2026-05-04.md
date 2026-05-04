@@ -163,6 +163,8 @@ Confirmed K38 rows:
 | R_inner | width | verdict | produced | ingested | overflow counters |
 | ---: | ---: | --- | ---: | ---: | ---: |
 | 300000000 | 32768 | MOAT | 118987826 | 118987826 | 0 |
+| 200000000 | 32768 | MOAT | 79327833 | 79327833 | 0 |
+| 100000000 | 32768 | MOAT | 39667163 | 39667163 | 0 |
 
 The `R_inner=300000000, width=32768` row is a full-ingest MOAT:
 
@@ -172,9 +174,38 @@ The `R_inner=300000000, width=32768` row is a full-ingest MOAT:
 - `SPANNING_TRACE detected=0`
 - total runtime: `1446.47s`
 
-The campaign moved lower after this row. As of the latest live checks,
-`R_inner=200000000, width=32768` was running on the 4090 and had not yet emitted
-a verdict row.
+The `R_inner=200000000, width=32768` and `R_inner=100000000, width=32768` rows
+are also full-ingest MOATs with CUDA return code `0` and all overflow counters
+at `0`.
+
+The K38 broad-bracket campaign completed after the `100M` row. It did not find
+a SPANNING lower endpoint, so the K38 width-32768 threshold is below `100M` in
+this local-annulus sense.
+
+## K38 Low Bracket Campaign
+
+Campaign tag:
+
+- `k38-low-bracket-20260504T115438Z`
+
+Remote campaign dir:
+
+- `/workspace/k38-low-bracket-20260504T115438Z`
+
+Primary index:
+
+- `/workspace/k38-low-bracket-20260504T115438Z/run-index.tsv`
+
+Strategy:
+
+- width `32768`
+- lower-radius screen starting at `R_inner=50000000`
+- adaptive follow-up at `25M`, `12.5M`, or `75M` depending on the first verdicts
+- per-run BZ before CUDA
+- stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
+
+As of the launch check, `R_inner=50000000, width=32768` was running on the 4090
+and had not yet emitted a verdict row.
 
 ## K40 Overnight Campaign
 
