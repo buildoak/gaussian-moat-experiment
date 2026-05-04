@@ -542,6 +542,25 @@ Purpose:
   `--trace-spanning-path`
 - per-run BZ before CUDA
 
+This first diagnostic attempt passed BZ but the CUDA process was killed before
+writing a verdict. The failure appears tied to `--trace-spanning-path` overhead
+on the full K40 MOAT case. It is not mathematical evidence.
+
+Relaunched diagnostic tag:
+
+- `k40-980m-diag2-20260504T140207Z`
+
+Remote campaign dir:
+
+- `/workspace/k40-980m-diag2-20260504T140207Z`
+
+Purpose:
+
+- diagnostic confirmation of the same K40 `980M/32768` MOAT endpoint
+- command includes `--no-early-exit` and `--overflow-diagnostics`
+- omits path reconstruction to avoid the killed diagnostic mode
+- per-run BZ before CUDA
+
 ## Remaining Work
 
 - Finish or collect the K40 diagnostic confirmation.
