@@ -561,8 +561,23 @@ Purpose:
 - omits path reconstruction to avoid the killed diagnostic mode
 - per-run BZ before CUDA
 
+Confirmed diagnostic row:
+
+| R_inner | width | verdict | produced | ingested | overflow counters | early exit |
+| ---: | ---: | --- | ---: | ---: | ---: | --- |
+| 980000000 | 32768 | MOAT | 388679866 | 388679866 | 0 | disabled |
+
+The diagnostic confirmation succeeded:
+
+- CUDA return code: `0`
+- BZ check: pass
+- `active tiles = produced tiles = ingested tiles = 388679866`
+- `early-exit: disabled`
+- all overflow counters: `0`
+- `SPANNING_TRACE detected=0`
+- total runtime: `4571.39s`
+
 ## Remaining Work
 
-- Finish or collect the K40 diagnostic confirmation.
 - Pull remote artifacts or preserve remote paths in the next report.
 - Perform a completion audit before marking the larger K38/K40 objective complete.
