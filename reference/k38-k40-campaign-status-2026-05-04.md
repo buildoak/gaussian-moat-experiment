@@ -311,6 +311,25 @@ Strategy:
 - per-run BZ before CUDA
 - stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
 
+Confirmed row:
+
+| R_inner | width | verdict | produced | ingested | overflow counters |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 73437500 | 32768 | MOAT | 29132322 | 29132322 | 0 |
+
+The `R_inner=73437500, width=32768` row is a full-ingest MOAT:
+
+- `active tiles = produced tiles = ingested tiles = 29132322`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- `SPANNING_TRACE detected=0`
+- total runtime: `355.267s`
+
+The final K38 radius bracket from this campaign at width `32768` is:
+
+- `R_inner=71875000`: SPANNING
+- `R_inner=73437500`: MOAT
+
 ## K40 Overnight Campaign
 
 Campaign tag:
