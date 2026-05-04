@@ -8,8 +8,9 @@ Usage:
 
 Runs the honest K34 cross-K regression gate:
   1. K34 CPU/CUDA snapshot SHA smoke.
-  2. K34 cuda_vs_cpu_diff M4+K5 parity on the Tsuchimura-scale shell.
-  3. K34 Tsuchimura-scale shell sentinel:
+  2. K34 cuda_vs_cpu_diff compact-prime parity on sampled Tsuchimura-scale shell tiles.
+  3. K34 cuda_vs_cpu_diff M4+K5 parity on the Tsuchimura-scale shell.
+  4. K34 Tsuchimura-scale shell sentinel:
        R_inner=24289452 R_outer=24297644 => observed SPANNING, zero overflows.
 
 This is NOT an external Tsuchimura truth gate. Tsuchimura's K34 result bounds
@@ -215,6 +216,14 @@ echo "k34-regression-gate: snapshot SHA smoke"
   --cpu-bin "$cpu_bin" \
   --cuda-bin "$cuda_bin" \
   --work-dir "$work_dir/snapshot-smoke"
+
+echo "k34-regression-gate: cuda_vs_cpu_diff compact-prime parity"
+"$diff_bin" \
+  --r-inner "$r_inner" \
+  --r-outer "$r_outer" \
+  --compact-primes \
+  --verbose \
+  --sample 16 | tee "$work_dir/cuda_vs_cpu_diff_compact_primes.log"
 
 echo "k34-regression-gate: cuda_vs_cpu_diff M4+K5 parity"
 "$diff_bin" \

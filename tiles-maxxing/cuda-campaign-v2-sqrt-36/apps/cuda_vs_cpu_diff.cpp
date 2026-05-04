@@ -32,6 +32,7 @@ struct Options {
   std::size_t limit = 1;
   std::optional<std::size_t> sample;
   std::optional<std::pair<int, int>> tile;
+  bool compact_primes = false;
   bool m4 = false;
   bool k5 = false;
   bool verbose = false;
@@ -50,8 +51,8 @@ struct M4ExpectedTile {
 void print_usage(const char* argv0) {
   std::cerr << "usage: " << argv0
             << " [--r-inner N] [--r-outer N] [--start-index N]"
-            << " [--limit N] [--sample N] [--tile i,j] [--m4] [--k5]"
-            << " [--verbose]\n";
+            << " [--limit N] [--sample N] [--tile i,j]"
+            << " [--compact-primes] [--m4] [--k5] [--verbose]\n";
 }
 
 bool parse_u64(const char* text, std::uint64_t* out) {
@@ -116,6 +117,10 @@ bool parse_args(int argc, char** argv, Options* options) {
     }
     if (arg == "--m4") {
       options->m4 = true;
+      continue;
+    }
+    if (arg == "--compact-primes") {
+      options->compact_primes = true;
       continue;
     }
     if (arg == "--k5") {
@@ -326,6 +331,79 @@ std::vector<campaign::Prime> gpu_compact_primes(
   return ordered;
 }
 
+std::vector<campaign::Prime> cpu_primes_in_compact_order(
+    std::vector<campaign::Prime> primes) {
+  std::sort(primes.begin(), primes.end(),
+            [](const campaign::Prime& lhs, const campaign::Prime& rhs) {
+              if (lhs.packed_pos != rhs.packed_pos) {
+                return lhs.packed_pos < rhs.packed_pos;
+              }
+              if (lhs.a != rhs.a) return lhs.a < rhs.a;
+              return lhs.b < rhs.b;
+            });
+  return primes;
+}
+
+campaign::Prime prime_from_packed_pos(const campaign::TileCoord& coord,
+                                      std::uint32_t packed_pos) {
+  const std::int64_t row =
+      static_cast<std::int64_t>(packed_pos / cuda_campaign::SIDE_EXP);
+  const std::int64_t col =
+      static_cast<std::int64_t>(packed_pos % cuda_campaign::SIDE_EXP);
+  const std::int64_t a =
+      coord.a_lo + col - static_cast<std::int64_t>(cuda_campaign::C);
+  const std::int64_t b =
+      coord.b_lo + row - static_cast<std::int64_t>(cuda_campaign::C);
+  const auto norm_sq = static_cast<std::uint64_t>(
+      static_cast<__int128>(a) * static_cast<__int128>(a) +
+      static_cast<__int128>(b) * static_cast<__int128>(b));
+  return campaign::Prime{a, b, norm_sq, packed_pos};
+}
+
+void print_prime_record(std::ostream& os, const campaign::Prime& prime) {
+  os << "packed_pos=" << prime.packed_pos << " a=" << prime.a
+     << " b=" << prime.b << " norm_sq=" << prime.norm_sq;
+}
+
+int compare_compact_primes(const std::vector<campaign::Prime>& cpu_compact,
+                           const cuda_campaign::K1K4DebugDownload& gpu,
+                           std::size_t batch_idx,
+                           std::size_t tile_idx,
+                           const campaign::TileCoord& coord) {
+  const std::uint32_t gpu_count = gpu.prime_count[batch_idx];
+  if (gpu_count != cpu_compact.size()) {
+    std::cerr << "diff at tile " << tile_idx << " (i=" << coord.i
+              << ", j=" << coord.j << "), compact prime count: cpu="
+              << cpu_compact.size() << " cuda=" << gpu_count << "\n";
+    return 1;
+  }
+
+  for (std::size_t prime_idx = 0; prime_idx < cpu_compact.size();
+       ++prime_idx) {
+    const std::size_t offset =
+        batch_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU) +
+        prime_idx;
+    const campaign::Prime cuda_prime =
+        prime_from_packed_pos(coord, gpu.prime_pos[offset]);
+    const campaign::Prime& cpu_prime = cpu_compact[prime_idx];
+    if (cpu_prime.packed_pos == cuda_prime.packed_pos &&
+        cpu_prime.a == cuda_prime.a && cpu_prime.b == cuda_prime.b &&
+        cpu_prime.norm_sq == cuda_prime.norm_sq) {
+      continue;
+    }
+    std::cerr << "diff at tile " << tile_idx << " (i=" << coord.i
+              << ", j=" << coord.j << "), compact prime " << prime_idx
+              << ": cpu{";
+    print_prime_record(std::cerr, cpu_prime);
+    std::cerr << "} cuda{";
+    print_prime_record(std::cerr, cuda_prime);
+    std::cerr << "}\n";
+    return 1;
+  }
+
+  return 0;
+}
+
 std::uint8_t prime_geo_bits(const campaign::Prime& prime,
                             const campaign::CampaignConstants& constants) {
   std::uint8_t bits = 0;
@@ -529,14 +607,29 @@ int main(int argc, char** argv) {
       const campaign::TileCoord& coord = batch[batch_idx];
       const std::vector<campaign::Prime> primes =
           campaign::sieve_tile(coord, constants);
-      const std::vector<std::int32_t> cpu_parent = cpu_parent_roots(primes);
 
       const std::uint32_t gpu_count = gpu.prime_count[batch_idx];
-      if (gpu_count != cpu_parent.size()) {
+      if (gpu_count != primes.size()) {
         std::cerr << "diff at tile " << global_idx << " (i=" << coord.i
                   << ", j=" << coord.j << "), prime count: cpu="
-                  << cpu_parent.size() << " cuda=" << gpu_count << "\n";
+                  << primes.size() << " cuda=" << gpu_count << "\n";
         return 1;
+      }
+
+      if (options.compact_primes) {
+        const std::vector<campaign::Prime> cpu_compact =
+            cpu_primes_in_compact_order(primes);
+        if (compare_compact_primes(cpu_compact, gpu, batch_idx, global_idx,
+                                   coord) != 0) {
+          return 1;
+        }
+        if (options.verbose) {
+          std::cout << "cuda_vs_cpu_diff: tile " << global_idx
+                    << " (i=" << coord.i << ", j=" << coord.j
+                    << ") matched " << cpu_compact.size()
+                    << " compact prime(s)\n";
+        }
+        continue;
       }
 
       if (options.m4) {
@@ -580,6 +673,7 @@ int main(int argc, char** argv) {
         continue;
       }
 
+      const std::vector<std::int32_t> cpu_parent = cpu_parent_roots(primes);
       for (std::size_t prime_idx = 0; prime_idx < cpu_parent.size(); ++prime_idx) {
         const std::size_t offset =
             batch_idx * static_cast<std::size_t>(cuda_campaign::MAX_PRIMES_GPU) +
@@ -597,7 +691,10 @@ int main(int argc, char** argv) {
     }
 
     std::cout << "cuda_vs_cpu_diff: " << batch.size() << " tile(s) matched "
-              << (options.m4 ? "M4 debug parity" : "K1-K4 parent parity")
+              << (options.compact_primes
+                      ? "K1 compact-prime parity"
+                      : (options.m4 ? "M4 debug parity"
+                                    : "K1-K4 parent parity"))
               << "\n";
     return 0;
   } catch (const std::exception& e) {

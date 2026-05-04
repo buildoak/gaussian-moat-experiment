@@ -217,6 +217,7 @@ add_test(NAME cuda_vs_cpu_diff_parse_options
     --limit 2
     --sample 4
     --tile 0,0
+    --compact-primes
     --m4
     --k5
     --verbose)

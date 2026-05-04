@@ -141,6 +141,7 @@ Expected:
 | Step | Expected |
 |---|---|
 | K34 snapshot smoke | CPU/CUDA SHA match |
+| K34 `cuda_vs_cpu_diff --compact-primes --sample 16` on `24289452..24297644` | pass |
 | K34 separate `cuda_vs_cpu_diff --m4 --limit 16` and `--k5 --limit 16` on `24289452..24297644` | pass |
 | K34 shell sentinel `24289452..24297644` | `SPANNING`, zero overflow counters |
 
@@ -163,6 +164,15 @@ separate commands. The M4 expected surface was corrected to match the actual
 TileOp contract: only roots visible through ports or geo flags receive wire
 labels. Post-fix K34 regression gate passed on the Vast RTX 4090 with
 `SPANNING`, zero overflow counters, `2,479,915` tiles, `27.3446s` total.
+
+Compact-prime verifier correction, 2026-05-04: the K34 gate now runs
+`cuda_vs_cpu_diff --compact-primes --sample 16` before M4/K5. This compares
+CUDA compacted prime positions against an independent `campaign::sieve_tile`
+surface sorted by packed position, so same-count compact-order drift cannot be
+masked by later CPU expected surfaces. Validation run for this change on the
+Vast RTX 4090 passed the full K34 regression script with compact-prime parity,
+M4/K5 parity, `SPANNING`, zero overflow counters, `2,479,915` tiles,
+`27.3856s` total.
 
 ## Baseline Performance
 
