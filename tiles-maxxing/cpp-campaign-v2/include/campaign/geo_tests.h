@@ -8,12 +8,13 @@
 //
 //   inner: (norm_sq - R_inner^2 - K)^2 <= 4 * R_inner^2 * K
 //   outer: (R_outer^2 - norm_sq + K)^2 <= 4 * R_outer^2 * K   (equivalently
-//                                         (norm_sq - R_outer^2 + K)^2 <= ...)
+//                                         (norm_sq - R_outer^2 - K)^2 <= ...)
 //
 // Audit Codex-M1 (2026-04-21): previous implementation used a widened
 // ceil_isqrt(K) band as the primary test; at K=36 the two are identical,
-// but at K=40 the band accepted primes the spec rejects. The ceil_isqrt(K)
-// prefilter is retained inside the implementation as a short-circuit.
+// but at non-square K values the band accepted primes the spec rejects.
+// ceil_isqrt(K) remains valid as a conservative prefilter, not as the
+// acceptance predicate.
 //
 // Dependencies: campaign_constants.h.
 

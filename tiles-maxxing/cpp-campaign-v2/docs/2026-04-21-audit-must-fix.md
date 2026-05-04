@@ -25,7 +25,7 @@ Applied 3 of 4 audit must-fix items. Fix #2 (flip `from_radii` default to strict
 Final gates (all three simultaneously after all applied fixes):
 - K=36 golden at `R=80M δ=8192`: byte-identical, exit 0
 - K=40 golden at `R=800M δ=10000`: byte-identical, exit 0
-- `ctest --test-dir build-k36-tests`: **90/90 passed**, 2 skipped (expected: DEBUG-only `UnionFind.FindOutOfRangeAbortsInDebugBuilds`, K=40-only `GeoTests.NonSquareKUsesCeilBoundary`)
+- `ctest --test-dir build-k36-tests`: **90/90 passed**, 2 skipped (expected: DEBUG-only `UnionFind.FindOutOfRangeAbortsInDebugBuilds`, non-square-K `GeoTests.NonSquareKRejectsCeilOnlyGap`)
 
 ---
 
@@ -224,7 +224,7 @@ Outer form symmetric with `norm > R_outer²` as the annulus short-circuit.
 
 **Dead-code removal.** Unused helpers `square_band_delta` and `lower_outer_delta` removed from anonymous namespace in `src/geo_tests.cpp`. `ceil_isqrt` static asserts retained (they documented the K=36 vs K=40 boundary transition and are cheap compile-time tests).
 
-**Note on Python reference.** `goldens/5tile-k36.reference.py:105-109` still encodes the widened `ceil_isqrt(K)` band. This is flagged but not in scope for this pass (reference.py is not a gate, goldens are); at K=36 the two forms agree byte-for-byte so the K=36 reference remains accurate. At K=40 the reference.py would now produce different output than the C++; that is a separate follow-up (X-M4 in the synthesis, not in this audit-must-fix scope).
+**Follow-up resolved 2026-05-04.** The Python reference no longer uses the widened `ceil_isqrt(K)` band as the acceptance predicate. `goldens/5tile-k36.reference.py` and `goldens/preflight-oracle.py` now use the same canonical integer norm-form as `src/geo_tests.cpp`; `ceil_isqrt(K)` is only a conservative prefilter. K=36 bytes stay unchanged because the historical ceil band and norm form coincide for perfect-square K.
 
 ---
 
@@ -262,10 +262,10 @@ ctest --test-dir build-k36-tests --output-on-failure
 Results:
 - K=36: VERDICT=MOAT, 5/5 tiles identical, `OK: snapshots byte-identical`, exit 0.
 - K=40: VERDICT=MOAT, 5/5 tiles identical, `OK: snapshots byte-identical`, exit 0.
-- ctest: **100% tests passed, 0 tests failed out of 90.** Skipped: `UnionFind.FindOutOfRangeAbortsInDebugBuilds` (DEBUG-only), `GeoTests.NonSquareKUsesCeilBoundary` (K=40-only, current build is K=36).
+- ctest: **100% tests passed, 0 tests failed out of 90.** Skipped: `UnionFind.FindOutOfRangeAbortsInDebugBuilds` (DEBUG-only), `GeoTests.NonSquareKRejectsCeilOnlyGap` (non-square-K, current build is K=36).
 
 ## Open threads
 
 - Fix #2 (C2 strict default) requires a follow-up PR that touches `tests/*`. Outside this pass's scope.
-- Python reference `goldens/5tile-k36.reference.py` still uses the widened ceil-band (codex X-M4). No golden drift at K=36; K=40 reference is a separate follow-up.
+- Python reference X-M4 resolved 2026-05-04: `goldens/5tile-k36.reference.py` and `goldens/preflight-oracle.py` now use canonical norm-form for non-square K.
 - BZ runtime-radii binding inside `campaign_main` (strongest form of X-M2) is a follow-up; current fix closes the CMake ↔ Python drift but not the runtime ↔ BZ drift.

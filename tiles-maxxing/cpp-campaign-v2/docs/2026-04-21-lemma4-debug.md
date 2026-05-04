@@ -157,7 +157,7 @@ only triggers when at least one side carries `OVERFLOW_BIT`.
 | 6. N=100 + N=1000 timing | measured (below) |
 
 Note on gate 3: two `GeoTests` tests (`InnerBandCorners`, `OuterBandCorners`,
-and the skipped `NonSquareKUsesCeilBoundary`) fail in the current working
+and the skipped non-square-K boundary test) fail in the current working
 tree. These are caused by Pass A's in-flight edit to `src/geo_tests.cpp`
 and `include/campaign/geo_tests.h` which narrows the predicate from the
 `ceil_isqrt(K)`-band to the spec norm-form — the test fixtures in

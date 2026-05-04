@@ -95,7 +95,7 @@ octant+annulus primes.
   invariant and definition cited by the script is traced back to a
   specific section of the math SSoT (`tile-operator-definition-v-claude.md`)
   and the blueprint (`campaign-blueprint.md`). Face-strip depth, port
-  enumeration rule, `geo_I`/`geo_O` interval form (Model A), collar
+  enumeration rule, canonical `geo_I`/`geo_O` integer norm-form, collar
   `C = floor_isqrt(K) = 6`, `OFFSET = (1, 1)`, byte offsets at
   `0/4/196/212/228/229`, and 1..128 (not 0..127) wire-label convention
   are all traceable. (b) Tile selection — each tile's arc relationship
@@ -114,11 +114,14 @@ octant+annulus primes.
   expected) was checked post-hoc.
 
 A deliberately narrow hand-trace — the first three primes of T1's
-sieve output and their membership in `geo_I` under Model A — was used
-to sanity-check the norm-form comparison path during development, but
-the committed snapshot bytes are whatever the script produces on the
-locked inputs. Any future drift is a correctness bug in the script or
-a spec drift; the bytes are not negotiable artifact.
+sieve output and their membership in canonical `geo_I` — was used to
+sanity-check the norm-form comparison path during development, but the
+committed snapshot bytes are whatever the script produces on the locked
+inputs. The parameterized `preflight-oracle.py` reuses this same
+norm-form predicate for non-square K values such as K=38 and K=40; the
+historical widened ceil band is valid only as a conservative prefilter,
+not as an acceptance boundary. Any future drift is a correctness bug in
+the script or a spec drift; the bytes are not negotiable artifact.
 
 ## Wire format summary (for reviewers)
 

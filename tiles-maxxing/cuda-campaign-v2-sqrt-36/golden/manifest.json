@@ -73,7 +73,7 @@
     },
     {
       "path": "k40-r100m.json",
-      "sha256": "44f4ec77e9cf2f8a6da321269ab98a305d165383ad1be12916ed57e41745ceeb",
+      "sha256": "2edf26469ccd21ae0c662423165feac2cdc915f4bc2a98696326abad859611fd",
       "bytes": 2605,
       "batch": "k40-r100m",
       "k_sq": 40,
@@ -82,10 +82,10 @@
       "tile_count": 1024,
       "verdict": "SPANNING",
       "hashes": {
-        "prime_bitmap_sha256": "c3db55c8a29e3270940e969439ba1449f582949aeaec324d99e30a7efb0e362e",
-        "face_encoding_sha256": "4ec2bb326124c6ca30615b3eef8c42bc65dae3066e013286ad7c6d7233b7bfd1",
-        "connectivity_labels_sha256": "942c1bf881586aa648a26a60a1ca00bb7a4c0c5a0a2fe57a7b020e4c54368af6",
-        "tileop_sha256": "01bcc23a7c505f0d04dcb5579b0876ae9d4864a46b61be65cbe61f403f7e246d"
+        "prime_bitmap_sha256": "94da04388b755971785f4f910e4827911f5e7302cc1cc5acf46d3e235b6468de",
+        "face_encoding_sha256": "52ec506071216b820e44846e6e7995608b5e2a7fe03c7a2de35727a17972c1d2",
+        "connectivity_labels_sha256": "dbb51ffc4ef490397175f2eda7be4ff8cac9fbe308d5f59d2cb4588bc039c8d3",
+        "tileop_sha256": "f128b051f6ddbf027d21738966cf9a0eb4bf8dbf781970ceaf349937457ddf09"
       }
     }
   ]

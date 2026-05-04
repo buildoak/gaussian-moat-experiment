@@ -59,6 +59,7 @@ __int128 outer_lower(const campaign::CampaignConstants& cc) {
 }  // namespace
 
 static_assert(campaign::ceil_isqrt(36) == 6, "ceil_isqrt(36) must be 6");
+static_assert(campaign::ceil_isqrt(38) == 7, "ceil_isqrt(38) must be 7");
 static_assert(campaign::ceil_isqrt(40) == 7, "ceil_isqrt(40) must be 7");
 
 TEST(GeoTests, InnerBandCorners) {
@@ -83,23 +84,35 @@ TEST(GeoTests, OuterBandCorners) {
   EXPECT_FALSE(campaign::is_outer_prime(checked_i64(upper + 1), cc));
 }
 
-TEST(GeoTests, NonSquareKUsesCeilBoundary) {
-  if constexpr (campaign::k_sq_value != 40) {
-    GTEST_SKIP() << "K=40-specific boundary test";
+TEST(GeoTests, NonSquareKRejectsCeilOnlyGap) {
+  constexpr auto floor_width = campaign::floor_isqrt(campaign::k_sq_value);
+  constexpr auto ceil_width = campaign::ceil_isqrt(campaign::k_sq_value);
+  if constexpr (floor_width == ceil_width) {
+    GTEST_SKIP() << "non-square K boundary test";
   }
 
-  static_assert(campaign::ceil_isqrt(40) == 7, "K=40 must round up to 7");
   const auto cc = make_constants(10'000, 20'000);
-  const __int128 r = static_cast<__int128>(cc.R_inner);
-  const __int128 floor_width = 6;
-  const __int128 ceil_width = campaign::ceil_isqrt(campaign::k_sq_value);
-  const __int128 delta = 2 * r * floor_width + 100;
+  const __int128 r_inner = static_cast<__int128>(cc.R_inner);
+  const __int128 norm_inner_hi = inner_upper(cc);
+  const __int128 widened_inner_hi =
+      static_cast<__int128>(cc.R_inner_sq) + 2 * r_inner * ceil_width +
+      static_cast<__int128>(ceil_width) * ceil_width;
 
-  EXPECT_EQ(ceil_width, 7);
-  EXPECT_GT(delta, 2 * r * floor_width + floor_width * floor_width);
-  EXPECT_LE(delta, 2 * r * ceil_width + ceil_width * ceil_width);
-  EXPECT_TRUE(campaign::is_inner_prime(
-      checked_i64(static_cast<__int128>(cc.R_inner_sq) + delta), cc));
+  ASSERT_LT(norm_inner_hi, widened_inner_hi);
+  EXPECT_TRUE(campaign::is_inner_prime(checked_i64(norm_inner_hi), cc));
+  EXPECT_FALSE(campaign::is_inner_prime(checked_i64(norm_inner_hi + 1), cc));
+  EXPECT_LE(norm_inner_hi + 1, widened_inner_hi);
+
+  const __int128 r_outer = static_cast<__int128>(cc.R_outer);
+  const __int128 norm_outer_lo = outer_lower(cc);
+  const __int128 widened_outer_lo =
+      static_cast<__int128>(cc.R_outer_sq) - 2 * r_outer * ceil_width +
+      static_cast<__int128>(ceil_width) * ceil_width;
+
+  ASSERT_GT(norm_outer_lo, widened_outer_lo);
+  EXPECT_TRUE(campaign::is_outer_prime(checked_i64(norm_outer_lo), cc));
+  EXPECT_FALSE(campaign::is_outer_prime(checked_i64(norm_outer_lo - 1), cc));
+  EXPECT_GE(norm_outer_lo - 1, widened_outer_lo);
 }
 
 TEST(GeoTests, LargeRUsesInt128Bounds) {

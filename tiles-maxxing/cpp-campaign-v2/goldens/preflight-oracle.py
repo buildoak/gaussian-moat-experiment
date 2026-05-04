@@ -37,8 +37,10 @@ def configure(ref: Any, k_sq: int, r_inner: int, r_outer: int) -> None:
     ref.CEIL_SQRT_K = ref.ceil_isqrt(k_sq)
     ref.R_INNER_SQ = r_inner * r_inner
     ref.R_OUTER_SQ = r_outer * r_outer
-    ref.GEO_INNER_UPPER_SQ = (r_inner + ref.CEIL_SQRT_K) ** 2
-    ref.GEO_OUTER_LOWER_SQ = (r_outer - ref.CEIL_SQRT_K) ** 2
+    ref.GEO_INNER_PREFILTER = 2 * r_inner * ref.CEIL_SQRT_K + 1
+    ref.GEO_OUTER_PREFILTER = 2 * r_outer * ref.CEIL_SQRT_K + 1
+    ref.FOUR_RIN_SQ_K = 4 * ref.R_INNER_SQ * k_sq
+    ref.FOUR_ROUT_SQ_K = 4 * ref.R_OUTER_SQ * k_sq
 
 
 def active_column_bounds(ref: Any, i: int) -> tuple[int, int] | None:

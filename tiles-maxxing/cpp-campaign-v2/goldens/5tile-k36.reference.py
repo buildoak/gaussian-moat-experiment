@@ -110,11 +110,14 @@ FACE_R = 3
 R_INNER_SQ = R_INNER * R_INNER
 R_OUTER_SQ = R_OUTER * R_OUTER
 
-# geo bands (Model A, per task spec):
-#   is_inner iff norm_sq in [R_inner^2, (R_inner + ceil_sqrt_k)^2]
-#   is_outer iff norm_sq in [(R_outer - ceil_sqrt_k)^2, R_outer^2]
-GEO_INNER_UPPER_SQ = (R_INNER + CEIL_SQRT_K) ** 2
-GEO_OUTER_LOWER_SQ = (R_OUTER - CEIL_SQRT_K) ** 2
+# Canonical geo tests (norm form, methodology §Canonical definition).
+# CEIL_SQRT_K is only a conservative integer prefilter for non-square K;
+# it is not the acceptance boundary. At K=36 the historical ceil band and
+# norm-form boundary coincide because 36 is a perfect square.
+GEO_INNER_PREFILTER = 2 * R_INNER * CEIL_SQRT_K + 1
+GEO_OUTER_PREFILTER = 2 * R_OUTER * CEIL_SQRT_K + 1
+FOUR_RIN_SQ_K = 4 * R_INNER_SQ * K_SQ
+FOUR_ROUT_SQ_K = 4 * R_OUTER_SQ * K_SQ
 
 
 # Chosen tile coordinates (see header). Keep in lex (i,j) order; this is
@@ -188,16 +191,22 @@ def in_region_R(a: int, b: int) -> bool:
 
 
 # ============================================================================
-# Per-prime geo flags (Model A interval form)
+# Per-prime geo flags (canonical norm form)
 # ============================================================================
 
 def geo_inner_flag(norm_sq: int) -> bool:
-    """norm_sq in [R_inner^2, (R_inner+ceil_sqrt_k)^2]."""
-    return R_INNER_SQ <= norm_sq <= GEO_INNER_UPPER_SQ
+    """Return true iff norm_sq is in canonical geo_I."""
+    if norm_sq < R_INNER_SQ:
+        return False
+    eps = norm_sq - R_INNER_SQ - K_SQ
+    return abs(eps) <= GEO_INNER_PREFILTER and eps * eps <= FOUR_RIN_SQ_K
 
 def geo_outer_flag(norm_sq: int) -> bool:
-    """norm_sq in [(R_outer-ceil_sqrt_k)^2, R_outer^2]."""
-    return GEO_OUTER_LOWER_SQ <= norm_sq <= R_OUTER_SQ
+    """Return true iff norm_sq is in canonical geo_O."""
+    if norm_sq > R_OUTER_SQ:
+        return False
+    eps = norm_sq - R_OUTER_SQ - K_SQ
+    return abs(eps) <= GEO_OUTER_PREFILTER and eps * eps <= FOUR_ROUT_SQ_K
 
 
 # ============================================================================
@@ -419,7 +428,7 @@ def process_tile(i: int, j: int) -> TileOpBytes:
       1) Sieve Gaussian primes in halo ∩ R, sorted by lex (a, b).
       2) Build G_tile local UF: union primes at squared dist <= K_SQ,
          smaller-root-wins. Iteration: prime_idx ascending, inner j > i.
-      3) Per-prime geo flags via Model A interval test.
+      3) Per-prime geo flags via canonical integer norm-form test.
       4) Dense remap raw DSU root -> 1-based dense label (blueprint §5.3
          and §5.5: labels 1..128).
       5) Per face F in {I, O, L, R}:
