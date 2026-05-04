@@ -579,5 +579,29 @@ The diagnostic confirmation succeeded:
 
 ## Remaining Work
 
-- Pull remote artifacts or preserve remote paths in the next report.
-- Perform a completion audit before marking the larger K38/K40 objective complete.
+## Completion Audit
+
+Objective checklist:
+
+- Sartre K34/K36 centered runs documented: `reference/k34-k36-centered-annulus-sweep-2026-05-04.md`
+- K38 and K40 builds prepared: `build-k38` and `build-k40` CPU/CUDA artifacts listed above
+- canonical non-square K handling guarded: K38 anchor, K38 static assertions, K40 golden refresh in commit `f110566`
+- auditors used before campaign runs: K38/K40 auditor findings summarized above
+- K38 and K40 preflight gates passed: CTests, snapshot smokes, golden/diff/BZ gates listed above
+- per-run BZ preserved: every campaign row links its BZ log in the remote index
+- overflow gate passed: all accepted rows have all overflow counters at `0`
+- origin-component verifier not delivered: this report explicitly scopes results to local annulus connectivity only
+- K40 proper run completed: width `32768` bracket `978M SPANNING` / `980M MOAT`
+- K40 MOAT diagnostic confirmation completed: `k40-980m-diag2-20260504T140207Z`, no early exit, overflow diagnostics, zero overflow
+- K38 proper run completed: width `32768` bracket `71.875M SPANNING` / `73.4375M MOAT`
+- remote artifacts preserved by path: every run index links profile, stdout, and BZ logs
+
+No completion-blocking work remains for this K38/K40 campaign-preparation and
+first-run objective.
+
+Optional follow-up work:
+
+- pull remote profiles/logs locally if Vast teardown is planned
+- run a K40 `979M` midpoint if a `1M` radius bracket is desired
+- run K38 width-ladder probes at the final radius bracket
+- prepare the next sqrt(40)/sqrt(42) campaign plan from these brackets
