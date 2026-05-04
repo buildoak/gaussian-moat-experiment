@@ -217,6 +217,7 @@ Initial focused row:
 | ---: | ---: | --- | ---: | ---: | ---: |
 | 900000000 | 32768 | SPANNING | 999761 | 892301 | 0 |
 | 930000000 | 32768 | SPANNING | 27592008 | 27567314 | 0 |
+| 960000000 | 32768 | SPANNING | 245918441 | 245896833 | 0 |
 
 The `R_inner=930000000, width=32768` row is a late SPANNING result:
 
@@ -227,12 +228,21 @@ The `R_inner=930000000, width=32768` row is a late SPANNING result:
 - all overflow counters: `0`
 - total runtime: `325.172s`
 
+The `R_inner=960000000, width=32768` row is an extremely late SPANNING result:
+
+- `active tiles = 380746894`
+- `produced tiles = 245918441`
+- `ingested tiles = 245896833`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- total runtime: `2873.14s`
+
 The active K40 radius bracket at width `32768` is now:
 
-- `R_inner=930000000`: SPANNING
+- `R_inner=960000000`: SPANNING
 - `R_inner=1000000000`: MOAT
 
-As of the latest live checks, `R_inner=960000000, width=32768` was running with
+As of the latest live checks, `R_inner=980000000, width=32768` was running with
 the GPU saturated and had not yet emitted a verdict row. This is the current
 hard boundary case.
 
