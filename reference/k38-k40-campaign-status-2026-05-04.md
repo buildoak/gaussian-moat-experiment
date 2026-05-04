@@ -204,8 +204,19 @@ Strategy:
 - per-run BZ before CUDA
 - stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
 
-As of the launch check, `R_inner=50000000, width=32768` was running on the 4090
-and had not yet emitted a verdict row.
+Confirmed low-bracket rows:
+
+| R_inner | width | verdict | produced | ingested | overflow counters |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 50000000 | 32768 | SPANNING | 199959 | 1161 | 0 |
+
+The active K38 radius bracket at width `32768` is now:
+
+- `R_inner=50000000`: SPANNING
+- `R_inner=100000000`: MOAT
+
+As of the latest live checks, `R_inner=75000000, width=32768` was running on the
+4090 and had not yet emitted a verdict row.
 
 ## K40 Overnight Campaign
 
