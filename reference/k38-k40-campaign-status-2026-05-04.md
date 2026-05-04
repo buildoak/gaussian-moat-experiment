@@ -286,6 +286,29 @@ Strategy:
 - per-run BZ before CUDA
 - stop on nonzero CUDA return code, nonzero overflow counter, or overflow trace
 
+Confirmed radius-refine rows:
+
+| R_inner | width | verdict | produced | ingested | overflow counters |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 970000000 | 32768 | SPANNING | 378065743 | 377947112 | 0 |
+
+The `R_inner=970000000, width=32768` row is a near-full late SPANNING result:
+
+- `active tiles = 384713681`
+- `produced tiles = 378065743`
+- `ingested tiles = 377947112`
+- CUDA return code: `0`
+- all overflow counters: `0`
+- total runtime: `4419.79s`
+
+The active K40 radius bracket at width `32768` is now:
+
+- `R_inner=970000000`: SPANNING
+- `R_inner=980000000`: MOAT
+
+As of the latest live checks, `R_inner=975000000, width=32768` was running with
+the GPU active and had not yet emitted a verdict row.
+
 ## Remaining Work
 
 - Finish or collect the K40 overnight campaign.
