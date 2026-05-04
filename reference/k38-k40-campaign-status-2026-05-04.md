@@ -1,0 +1,185 @@
+# K38/K40 Campaign Status - 2026-05-04
+
+## Summary
+
+This note records the build, audit, preflight, and first K40 campaign state for the
+K38/K40 local static-annulus campaign. These runs are local annulus connectivity
+tests only. A `SPANNING` verdict means the streamed annulus has a local
+inner-to-outer crossing; it is not evidence of connectivity to the origin.
+
+Do not treat any result here as an origin-component verifier result. The origin
+component verifier is explicitly out of delivery scope for this campaign.
+
+Local branch:
+
+- `debug/k34-static-annulus-gauntlet`
+
+Local readiness commit:
+
+- `f110566 Add K38 campaign anchor and refresh K40 golden`
+
+Remote workspace:
+
+- `/workspace/gaussian-moat-cuda-k34-gauntlet-20260504T010013Z`
+
+GPU:
+
+- NVIDIA GeForce RTX 4090 on Vast instance `36021982`
+
+## Prepared Builds
+
+K40 CUDA build:
+
+- `tiles-maxxing/cuda-campaign-v2-sqrt-36/build-k40/campaign_main_cuda`
+- `tiles-maxxing/cuda-campaign-v2-sqrt-36/build-k40/cuda_vs_cpu_diff`
+- `tiles-maxxing/cuda-campaign-v2-sqrt-36/build-k40/cuda_golden_dump`
+
+K40 CPU build:
+
+- `tiles-maxxing/cpp-campaign-v2/build-k40/campaign_main`
+
+K38 CUDA build:
+
+- `tiles-maxxing/cuda-campaign-v2-sqrt-36/build-k38/campaign_main_cuda`
+- `tiles-maxxing/cuda-campaign-v2-sqrt-36/build-k38/cuda_vs_cpu_diff`
+- `tiles-maxxing/cuda-campaign-v2-sqrt-36/build-k38/cuda_golden_dump`
+
+K38 CPU build:
+
+- `tiles-maxxing/cpp-campaign-v2/build-k38/campaign_main`
+
+## Local Readiness Changes
+
+The readiness commit:
+
+- adds a K38 build anchor to `tiles-maxxing/cpp-campaign-v2/scripts/bz_config.json`
+- documents that K38/K40 sweep radii still require per-run BZ logs
+- adds `ceil_isqrt(38) == 7` coverage
+- clarifies that non-square K values such as 38 and 40 use the canonical norm-form annulus test
+- adds K38 CUDA constants assertions
+- refreshes `golden/k40-r100m.json`
+
+`git diff --check` passed before commit.
+
+## Auditor Findings
+
+K40 general/adversarial auditors marked the campaign not ready until the following
+gates were clean:
+
+- K40 CPU and CUDA builds exist
+- CPU and CUDA CTests pass
+- K40 golden is coherent
+- snapshot smoke matches CPU/CUDA
+- per-run BZ is required for exact radii
+- CUDA/CPU diff probes must be split across geo, M4, and K5 modes
+- any overflow counter or `SPANNING_TRACE event=overflow` invalidates the verdict
+- K40 evidence is only local annulus evidence, not origin connectivity
+
+K38 auditor found the K38 anchor and constants coherent, with the same requirement
+for split diff probes and per-run BZ.
+
+## K40 Preflight
+
+Remote preflight tag:
+
+- `k40-preflight-20260504T033150Z`
+
+Remote preflight dir:
+
+- `/workspace/k40-preflight-20260504T033150Z`
+
+Passed gates:
+
+- CPU CTest: `115/115`
+- CUDA CTest: `13/13`
+- K40 golden after refresh: `OK k40-r100m 2edf26469ccd21ae0c662423165feac2cdc915f4bc2a98696326abad859611fd`
+- snapshot smoke: CPU/CUDA SHA matched `cb4ba01d0c55aec894ffdb0fa9f70a968399d77666bdd0529fe473b2409757a9`
+- snapshot smoke `K_SQ: 40`
+- snapshot smoke overflow counters: all zero
+
+BZ/diff probes all returned zero status:
+
+| label | R_inner | width | R_outer | BZ | geo | M4 | K5 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| R800000000_W8192 | 800000000 | 8192 | 800008192 | 0 | 0 | 0 | 0 |
+| R800000000_W10000 | 800000000 | 10000 | 800010000 | 0 | 0 | 0 | 0 |
+| R1000000000_W8192 | 1000000000 | 8192 | 1000008192 | 0 | 0 | 0 | 0 |
+| R1000000000_W10000 | 1000000000 | 10000 | 1000010000 | 0 | 0 | 0 | 0 |
+| R1500000000_W8192 | 1500000000 | 8192 | 1500008192 | 0 | 0 | 0 | 0 |
+| R1500000000_W10000 | 1500000000 | 10000 | 1500010000 | 0 | 0 | 0 | 0 |
+
+## K38 Preflight
+
+Remote preflight tag:
+
+- `k38-preflight-20260504T033820Z`
+
+Remote preflight dir:
+
+- `/workspace/k38-preflight-20260504T033820Z`
+
+Passed gates:
+
+- CPU CTest: `115/115`
+- CUDA CTest: `13/13`
+- snapshot smoke: CPU/CUDA SHA matched `6de4754c1a443cf639eaadf4955f657d58cd19e1b0e631d82f54a7243f34cbdb`
+- snapshot smoke `K_SQ: 38`
+- snapshot smoke overflow counters: all zero
+
+BZ/diff probes all returned zero status:
+
+| label | R_inner | width | R_outer | BZ | geo | M4 | K5 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| R300000000_W10000 | 300000000 | 10000 | 300010000 | 0 | 0 | 0 | 0 |
+| R800000000_W10000 | 800000000 | 10000 | 800010000 | 0 | 0 | 0 | 0 |
+| R1000000000_W10000 | 1000000000 | 10000 | 1000010000 | 0 | 0 | 0 | 0 |
+| R1500000000_W10000 | 1500000000 | 10000 | 1500010000 | 0 | 0 | 0 | 0 |
+
+## K40 Overnight Campaign
+
+Campaign tag:
+
+- `k40-wide-overnight-20260504T034525Z`
+
+Remote campaign dir:
+
+- `/workspace/k40-wide-overnight-20260504T034525Z`
+
+Primary index:
+
+- `/workspace/k40-wide-overnight-20260504T034525Z/run-index.tsv`
+
+Passive postprocess summary:
+
+- `/workspace/k40-wide-overnight-20260504T034525Z/summary.txt`
+
+Strategy:
+
+- 8-hour budget
+- per-run BZ before CUDA
+- stop on nonzero CUDA return code
+- stop on any nonzero overflow counter
+- stop on `SPANNING_TRACE event=overflow`
+- wide screen first at widths `32768`, `65536`, and `131072`
+- radii include `800M`, `860M`, `1B`, `1.2B`, and `1.5B`
+- if budget survives, focus around the old `~860M` signal and then narrow widths
+
+Initial live rows:
+
+| R_inner | width | verdict | produced | ingested | overflow counters |
+| ---: | ---: | --- | ---: | ---: | ---: |
+| 800000000 | 32768 | SPANNING | 199951 | 16642 | 0 |
+| 860000000 | 32768 | SPANNING | 199951 | 20770 | 0 |
+
+As of the first live checks, `R_inner=1000000000, width=32768` was still running
+with the GPU saturated. This is the first nontrivial full-annulus-scale K40 case
+in the campaign and should not be interpreted until the runner writes a verdict
+row or exits.
+
+## Remaining Work
+
+- Finish or collect the K40 overnight campaign.
+- Confirm any K40 MOAT rows with no-early diagnostics and overflow diagnostics.
+- Launch the K38 campaign after the 4090 is free.
+- Pull remote artifacts or preserve remote paths in the next report.
+- Perform a completion audit before marking the larger K38/K40 objective complete.
