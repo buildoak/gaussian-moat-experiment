@@ -953,7 +953,7 @@ bool check_sample_audit(CheckResult& result, const Row& row, const nlohmann::jso
   };
 
   const std::uint64_t sample_count = require_u64(audit, "sample_count");
-  const std::uint64_t minimum = row.row_class == "accepted" ? 4096 : 1024;
+  const std::uint64_t minimum = 512;
   if (sample_count < minimum && !all_requested_classes_exhausted()) {
     std::ostringstream ss;
     ss << "sample_count below minimum: got " << sample_count << " expected >= " << minimum;

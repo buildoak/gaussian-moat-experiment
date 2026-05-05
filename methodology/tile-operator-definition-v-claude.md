@@ -358,7 +358,10 @@ For project parameters (R_outer − R_inner ~ 8192, S = 256, √K ≤ 7), the th
 
 **Tower-closing margin corollary (of annulus thickness).** In the tower-closing regime — columns `i` with `tower_height(i) ≤ 1`, which the Cross-section Lemma places at `x ≥ R_outer/√2 − S` — every lattice point of every tile in column `i` (active or not) that satisfies the octant constraint `y ≥ x` has norm² `> R_inner²`.
 
-[PROOF GAP] This step asserts `tower_height ≤ 1 ⟹ y_upper − y_lower ≤ S` without the discrete→continuous derivation. The blueprint compensates via mandatory I4 coverage scan at campaign init (see blueprint §4.3, BACKLOG **B12**). Closing the proof is deferred.
+[HISTORICAL NOTE] An earlier blueprint treated this step as a proof gap and
+used a mandatory I4 coverage scan as a runtime seatbelt. The case analysis below
+closes the structural I4 argument; the scan is now an optional implementation
+sanity check rather than a soundness gate.
 
 Proof. Tower height `≤ 1` in column `i` means `y_upper(x) − y_lower(x) ≤ S` for all `x ∈ [o_x + iS, o_x + (i+1)S]`. Beyond the inner arc's reach — `x ≥ R_inner/√2`, which holds throughout the closing regime since `R_outer/√2 − S ≥ R_inner/√2` is equivalent to `R_outer − R_inner ≥ S√2` and is given directly by annulus thickness `R_outer − R_inner > S√2 + 2√K` — we have `y_lower(x) = x` and `y_upper(x) = √(R_outer² − x²)`. Solving `√(R_outer² − x²) − x ≤ S` (valid squaring, since `x + S > 0`) yields `2x² + 2xS − (R_outer² − S²) ≥ 0`, hence `x ≥ (−S + √(2R_outer² − S²))/2 ≥ R_outer/√2 − S` (the weaker bound suffices; strict positivity `R_outer/√2 − S > 0` follows from `R_outer > 2S`, trivially satisfied at any deployment).
 

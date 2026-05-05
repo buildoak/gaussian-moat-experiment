@@ -76,7 +76,7 @@
   ],
   "sample_audit": {
     "status": "PASS",
-    "sample_count": 4096,
+    "sample_count": 512,
     "manifest": {
       "k_sq": 36,
       "r_inner": 2,
@@ -99,7 +99,7 @@
       "axis": 100,
       "diagonal": 100,
       "high_pressure": 100,
-      "deterministic_random": 3596
+      "deterministic_random": 12
     }
   }
 }

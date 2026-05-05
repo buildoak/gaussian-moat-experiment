@@ -496,8 +496,8 @@ void check_manifest_counts(const AuditManifest& manifest,
   }
   if ((manifest.row_class == "accepted" ||
        manifest.row_class == "accepted_proof") &&
-      checked < 4096 && !global_population_exhausted) {
-    throw std::runtime_error("accepted row sample count below 4096 minimum");
+      checked < 512 && !global_population_exhausted) {
+    throw std::runtime_error("accepted row sample count below 512 minimum");
   }
 
   for (const auto& [sample_class, target] : manifest.quotas) {

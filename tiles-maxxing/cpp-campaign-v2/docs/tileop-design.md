@@ -5,12 +5,13 @@ engine: coordinator
 type: design-note
 status: complete
 refs:
-  - methodology/lemmas_v2/campaign-blueprint.md
-  - methodology/lemmas_v2/tile-operator-definition-v-claude.md
-  - methodology/lemmas_v2/cpp-campaign-v2-execution-plan.md
+  - methodology/tile-operator-definition-v-claude.md
 ---
 
 # TileOp Pipeline Design
+
+Historical design note. Current authority is
+`methodology/tile-operator-definition-v-claude.md`.
 
 Binding specification for the Phase 2 `process_tile` / TileOp encoder
 worker (plan M4). All sections below are load-bearing: a deviation

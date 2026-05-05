@@ -1,7 +1,7 @@
 # cpp-campaign-v2
 
 Unified C++20 reference campaign for Gaussian-moat detection. This is the CPU
-truth implementation used to validate the CUDA campaign. The hot path is
+reference implementation used for local checks and CUDA parity work. The hot path is
 integer-only, deterministic, and supports both verdict-only runs and optional
 snapshot emission for CPU/CUDA parity checks.
 

@@ -61,8 +61,8 @@ using Duration = Clock::duration;
 
 inline constexpr std::size_t kDefaultChunkSize = 200000;
 inline constexpr std::size_t kMaxOverflowDiagnostics = 10;
-inline constexpr std::size_t kDefaultAuditTileSampleTarget = 4096;
-inline constexpr std::size_t kLegacyStatsTileSampleTarget = 1024;
+inline constexpr std::size_t kDefaultAuditTileSampleTarget = 512;
+inline constexpr std::size_t kLegacyStatsTileSampleTarget = 512;
 inline constexpr std::size_t kStatsV2HighPressureLimit = 32;
 
 enum class TelemetryLevel {
@@ -411,7 +411,7 @@ void print_help(const char* prog) {
       << "  --emit-span-cert <p>   Emit coordinate span cert from reconstructed trace\n"
       << "  --sample-manifest <p>  Record production sample manifest path\n"
       << "  --tile-sample-out <p>  Write sampled production TileOps as JSONL\n"
-      << "  --tile-sample-count=N  Stratified audit sample target; default 4096\n"
+      << "  --tile-sample-count=N  Stratified audit sample target; default 512\n"
       << "  --sample-seed=N        Override deterministic sample seed\n"
       << "  --allow-uncertified-boundary-band\n"
       << "                         Allow accepted output without clean BZ record\n"

@@ -26,7 +26,7 @@ git log --oneline -5
 Read:
 
 - `AGENTS.md`
-- `reference/current-gate-board.md`
+- `reference/current-verification-spine.md`
 - `reference/optimization-safety-checklist.md`
 - `agents-directives/experiment-contract.md`
 - `methodology/tile-operator-definition-v-claude.md` if touching grid, TileOp,
@@ -34,7 +34,7 @@ Read:
 
 ## Post-Correctness
 
-Run the required gates from `reference/current-gate-board.md`. For CUDA changes,
+Run the required gates from `reference/current-verification-spine.md`. For CUDA changes,
 local C++ tests alone are not enough.
 
 ## Post-Performance

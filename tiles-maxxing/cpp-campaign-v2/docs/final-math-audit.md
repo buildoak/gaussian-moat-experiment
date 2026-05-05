@@ -6,10 +6,13 @@ auditor: claude-opus-4-7
 type: audit
 status: complete
 head: ef8fef2
-ssot: methodology/lemmas_v2/tile-operator-definition-v-claude.md
+ssot: methodology/tile-operator-definition-v-claude.md
 ---
 
 # Executive summary
+
+Historical audit. Current authority is
+`methodology/tile-operator-definition-v-claude.md`.
 
 Overall verdict: **READY-WITH-FIXES**. The C++ implementation at HEAD `ef8fef2` matches the canonical math specification faithfully on the load-bearing soundness path — Theorem 11's verdict (Moat ⟺ no component carries both inner and outer flags) is correctly encoded; Lemma 4's positional port identity, Lemma 5's UF-group port label propagation, and Lemma 10's exit-lemma via per-group flag propagation are all implemented as described. The 256-byte TileOp layout, wire labels 1..128, smaller-root-wins DSU, dense-remap canonicalization, integer-only arithmetic, and `⌈√K⌉` band width all land clean.
 

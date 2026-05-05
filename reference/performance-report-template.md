@@ -26,9 +26,11 @@ Use this template for optimization branches.
 |---|---|---|
 | CPU CTest |  |  |
 | CUDA CTest |  |  |
-| CPU/CUDA diff probe |  |  |
-| Snapshot SHA smoke |  |  |
-| Tsuchimura gate |  |  |
+| BZ/profile enforcement |  |  |
+| Run contract / zero overflow |  |  |
+| Post-flight sample audit |  |  |
+| SPANNING cert, if applicable |  |  |
+| Optional localization tools |  |  |
 
 ## Timing
 

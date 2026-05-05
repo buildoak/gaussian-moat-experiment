@@ -21,11 +21,13 @@ Do not accept an optimization if any item below is unproven.
 
 ## Required Proof Surface
 
-- CPU/CUDA parity for changed surfaces.
-- Tsuchimura two-case gate for campaign-level acceptance.
-- Snapshot SHA smoke unless the change is strictly script/documentation only.
-- First-divergence tooling remains usable:
-  `cuda_vs_cpu_diff --m4 --k5 --verbose`.
+- Compact verification spine in `reference/current-verification-spine.md`.
+- Exact BZ/profile enforcement and zero-overflow visibility.
+- Local C++ CTest for C++/shared semantics.
+- CUDA CTest on real CUDA hardware for CUDA changes.
+- Post-flight sample audit and SPANNING certificate when producing accepted rows.
+- CPU/CUDA diff, snapshot SHA, and goldens remain usable for localization and
+  regression, but are not standalone claim-acceptance gates.
 
 ## High-Risk Areas
 

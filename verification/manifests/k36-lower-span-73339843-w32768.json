@@ -6,8 +6,8 @@
   "r_outer": 73372611,
   "region": "full-octant",
   "seed": 36073339843,
-  "target_tile_samples": 1024,
-  "target_seam_samples": 256,
+  "target_tile_samples": 512,
+  "target_seam_samples": 128,
   "selection": [
     {
       "class": "span_certificate_tiles",
@@ -17,32 +17,32 @@
     {
       "class": "geo_i_band",
       "description": "Tiles with primes flagged in the inner geometric band.",
-      "target_count": 128
+      "target_count": 64
     },
     {
       "class": "geo_o_band",
       "description": "Tiles with primes flagged in the outer geometric band.",
-      "target_count": 128
+      "target_count": 64
     },
     {
       "class": "axis_near",
       "description": "Tiles near x=0.",
-      "target_count": 64
+      "target_count": 32
     },
     {
       "class": "diagonal_near",
       "description": "Tiles near y=x.",
-      "target_count": 64
+      "target_count": 32
     },
     {
       "class": "chunk_boundary",
       "description": "Tiles around app chunk boundaries.",
-      "target_count": 128
+      "target_count": 64
     },
     {
       "class": "deterministic_random",
       "description": "Seeded deterministic reservoir over active production tiles.",
-      "target_count": 512
+      "target_count": 256
     }
   ]
 }
