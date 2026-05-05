@@ -1,0 +1,52 @@
+{
+  "schema_version": 2,
+  "claim_id": "fixture-bad-malformed-distribution",
+  "telemetry_level": "profile",
+  "radii": {
+    "k_sq": 36,
+    "r_inner": 73339843,
+    "r_outer": 73372611,
+    "width": 32768,
+    "region": "full-octant"
+  },
+  "region": "full-octant",
+  "verdict": "SPANNING",
+  "tiles": {
+    "active": 29100000,
+    "produced": 29010000,
+    "ingested": 1800
+  },
+  "overflow_counters": {
+    "tileop": 0
+  },
+  "stats_v2": {
+    "telemetry_level": "profile",
+    "candidate_count_distribution": [
+      {
+        "bucket": "0",
+        "count": 10
+      },
+      "not-a-distribution-entry"
+    ],
+    "gaussian_prime_count_distribution": {
+      "0": 25
+    },
+    "group_count_distribution": {
+      "1": 1300
+    },
+    "total_port_count_distribution": {
+      "2": 4500
+    },
+    "max_face_port_count_distribution": {
+      "1": 5400
+    },
+    "high_pressure_tiles": [],
+    "component_census": {
+      "i_only_components": 0,
+      "o_only_components": 0,
+      "i_and_o_components": 0,
+      "largest_component_sizes": [],
+      "largest_boundary_touching_components": []
+    }
+  }
+}

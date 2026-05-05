@@ -63,6 +63,7 @@ inline constexpr std::size_t kDefaultChunkSize = 200000;
 inline constexpr std::size_t kMaxOverflowDiagnostics = 10;
 inline constexpr std::size_t kDefaultAuditTileSampleTarget = 4096;
 inline constexpr std::size_t kLegacyStatsTileSampleTarget = 1024;
+inline constexpr std::size_t kStatsV2HighPressureLimit = 32;
 
 enum class TelemetryLevel {
   kNone,
@@ -118,12 +119,196 @@ struct ColumnBatch {
 
 struct BatchDispatchResult {
   std::vector<ColumnBatch::Column> columns;
+  std::vector<campaign::TileCoord> coords;
   std::vector<campaign::TileOp> tileops;
   cuda_campaign::DispatchStats dispatch;
   Duration cuda = Duration::zero();
   std::uint64_t produced_tiles = 0;
   std::uint64_t emitted_overflow_tileops = 0;
 };
+
+struct ScalarDistribution {
+  std::uint64_t count = 0;
+  std::uint64_t sum = 0;
+  std::uint64_t min = 0;
+  std::uint64_t max = 0;
+  std::map<std::uint64_t, std::uint64_t> histogram;
+
+  void observe(std::uint64_t value) {
+    if (count == 0) {
+      min = value;
+      max = value;
+    } else {
+      min = std::min(min, value);
+      max = std::max(max, value);
+    }
+    ++count;
+    sum += value;
+    ++histogram[value];
+  }
+
+  std::uint64_t percentile(int pct) const {
+    if (count == 0) return 0;
+    const std::uint64_t rank =
+        (count * static_cast<std::uint64_t>(pct) + 99ULL) / 100ULL;
+    std::uint64_t seen = 0;
+    for (const auto& [value, bucket_count] : histogram) {
+      seen += bucket_count;
+      if (seen >= rank) return value;
+    }
+    return max;
+  }
+
+  nlohmann::json json() const {
+    if (count == 0) return nullptr;
+    nlohmann::json buckets = nlohmann::json::array();
+    for (const auto& [value, bucket_count] : histogram) {
+      buckets.push_back({{"value", value}, {"count", bucket_count}});
+    }
+    return {
+        {"buckets", buckets},
+        {"observed_min", min},
+        {"observed_max", max},
+        {"sample_count", count},
+        {"total_count", count},
+    };
+  }
+};
+
+struct HighPressureTile {
+  std::uint64_t flat_index = 0;
+  campaign::TileCoord coord{};
+  std::uint64_t pressure_score = 0;
+  std::uint64_t group_count = 0;
+  std::uint64_t total_port_count = 0;
+  std::uint64_t max_face_port_count = 0;
+  std::array<std::uint64_t, 4> face_port_counts{};
+  bool geo_i = false;
+  bool geo_o = false;
+  bool overflow = false;
+};
+
+bool pressure_tile_better(const HighPressureTile& lhs,
+                          const HighPressureTile& rhs) {
+  if (lhs.pressure_score != rhs.pressure_score) {
+    return lhs.pressure_score > rhs.pressure_score;
+  }
+  if (lhs.total_port_count != rhs.total_port_count) {
+    return lhs.total_port_count > rhs.total_port_count;
+  }
+  if (lhs.group_count != rhs.group_count) {
+    return lhs.group_count > rhs.group_count;
+  }
+  if (lhs.max_face_port_count != rhs.max_face_port_count) {
+    return lhs.max_face_port_count > rhs.max_face_port_count;
+  }
+  if (lhs.coord.i != rhs.coord.i) return lhs.coord.i < rhs.coord.i;
+  return lhs.coord.j < rhs.coord.j;
+}
+
+struct AnalyticalTileStats {
+  ScalarDistribution group_counts;
+  ScalarDistribution total_port_counts;
+  ScalarDistribution max_face_port_counts;
+  std::uint64_t geo_i_port_population = 0;
+  std::uint64_t geo_o_port_population = 0;
+  std::vector<HighPressureTile> high_pressure_tiles;
+
+  void consider(const HighPressureTile& tile) {
+    group_counts.observe(tile.group_count);
+    total_port_counts.observe(tile.total_port_count);
+    max_face_port_counts.observe(tile.max_face_port_count);
+    geo_i_port_population += tile.face_port_counts[0];
+    geo_o_port_population += tile.face_port_counts[1];
+
+    if (tile.pressure_score == 0) return;
+    if (high_pressure_tiles.size() < kStatsV2HighPressureLimit) {
+      high_pressure_tiles.push_back(tile);
+      return;
+    }
+    auto worst = std::max_element(high_pressure_tiles.begin(),
+                                  high_pressure_tiles.end(),
+                                  pressure_tile_better);
+    if (worst != high_pressure_tiles.end() &&
+        pressure_tile_better(tile, *worst)) {
+      *worst = tile;
+    }
+  }
+
+  nlohmann::json high_pressure_json() const {
+    std::vector<HighPressureTile> sorted = high_pressure_tiles;
+    std::sort(sorted.begin(), sorted.end(), pressure_tile_better);
+    nlohmann::json out = nlohmann::json::array();
+    for (const HighPressureTile& tile : sorted) {
+      nlohmann::json classes = nlohmann::json::array();
+      if (tile.group_count > 0) classes.push_back("group");
+      if (tile.total_port_count > 0) classes.push_back("total_port");
+      if (tile.max_face_port_count > 0) classes.push_back("max_face_port");
+      if (tile.geo_i) classes.push_back("geo_i");
+      if (tile.geo_o) classes.push_back("geo_o");
+      if (tile.overflow) classes.push_back("overflow");
+      out.push_back({
+          {"tile_index", tile.flat_index},
+          {"tile_i", tile.coord.i},
+          {"tile_j", tile.coord.j},
+          {"score", tile.pressure_score},
+          {"pressure_score", tile.pressure_score},
+          {"group_count", tile.group_count},
+          {"total_port_count", tile.total_port_count},
+          {"max_face_port_count", tile.max_face_port_count},
+          {"face_port_counts",
+           {tile.face_port_counts[0], tile.face_port_counts[1],
+            tile.face_port_counts[2], tile.face_port_counts[3]}},
+          {"geo_i", tile.geo_i},
+          {"geo_o", tile.geo_o},
+          {"overflow", tile.overflow},
+          {"classes", classes},
+      });
+    }
+    return out;
+  }
+};
+
+nlohmann::json component_entry_json(
+    const campaign::ComponentCensusEntry& entry,
+    std::size_t rank) {
+  return {
+      {"rank", rank},
+      {"component_id", entry.component},
+      {"tile_count", 0},
+      {"group_count", entry.live_group_nodes},
+      {"geo_i", (entry.reach & 0x1U) != 0},
+      {"geo_o", (entry.reach & 0x2U) != 0},
+  };
+}
+
+nlohmann::json component_entry_array_json(
+    const std::vector<campaign::ComponentCensusEntry>& entries) {
+  nlohmann::json out = nlohmann::json::array();
+  for (std::size_t idx = 0; idx < entries.size(); ++idx) {
+    out.push_back(component_entry_json(entries[idx], idx + 1));
+  }
+  return out;
+}
+
+nlohmann::json component_census_json(
+    const campaign::ComponentCensus& census) {
+  return {
+      {"initialized", census.initialized},
+      {"spanning_detected", census.spanning_detected},
+      {"live_frontier_only", census.live_frontier_only},
+      {"total_components", census.live_components},
+      {"i_only_components", census.inner_only_components},
+      {"o_only_components", census.outer_only_components},
+      {"i_and_o_components", census.inner_outer_components},
+      {"neither_components", census.neutral_components},
+      {"live_group_nodes", census.live_group_nodes},
+      {"largest_component_sizes",
+       component_entry_array_json(census.largest_components)},
+      {"largest_boundary_touching_components",
+       component_entry_array_json(census.largest_boundary_touching_components)},
+  };
+}
 
 struct RunStats {
   std::uint64_t produced_tiles = 0;
@@ -137,6 +322,7 @@ struct RunStats {
   std::uint64_t geo_o_tiles = 0;
   std::uint64_t tile_samples_written = 0;
   bool early_exit_taken = false;
+  AnalyticalTileStats analytical;
   cuda_campaign::DispatchStats dispatch;
 };
 
@@ -647,6 +833,52 @@ bool tile_has_any_flag(const std::uint8_t* flags) {
   return false;
 }
 
+void mark_flag_labels(const std::uint8_t* flags,
+                      std::array<bool, 129>& seen_labels) {
+  for (int byte_idx = 0; byte_idx < 16; ++byte_idx) {
+    const std::uint8_t value = flags[byte_idx];
+    if (value == 0) continue;
+    for (int bit = 0; bit < 8; ++bit) {
+      if ((value & static_cast<std::uint8_t>(1U << bit)) == 0) continue;
+      seen_labels[static_cast<std::size_t>(byte_idx * 8 + bit + 1)] = true;
+    }
+  }
+}
+
+std::uint64_t tile_total_port_count(const campaign::TileOp& op) {
+  std::uint64_t total = 0;
+  for (int face = 0; face < 4; ++face) total += op.n[face];
+  return total;
+}
+
+std::uint64_t tile_max_face_port_count(const campaign::TileOp& op) {
+  std::uint64_t max_ports = 0;
+  for (int face = 0; face < 4; ++face) {
+    max_ports = std::max(max_ports, static_cast<std::uint64_t>(op.n[face]));
+  }
+  return max_ports;
+}
+
+std::uint64_t tile_group_count(const campaign::TileOp& op) {
+  std::array<bool, 129> seen_labels{};
+  const std::uint64_t total_ports =
+      std::min<std::uint64_t>(tile_total_port_count(op), 192);
+  for (std::uint64_t idx = 0; idx < total_ports; ++idx) {
+    const std::uint8_t label = op.face_groups[idx];
+    if (label >= 1 && label <= 128) {
+      seen_labels[static_cast<std::size_t>(label)] = true;
+    }
+  }
+  mark_flag_labels(op.inner_flags, seen_labels);
+  mark_flag_labels(op.outer_flags, seen_labels);
+
+  std::uint64_t count = 0;
+  for (std::size_t label = 1; label < seen_labels.size(); ++label) {
+    if (seen_labels[label]) ++count;
+  }
+  return count;
+}
+
 std::uint64_t deterministic_string_hash(const std::string& s) {
   std::uint64_t h = 1469598103934665603ULL;
   for (unsigned char c : s) {
@@ -692,8 +924,7 @@ std::uint64_t default_sample_seed(std::uint64_t k_sq,
 }
 
 std::uint64_t tile_pressure_score(const campaign::TileOp& op) {
-  std::uint64_t score = 0;
-  for (int i = 0; i < 4; ++i) score += op.n[i];
+  std::uint64_t score = tile_total_port_count(op);
   for (std::uint8_t value : op.face_groups) {
     if (value != 0) ++score;
   }
@@ -869,6 +1100,7 @@ nlohmann::json tileop_json(const campaign::TileOp& op) {
 void account_tile_stats_and_samples(
     const std::vector<campaign::TileCoord>& coords,
     std::span<const campaign::TileOp> tileops,
+    std::uint64_t flat_index_start,
     RunStats& stats,
     StratifiedTileSampler* sampler,
     std::uint64_t r_inner,
@@ -878,6 +1110,22 @@ void account_tile_stats_and_samples(
     const campaign::TileCoord& coord = coords[idx];
     const bool has_i = tile_has_any_flag(op.inner_flags);
     const bool has_o = tile_has_any_flag(op.outer_flags);
+    HighPressureTile pressure_tile{};
+    pressure_tile.flat_index = flat_index_start + static_cast<std::uint64_t>(idx);
+    pressure_tile.coord = coord;
+    pressure_tile.pressure_score = tile_pressure_score(op);
+    pressure_tile.group_count = tile_group_count(op);
+    pressure_tile.total_port_count = tile_total_port_count(op);
+    pressure_tile.max_face_port_count = tile_max_face_port_count(op);
+    for (int face = 0; face < 4; ++face) {
+      pressure_tile.face_port_counts[static_cast<std::size_t>(face)] =
+          op.n[face];
+    }
+    pressure_tile.geo_i = has_i;
+    pressure_tile.geo_o = has_o;
+    pressure_tile.overflow =
+        (op.tile_flags & campaign::OVERFLOW_BIT) != 0;
+    stats.analytical.consider(pressure_tile);
     if (has_i) ++stats.geo_i_tiles;
     if (has_o) ++stats.geo_o_tiles;
     if (sampler != nullptr) {
@@ -1453,7 +1701,8 @@ void write_profile_json(const std::filesystem::path& path,
                         std::uint64_t sample_seed,
                         std::size_t sample_target_count,
                         bool trace_spanning,
-                        const campaign::SpanningTrace& spanning_trace) {
+                        const campaign::SpanningTrace& spanning_trace,
+                        const campaign::ComponentCensus& component_census) {
   nlohmann::json overflow_diags = nlohmann::json::array();
   for (const auto& diag : stats.dispatch.first_overflow_tiles) {
     overflow_diags.push_back({
@@ -1568,6 +1817,32 @@ void write_profile_json(const std::filesystem::path& path,
         {"telemetry_level", telemetry_level_name(telemetry_level)},
         {"geo_i_tiles", stats.geo_i_tiles},
         {"geo_o_tiles", stats.geo_o_tiles},
+        {"geo_I",
+         {{"tile_population", stats.geo_i_tiles},
+          {"port_population", stats.analytical.geo_i_port_population}}},
+        {"geo_O",
+         {{"tile_population", stats.geo_o_tiles},
+          {"port_population", stats.analytical.geo_o_port_population}}},
+        {"distributions",
+         {{"candidate_counts", nullptr},
+          {"gaussian_prime_counts", nullptr},
+          {"group_counts", stats.analytical.group_counts.json()},
+          {"total_port_counts", stats.analytical.total_port_counts.json()},
+          {"max_face_port_counts",
+           stats.analytical.max_face_port_counts.json()}}},
+        {"distribution_availability",
+         {{"candidate_counts",
+           "unavailable from emitted TileOp stream; only first overflow "
+           "diagnostics carry candidate counts"},
+          {"gaussian_prime_counts",
+           "unavailable from emitted TileOp stream; only first overflow "
+           "diagnostics carry prime counts"},
+          {"group_counts", "computed analytically from TileOp group labels"},
+          {"total_port_counts", "computed analytically from TileOp n[4]"},
+          {"max_face_port_counts", "computed analytically from TileOp n[4]"}}},
+        {"high_pressure_top_n", kStatsV2HighPressureLimit},
+        {"high_pressure", stats.analytical.high_pressure_json()},
+        {"component_census", component_census_json(component_census)},
         {"tile_samples_written", stats.tile_samples_written},
         {"sample_seed", sample_seed},
         {"sample_target_count", sample_target_count},
@@ -1691,8 +1966,10 @@ bool flush_batch(ColumnBatch& batch,
   stats.emitted_overflow_tileops += count_emitted_overflow_tileops(tileops);
   accumulate_dispatch_stats(stats.dispatch, batch_stats);
   (void)k_sq;
-  account_tile_stats_and_samples(batch.tiles, tileops, stats, sampler, r_inner,
-                                 r_outer);
+  account_tile_stats_and_samples(
+      batch.tiles, tileops,
+      stats.produced_tiles - static_cast<std::uint64_t>(batch.tiles.size()),
+      stats, sampler, r_inner, r_outer);
 
   std::size_t offset = 0;
   for (const ColumnBatch::Column& column : batch.columns) {
@@ -1739,6 +2016,7 @@ BatchDispatchResult dispatch_batch(
   result.cuda = Clock::now() - cuda_start;
   result.emitted_overflow_tileops =
       count_emitted_overflow_tileops(result.tileops);
+  result.coords = std::move(batch.tiles);
 
   return result;
 }
@@ -1762,12 +2040,18 @@ bool ingest_dispatch_result(BatchDispatchResult result,
                             campaign::StreamingCompositor& compositor,
                             Timings& timings,
                             RunStats& stats,
+                            std::uint64_t r_inner,
+                            std::uint64_t r_outer,
+                            StratifiedTileSampler* sampler,
                             bool early_exit_enabled) {
   timings.cuda += result.cuda;
   stats.produced_tiles += result.produced_tiles;
   stats.app_batches += 1;
   stats.emitted_overflow_tileops += result.emitted_overflow_tileops;
   accumulate_dispatch_stats(stats.dispatch, result.dispatch);
+  account_tile_stats_and_samples(result.coords, result.tileops,
+                                 stats.produced_tiles - result.produced_tiles,
+                                 stats, sampler, r_inner, r_outer);
 
   std::size_t offset = 0;
   for (const ColumnBatch::Column& column : result.columns) {
@@ -1814,6 +2098,9 @@ bool submit_batch_and_ingest_ready(
     campaign::StreamingCompositor& compositor,
     Timings& timings,
     RunStats& stats,
+    std::uint64_t r_inner,
+    std::uint64_t r_outer,
+    StratifiedTileSampler* sampler,
     bool early_exit_enabled) {
   if (batch.tiles.empty()) {
     batch.clear();
@@ -1828,7 +2115,7 @@ bool submit_batch_and_ingest_ready(
   BatchDispatchResult ready = take_in_flight_result(in_flight);
   in_flight = launch_dispatch(batch, dispatcher);
   if (ingest_dispatch_result(std::move(ready), compositor, timings, stats,
-                             early_exit_enabled)) {
+                             r_inner, r_outer, sampler, early_exit_enabled)) {
     discard_in_flight_result(in_flight);
     return true;
   }
@@ -1840,6 +2127,9 @@ bool drain_in_flight_and_ingest(
     campaign::StreamingCompositor& compositor,
     Timings& timings,
     RunStats& stats,
+    std::uint64_t r_inner,
+    std::uint64_t r_outer,
+    StratifiedTileSampler* sampler,
     bool early_exit_enabled) {
   if (!in_flight.has_value()) {
     return false;
@@ -1847,7 +2137,7 @@ bool drain_in_flight_and_ingest(
 
   BatchDispatchResult ready = take_in_flight_result(in_flight);
   return ingest_dispatch_result(std::move(ready), compositor, timings, stats,
-                                early_exit_enabled);
+                                r_inner, r_outer, sampler, early_exit_enabled);
 }
 
 }  // namespace
@@ -2199,6 +2489,7 @@ int main(int argc, char** argv) {
   }
   campaign::Verdict verdict = campaign::Verdict::kUnknown;
   campaign::SpanningTrace spanning_trace;
+  campaign::ComponentCensus component_census;
 
   try {
     cuda_campaign::DispatchConfig config;
@@ -2229,11 +2520,13 @@ int main(int argc, char** argv) {
           if (column_tiles == 0) {
             if (submit_batch_and_ingest_ready(batch, in_flight, dispatcher,
                                               compositor, timings, run_stats,
+                                              *r_inner, *r_outer, nullptr,
                                               early_exit_enabled)) {
               break;
             }
             if (drain_in_flight_and_ingest(in_flight, compositor, timings,
-                                           run_stats, early_exit_enabled)) {
+                                           run_stats, *r_inner, *r_outer,
+                                           nullptr, early_exit_enabled)) {
               break;
             }
             if (ingest_empty_column(i, compositor, nullptr, timings, run_stats,
@@ -2247,6 +2540,7 @@ int main(int argc, char** argv) {
               batch.tiles.size() + column_tiles > chunk_size) {
             if (submit_batch_and_ingest_ready(batch, in_flight, dispatcher,
                                               compositor, timings, run_stats,
+                                              *r_inner, *r_outer, nullptr,
                                               early_exit_enabled)) {
               break;
             }
@@ -2265,13 +2559,15 @@ int main(int argc, char** argv) {
         if (!run_stats.early_exit_taken) {
           if (submit_batch_and_ingest_ready(batch, in_flight, dispatcher,
                                             compositor, timings, run_stats,
+                                            *r_inner, *r_outer, nullptr,
                                             early_exit_enabled)) {
             // SPANNING was observed while ingesting the penultimate result.
           }
         }
         if (!run_stats.early_exit_taken) {
           if (drain_in_flight_and_ingest(in_flight, compositor, timings,
-                                         run_stats, early_exit_enabled)) {
+                                         run_stats, *r_inner, *r_outer,
+                                         nullptr, early_exit_enabled)) {
             // SPANNING was observed after the final dispatched column.
           }
         }
@@ -2344,6 +2640,7 @@ int main(int argc, char** argv) {
     verdict = run_stats.early_exit_taken ? campaign::Verdict::kSpanning
                                          : compositor.finalize();
     spanning_trace = compositor.spanning_trace();
+    component_census = compositor.component_census();
     if (span_cert_path.has_value()) {
       if (verdict != campaign::Verdict::kSpanning) {
         throw std::runtime_error("--emit-span-cert requested for non-SPANNING run");
@@ -2374,7 +2671,8 @@ int main(int argc, char** argv) {
                          early_exit_enabled, bz_record, span_cert_path,
                          sample_manifest_path, tile_sample_path,
                          telemetry_level, stats_level, sample_seed,
-                         tile_sample_count, trace_spanning, spanning_trace);
+                         tile_sample_count, trace_spanning, spanning_trace,
+                         component_census);
     } catch (const std::exception& e) {
       std::cerr << "Error writing profile: " << e.what() << "\n";
       return 7;

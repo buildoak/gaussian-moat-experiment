@@ -106,6 +106,7 @@ struct StreamingCompositor::State {
   std::vector<NodeId> current_group_nodes;
   std::vector<NodeId> parent;
   std::vector<std::uint8_t> reach;
+  std::vector<std::uint64_t> live_group_nodes;
   std::vector<std::array<ReachSource, 2>> reach_sources;
   std::vector<TileOp> prev_column;
   std::vector<TileCoord> prev_coords;
@@ -120,6 +121,7 @@ struct StreamingCompositor::State {
     const NodeId id = static_cast<NodeId>(parent.size());
     parent.push_back(id);
     reach.push_back(0);
+    live_group_nodes.push_back(1);
     reach_sources.push_back({});
     return id;
   }
@@ -485,6 +487,7 @@ struct StreamingCompositor::State {
                                : record_stitch_edge(*stitch_edge);
     parent[rb] = ra;
     reach[ra] = static_cast<std::uint8_t>(before | added);
+    live_group_nodes[ra] += live_group_nodes[rb];
     for (int bit = 0; bit < 2; ++bit) {
       const std::uint8_t mask = static_cast<std::uint8_t>(1U << bit);
       if ((reach[rb] & mask) == 0) continue;
@@ -737,6 +740,7 @@ struct StreamingCompositor::State {
       current_group_tile_count = 0;
       parent.clear();
       reach.clear();
+      live_group_nodes.clear();
       reach_sources.clear();
       frontier.clear();
       return;
@@ -745,6 +749,7 @@ struct StreamingCompositor::State {
     std::vector<NodeId> root_to_compact(parent.size(), kInvalidNode);
     std::vector<NodeId> compact_parent;
     std::vector<std::uint8_t> compact_reach;
+    std::vector<std::uint64_t> compact_live_group_nodes;
     std::vector<std::array<ReachSource, 2>> compact_reach_sources;
 
     for (FrontierNode& entry : next_frontier) {
@@ -762,6 +767,7 @@ struct StreamingCompositor::State {
         root_to_compact[root] = compact;
         compact_parent.push_back(compact);
         compact_reach.push_back(reach[root]);
+        compact_live_group_nodes.push_back(live_group_nodes[root]);
         compact_reach_sources.push_back(reach_sources[root]);
       }
       entry.node = compact;
@@ -771,6 +777,7 @@ struct StreamingCompositor::State {
     current_group_tile_count = 0;
     parent = std::move(compact_parent);
     reach = std::move(compact_reach);
+    live_group_nodes = std::move(compact_live_group_nodes);
     reach_sources = std::move(compact_reach_sources);
     frontier = std::move(next_frontier);
   }
@@ -900,6 +907,74 @@ Verdict StreamingCompositor::finalize() {
         "StreamingCompositor::finalize requires all columns for MOAT");
   }
   return Verdict::kMoat;
+}
+
+ComponentCensus StreamingCompositor::component_census(
+    std::size_t max_entries) const {
+  ComponentCensus census;
+  if (!state_ || !state_->initialized) return census;
+
+  census.initialized = true;
+  census.spanning_detected = state_->spanning_detected;
+
+  std::vector<ComponentCensusEntry> entries;
+  std::vector<ComponentCensusEntry> boundary_entries;
+  entries.reserve(state_->parent.size());
+  boundary_entries.reserve(state_->parent.size());
+  for (std::size_t node_index = 0; node_index < state_->parent.size();
+       ++node_index) {
+    const State::NodeId node = static_cast<State::NodeId>(node_index);
+    const State::NodeId root = state_->find_const(node);
+    if (root != node) continue;
+
+    const std::uint8_t reach = state_->reach[root];
+    const std::uint64_t live_group_nodes =
+        root < state_->live_group_nodes.size()
+            ? state_->live_group_nodes[root]
+            : 0;
+    ComponentCensusEntry entry{
+        static_cast<std::uint32_t>(root + 1),
+        reach,
+        live_group_nodes,
+    };
+    entries.push_back(entry);
+    if ((reach & State::kReachBoth) != 0) {
+      boundary_entries.push_back(entry);
+    }
+
+    ++census.live_components;
+    census.live_group_nodes += live_group_nodes;
+    if ((reach & State::kReachBoth) == State::kReachBoth) {
+      ++census.inner_outer_components;
+    } else if ((reach & State::kReachInner) != 0) {
+      ++census.inner_only_components;
+    } else if ((reach & State::kReachOuter) != 0) {
+      ++census.outer_only_components;
+    } else {
+      ++census.neutral_components;
+    }
+  }
+
+  auto larger_component = [](const ComponentCensusEntry& lhs,
+                             const ComponentCensusEntry& rhs) {
+    if (lhs.live_group_nodes != rhs.live_group_nodes) {
+      return lhs.live_group_nodes > rhs.live_group_nodes;
+    }
+    return lhs.component < rhs.component;
+  };
+
+  std::sort(entries.begin(), entries.end(), larger_component);
+  if (entries.size() > max_entries) entries.resize(max_entries);
+  census.largest_components = entries;
+
+  std::sort(boundary_entries.begin(), boundary_entries.end(),
+            larger_component);
+  if (boundary_entries.size() > max_entries) {
+    boundary_entries.resize(max_entries);
+  }
+  census.largest_boundary_touching_components = std::move(boundary_entries);
+
+  return census;
 }
 
 std::vector<FrontierPort> StreamingCompositor::project_frontier() const {

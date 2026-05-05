@@ -1,0 +1,85 @@
+{
+  "schema_version": 1,
+  "bundle_id": "fixture-reject-analytical-telemetry",
+  "row": {
+    "claim_id": "tiny-bad-analytical-telemetry",
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "verdict_mode": "ANY-SPAN",
+    "row_class": "sweep",
+    "telemetry_level": "profile",
+    "claim_proof_required": false
+  },
+  "profile": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "command": "campaign_main_cuda --fixture tiny-bad-analytical-telemetry",
+    "build": {
+      "commit": "abcdef1",
+      "identity": "fixture-build",
+      "cuda_arch": "sm_89"
+    },
+    "hashes": {
+      "grid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "constants": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mr_witness": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "tiles": {
+      "active": 12,
+      "produced": 12,
+      "ingested": 6
+    },
+    "early_exit": {
+      "taken": true,
+      "full_ingest": false
+    },
+    "stats_v2": {
+      "geo_i_tiles": -1,
+      "candidate_count_distribution": [1, 2, 3],
+      "high_pressure_tiles": [
+        {
+          "tile": {
+            "i": 1,
+            "j": 2
+          }
+        }
+      ],
+      "component_census": {
+        "i_only_components": 1,
+        "o_only_components": -2,
+        "largest_component_sizes": ["large"]
+      },
+      "artifact_hash_ledger": [
+        {
+          "path": "profiles/tiny-bad-analytical-telemetry.json",
+          "sha256": "not-a-sha",
+          "size": -4
+        }
+      ]
+    }
+  },
+  "run_contract": {
+    "enumerated_active_tiles": 12
+  },
+  "bz": {
+    "checked": true,
+    "clean": true,
+    "override_used": false,
+    "bad_norm_count": 0
+  },
+  "overflow_counters": {
+    "tileop": 0,
+    "cuda": {
+      "ports": 0,
+      "groups": 0
+    }
+  }
+}

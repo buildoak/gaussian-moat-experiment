@@ -7,6 +7,7 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string>
@@ -83,6 +84,29 @@ struct SpanningTrace {
   SpanningStitchPath path;
 };
 
+struct ComponentCensusEntry {
+  std::uint32_t component = 0;
+  std::uint8_t reach = 0;
+  std::uint64_t live_group_nodes = 0;
+
+  friend bool operator==(const ComponentCensusEntry&,
+                         const ComponentCensusEntry&) = default;
+};
+
+struct ComponentCensus {
+  bool initialized = false;
+  bool spanning_detected = false;
+  bool live_frontier_only = true;
+  std::uint64_t live_components = 0;
+  std::uint64_t inner_only_components = 0;
+  std::uint64_t outer_only_components = 0;
+  std::uint64_t inner_outer_components = 0;
+  std::uint64_t neutral_components = 0;
+  std::uint64_t live_group_nodes = 0;
+  std::vector<ComponentCensusEntry> largest_components;
+  std::vector<ComponentCensusEntry> largest_boundary_touching_components;
+};
+
 class StreamingCompositor {
  public:
   StreamingCompositor();
@@ -95,6 +119,13 @@ class StreamingCompositor {
   bool has_spanning() const noexcept;
   SpanningTrace spanning_trace() const;
   Verdict finalize();
+
+  // Exact census of the compacted live DSU roots currently retained by the
+  // streaming compositor. This is intentionally not a full historical census:
+  // roots that no longer touch the current frontier are discarded during
+  // compaction, so their counts and sizes are unavailable here. Sizes are exact
+  // live TileOp group-node counts for retained roots, not prime/port/tile counts.
+  ComponentCensus component_census(std::size_t max_entries = 8) const;
 
   // Test/proof hook: canonical equality + reach state for live right-face
   // ports after the most recently ingested non-empty column. Entries are keyed

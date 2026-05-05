@@ -128,8 +128,7 @@
     "width": 6,
     "region": "full-octant",
     "verdict": "SPANNING",
-    "path": "certs/tiny-span.json",
-    "points": [
+    "path": [
       { "a": 1, "b": 4 },
       { "a": 0, "b": 3 }
     ],

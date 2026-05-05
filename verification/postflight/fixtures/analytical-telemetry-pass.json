@@ -1,0 +1,128 @@
+{
+  "schema_version": 1,
+  "bundle_id": "fixture-analytical-telemetry-pass",
+  "row": {
+    "claim_id": "tiny-analytical-telemetry",
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "verdict_mode": "ANY-SPAN",
+    "row_class": "sweep",
+    "telemetry_level": "profile",
+    "claim_proof_required": false
+  },
+  "profile": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "command": [
+      "campaign_main_cuda",
+      "--fixture",
+      "tiny-analytical-telemetry"
+    ],
+    "build": {
+      "commit": "abcdef1",
+      "identity": "fixture-build",
+      "cuda_arch": "sm_89"
+    },
+    "hashes": {
+      "grid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "constants": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mr_witness": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "tiles": {
+      "active": 12,
+      "produced": 12,
+      "ingested": 6
+    },
+    "early_exit": {
+      "taken": true,
+      "full_ingest": false
+    },
+    "stats_v2": {
+      "geo_i_tiles": 3,
+      "geo_o_tiles": 4,
+      "geo_i_ports": 5,
+      "geo_o_ports": 6,
+      "candidate_count_distribution": {
+        "counts": {
+          "0": 7,
+          "1": 5
+        }
+      },
+      "gaussian_prime_count_distribution": {
+        "0": 2,
+        "1": 10
+      },
+      "group_count_distribution": {
+        "0": 8,
+        "1": 4
+      },
+      "total_port_count_distribution": {
+        "0": 6,
+        "2": 6
+      },
+      "max_face_port_count_distribution": {
+        "0": 9,
+        "1": 3
+      },
+      "high_pressure_tiles": [
+        {
+          "tile": {
+            "i": 1,
+            "j": 2
+          },
+          "score": 12
+        }
+      ],
+      "component_census": {
+        "i_only_components": 1,
+        "o_only_components": 2,
+        "i_and_o_components": 0,
+        "largest_component_sizes": [4, 3],
+        "largest_boundary_touching_components": [
+          {
+            "size": 4,
+            "touches": "inner"
+          }
+        ]
+      },
+      "artifact_hash_ledger": [
+        {
+          "path": "profiles/tiny-analytical-telemetry.json",
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "size": 2048
+        }
+      ]
+    }
+  },
+  "artifact_ledger": [
+    {
+      "path": "profiles/tiny-analytical-telemetry.json",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size_bytes": 2048
+    }
+  ],
+  "run_contract": {
+    "enumerated_active_tiles": 12
+  },
+  "bz": {
+    "checked": true,
+    "clean": true,
+    "override_used": false,
+    "bad_norm_count": 0
+  },
+  "overflow_counters": {
+    "tileop": 0,
+    "cuda": {
+      "ports": 0,
+      "groups": 0
+    }
+  }
+}

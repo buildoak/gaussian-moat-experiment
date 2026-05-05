@@ -6,6 +6,7 @@
   "type": "object",
   "required": ["schema_version", "radii", "verdict", "tiles", "overflow_counters"],
   "$defs": {
+    "nonNegativeInteger": { "type": "integer", "minimum": 0 },
     "nullableInteger": { "type": ["integer", "null"] },
     "nullableNumber": { "type": ["number", "null"] },
     "nullableString": { "type": ["string", "null"] },
@@ -35,20 +36,133 @@
         "TILE_SAMPLE_AUDIT_PASS"
       ]
     },
+    "distributionBucket": {
+      "type": "object",
+      "required": ["value", "count"],
+      "properties": {
+        "value": { "$ref": "#/$defs/nonNegativeInteger" },
+        "count": { "$ref": "#/$defs/nonNegativeInteger" }
+      },
+      "additionalProperties": false
+    },
     "distribution": {
+      "type": "object",
+      "required": ["buckets", "observed_min", "observed_max", "sample_count", "total_count"],
+      "properties": {
+        "buckets": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/distributionBucket" }
+        },
+        "observed_min": { "$ref": "#/$defs/nonNegativeInteger" },
+        "observed_max": { "$ref": "#/$defs/nonNegativeInteger" },
+        "sample_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "total_count": { "$ref": "#/$defs/nonNegativeInteger" }
+      },
+      "additionalProperties": false
+    },
+    "nullableDistribution": {
       "oneOf": [
         { "type": "null" },
-        {
-          "type": "object",
-          "additionalProperties": {
-            "type": ["integer", "number", "null"]
-          }
-        },
-        {
-          "type": "array",
-          "items": { "type": ["integer", "number", "object", "null"] }
-        }
+        { "$ref": "#/$defs/distribution" }
       ]
+    },
+    "highPressureTile": {
+      "type": "object",
+      "required": [
+        "tile_index",
+        "tile_i",
+        "tile_j",
+        "group_count",
+        "total_port_count",
+        "max_face_port_count",
+        "geo_i",
+        "geo_o",
+        "classes"
+      ],
+      "properties": {
+        "tile_index": { "$ref": "#/$defs/nonNegativeInteger" },
+        "tile_i": { "$ref": "#/$defs/nonNegativeInteger" },
+        "tile_j": { "$ref": "#/$defs/nonNegativeInteger" },
+        "candidate_count": { "$ref": "#/$defs/nullableInteger" },
+        "gaussian_prime_count": { "$ref": "#/$defs/nullableInteger" },
+        "group_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "total_port_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "max_face_port_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "score": { "$ref": "#/$defs/nonNegativeInteger" },
+        "pressure_score": { "$ref": "#/$defs/nonNegativeInteger" },
+        "a_lo": { "type": "integer" },
+        "b_lo": { "type": "integer" },
+        "face_port_counts": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/nonNegativeInteger" },
+          "minItems": 4,
+          "maxItems": 4
+        },
+        "geo_i": { "type": "boolean" },
+        "geo_o": { "type": "boolean" },
+        "overflow": { "type": "boolean" },
+        "classes": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "candidate",
+              "gaussian_prime",
+              "group",
+              "total_port",
+              "max_face_port",
+              "geo_i",
+              "geo_o",
+              "overflow"
+            ]
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "componentSummary": {
+      "type": "object",
+      "required": ["rank", "component_id", "tile_count", "group_count", "geo_i", "geo_o"],
+      "properties": {
+        "rank": { "$ref": "#/$defs/nonNegativeInteger" },
+        "component_id": { "$ref": "#/$defs/nonNegativeInteger" },
+        "tile_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "group_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "geo_i": { "type": "boolean" },
+        "geo_o": { "type": "boolean" }
+      },
+      "additionalProperties": false
+    },
+    "componentCensus": {
+      "type": "object",
+      "required": [
+        "total_components",
+        "i_only_components",
+        "o_only_components",
+        "i_and_o_components",
+        "largest_component_sizes",
+        "largest_boundary_touching_components"
+      ],
+      "properties": {
+        "total_components": { "$ref": "#/$defs/nonNegativeInteger" },
+        "i_only_components": { "$ref": "#/$defs/nonNegativeInteger" },
+        "o_only_components": { "$ref": "#/$defs/nonNegativeInteger" },
+        "i_and_o_components": { "$ref": "#/$defs/nonNegativeInteger" },
+        "neither_components": { "$ref": "#/$defs/nonNegativeInteger" },
+        "initialized": { "type": "boolean" },
+        "spanning_detected": { "type": "boolean" },
+        "live_frontier_only": { "type": "boolean" },
+        "live_group_nodes": { "$ref": "#/$defs/nonNegativeInteger" },
+        "largest_component_sizes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/componentSummary" }
+        },
+        "largest_boundary_touching_components": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/componentSummary" }
+        }
+      },
+      "additionalProperties": false
     },
     "normalizedSweepRow": {
       "type": "object",
@@ -99,13 +213,26 @@
         "geo_o_tiles": { "$ref": "#/$defs/nullableInteger" },
         "geo_i_ports": { "$ref": "#/$defs/nullableInteger" },
         "geo_o_ports": { "$ref": "#/$defs/nullableInteger" },
-        "candidate_count_distribution": { "$ref": "#/$defs/distribution" },
-        "gaussian_prime_count_distribution": { "$ref": "#/$defs/distribution" },
-        "group_count_distribution": { "$ref": "#/$defs/distribution" },
-        "total_port_count_distribution": { "$ref": "#/$defs/distribution" },
-        "max_face_port_count_distribution": { "$ref": "#/$defs/distribution" },
-        "high_pressure_tiles": { "type": ["array", "null"] },
-        "component_census": { "type": ["object", "null"] },
+        "candidate_count_distribution": { "$ref": "#/$defs/nullableDistribution" },
+        "gaussian_prime_count_distribution": { "$ref": "#/$defs/nullableDistribution" },
+        "group_count_distribution": { "$ref": "#/$defs/nullableDistribution" },
+        "total_port_count_distribution": { "$ref": "#/$defs/nullableDistribution" },
+        "max_face_port_count_distribution": { "$ref": "#/$defs/nullableDistribution" },
+        "high_pressure_tiles": {
+          "oneOf": [
+            { "type": "null" },
+            {
+              "type": "array",
+              "items": { "$ref": "#/$defs/highPressureTile" }
+            }
+          ]
+        },
+        "component_census": {
+          "oneOf": [
+            { "type": "null" },
+            { "$ref": "#/$defs/componentCensus" }
+          ]
+        },
         "sample_manifest_path": { "$ref": "#/$defs/nullableString" },
         "tile_sample_path": { "$ref": "#/$defs/nullableString" },
         "sample_count": { "$ref": "#/$defs/nullableInteger" },
@@ -123,9 +250,36 @@
     "telemetry_level": { "enum": ["none", "profile", "audit", "full"] },
     "radii": {
       "type": "object",
-      "required": ["k_sq", "r_inner", "r_outer"]
+      "required": ["k_sq", "r_inner", "r_outer"],
+      "properties": {
+        "k_sq": { "type": "integer", "minimum": 1 },
+        "r_inner": { "$ref": "#/$defs/nonNegativeInteger" },
+        "r_outer": { "$ref": "#/$defs/nonNegativeInteger" },
+        "width": { "$ref": "#/$defs/nonNegativeInteger" }
+      },
+      "additionalProperties": true
     },
     "verdict": { "enum": ["SPANNING", "MOAT", "UNKNOWN"] },
+    "tiles": {
+      "type": "object",
+      "properties": {
+        "active": { "$ref": "#/$defs/nonNegativeInteger" },
+        "produced": { "$ref": "#/$defs/nonNegativeInteger" },
+        "ingested": { "$ref": "#/$defs/nonNegativeInteger" },
+        "columns_ingested": { "$ref": "#/$defs/nonNegativeInteger" }
+      },
+      "additionalProperties": true
+    },
+    "overflow_counters": {
+      "type": "object",
+      "properties": {
+        "k1_cand_overflow_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "k4_prime_overflow_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "k4_group_overflow_count": { "$ref": "#/$defs/nonNegativeInteger" },
+        "k5_port_overflow_count": { "$ref": "#/$defs/nonNegativeInteger" }
+      },
+      "additionalProperties": true
+    },
     "bz": {
       "type": "object",
       "properties": {
@@ -137,6 +291,8 @@
     "stats_v2": {
       "type": "object",
       "properties": {
+        "stats_level": { "type": "string" },
+        "telemetry_level": { "enum": ["none", "profile", "audit", "full"] },
         "geo_i_tiles": { "type": "integer", "minimum": 0 },
         "geo_o_tiles": { "type": "integer", "minimum": 0 },
         "geo_i_ports": { "type": "integer", "minimum": 0 },
@@ -146,19 +302,16 @@
         "group_count_distribution": { "$ref": "#/$defs/distribution" },
         "total_port_count_distribution": { "$ref": "#/$defs/distribution" },
         "max_face_port_count_distribution": { "$ref": "#/$defs/distribution" },
-        "high_pressure_tiles": { "type": "array" },
-        "component_census": {
-          "type": "object",
-          "properties": {
-            "i_only_components": { "type": "integer", "minimum": 0 },
-            "o_only_components": { "type": "integer", "minimum": 0 },
-            "i_and_o_components": { "type": "integer", "minimum": 0 },
-            "largest_component_sizes": { "type": "array" },
-            "largest_boundary_touching_components": { "type": "array" }
-          },
-          "additionalProperties": true
+        "high_pressure_tiles": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/highPressureTile" }
         },
+        "component_census": { "$ref": "#/$defs/componentCensus" },
         "sample_count": { "type": "integer", "minimum": 0 },
+        "tile_samples_written": { "type": "integer", "minimum": 0 },
+        "sample_seed": { "type": "integer" },
+        "sample_target_count": { "type": "integer", "minimum": 0 },
+        "span_cert_path": { "type": "string" },
         "sample_manifest_path": { "type": "string" },
         "tile_sample_path": { "type": "string" },
         "snapshot_path": { "type": "string" },

@@ -5,12 +5,15 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
+#include <atomic>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <unordered_set>
 #include <vector>
 
@@ -560,6 +563,7 @@ int main(int argc, char** argv) {
     std::map<std::string, std::uint64_t> class_counts;
     std::unordered_set<std::string> seen_tiles;
     std::optional<SampleRecord> first_sample;
+    std::vector<SampleRecord> samples;
     while (std::getline(in, line)) {
       if (line.empty()) continue;
       const nlohmann::json item = nlohmann::json::parse(line);
@@ -577,16 +581,7 @@ int main(int argc, char** argv) {
         throw std::runtime_error("duplicate sample tile " + key);
       }
       ++class_counts[sample.sample_class];
-
-      const TileOpLite actual = build_tileop(sample.tile, sample.row);
-      try {
-        require_equal(actual, sample.expected);
-      } catch (const std::exception& e) {
-        throw std::runtime_error("tile (" +
-                                 std::to_string(sample.tile.i) + "," +
-                                 std::to_string(sample.tile.j) +
-                                 "): " + e.what());
-      }
+      samples.push_back(sample);
       ++checked;
     }
     if (checked == 0) {
@@ -595,6 +590,42 @@ int main(int argc, char** argv) {
     if (manifest.has_value()) {
       check_manifest_counts(*manifest, checked, class_counts);
     }
+
+    std::atomic<std::size_t> next_index{0};
+    std::mutex error_mutex;
+    std::string first_error;
+    const unsigned hardware_threads = std::thread::hardware_concurrency();
+    const std::size_t worker_count = std::max<std::size_t>(
+        1, std::min<std::size_t>(samples.size(), hardware_threads == 0 ? 1 : hardware_threads));
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (std::size_t worker = 0; worker < worker_count; ++worker) {
+      workers.emplace_back([&]() {
+        while (true) {
+          const std::size_t index = next_index.fetch_add(1);
+          if (index >= samples.size()) return;
+          {
+            std::lock_guard<std::mutex> lock(error_mutex);
+            if (!first_error.empty()) return;
+          }
+          const SampleRecord& sample = samples[index];
+          try {
+            const TileOpLite actual = build_tileop(sample.tile, sample.row);
+            require_equal(actual, sample.expected);
+          } catch (const std::exception& e) {
+            std::lock_guard<std::mutex> lock(error_mutex);
+            if (first_error.empty()) {
+              first_error = "tile (" + std::to_string(sample.tile.i) + "," +
+                            std::to_string(sample.tile.j) + "): " + e.what();
+            }
+            return;
+          }
+        }
+      });
+    }
+    for (auto& worker : workers) worker.join();
+    if (!first_error.empty()) throw std::runtime_error(first_error);
+
     std::cout << "tile sample check PASS: checked=" << checked;
     if (manifest.has_value()) std::cout << " manifest=checked";
     std::cout << "\n";

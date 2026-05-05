@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "radii": {
+    "k_sq": 36,
+    "r_inner": 73359375,
+    "r_outer": 73392143
+  },
+  "region": "full-octant",
+  "verdict": "MOAT",
+  "tiles": {
+    "active": 29106320,
+    "produced": 29106320,
+    "ingested": 29106320,
+    "columns_ingested": 416250
+  },
+  "overflow_counters": {
+    "k1_cand_overflow_count": 0,
+    "k4_prime_overflow_count": 0,
+    "k4_group_overflow_count": 0,
+    "k5_port_overflow_count": 0
+  },
+  "stats_v2": {
+    "stats_level": "profile",
+    "telemetry_level": "profile",
+    "geo_i_tiles": 1374,
+    "geo_o_tiles": 1398,
+    "tile_samples_written": 128,
+    "sample_seed": 36,
+    "sample_target_count": 128,
+    "span_cert_path": "",
+    "sample_manifest_path": "/workspace/manifests/k36_lower_moat.samples.json",
+    "tile_sample_path": "/workspace/samples/k36_lower_moat.tiles.jsonl"
+  }
+}

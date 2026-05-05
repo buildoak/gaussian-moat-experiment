@@ -1,0 +1,107 @@
+{
+  "schema_version": 1,
+  "claim_id": "analytical-fixture",
+  "telemetry_level": "profile",
+  "radii": {
+    "k_sq": 36,
+    "r_inner": 80000000,
+    "r_outer": 80015790
+  },
+  "region": "full-octant",
+  "verdict": "MOAT",
+  "tiles": {
+    "active": 10,
+    "produced": 10,
+    "ingested": 10
+  },
+  "timings_seconds": {
+    "grid": 0.5,
+    "cuda_k1_k5": 9.25,
+    "compositor": 2.75,
+    "total": 12.5
+  },
+  "overflow_counters": {
+    "k1_cand_overflow_count": 0,
+    "k4_prime_overflow_count": 0,
+    "k4_group_overflow_count": 0,
+    "k5_port_overflow_count": 0
+  },
+  "stats_v2": {
+    "telemetry_level": "profile",
+    "geo_i_tiles": 3,
+    "geo_o_tiles": 4,
+    "geo_i_ports": 12,
+    "geo_o_ports": 15,
+    "distributions": {
+      "candidate_count": {
+        "bucket_width": 128,
+        "histogram": {
+          "0": 2,
+          "128": 5,
+          "256": 1
+        }
+      },
+      "gaussian_prime_count": {
+        "0": 1,
+        "64": 8
+      },
+      "group_count": [
+        {
+          "value": 1,
+          "tiles": 9
+        }
+      ],
+      "total_port_count": {
+        "0": 4,
+        "16": 2
+      },
+      "max_face_port_count": {
+        "0": 4,
+        "8": 2
+      }
+    },
+    "top_n": {
+      "high_pressure": [
+        {
+          "tile": {
+            "i": 42,
+            "j": 17
+          },
+          "candidate_count": 6144,
+          "gaussian_prime_count": 913,
+          "group_count": 16,
+          "port_counts": [31, 29, 12, 8]
+        }
+      ]
+    },
+    "components": {
+      "census": {
+        "i_only_components": 7,
+        "o_only_components": 5,
+        "i_and_o_components": 0,
+        "largest_component_sizes": [
+          {
+            "component": 11,
+            "ports": 144,
+            "tiles": 39
+          },
+          {
+            "component": 12,
+            "ports": 88,
+            "tiles": 21
+          }
+        ],
+        "largest_boundary_touching_components": [
+          {
+            "component": 11,
+            "boundary": "I",
+            "ports": 144
+          }
+        ]
+      }
+    },
+    "tile_samples_written": 6,
+    "sample_manifest_path": "samples/manifest.json",
+    "tile_sample_path": "samples/tiles.jsonl"
+  }
+}

@@ -13,6 +13,7 @@ FetchContent_Declare(
 )
 set(JSON_BuildTests OFF CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(nlohmann_json)
+find_package(Python3 COMPONENTS Interpreter)
 
 add_library(verification_common INTERFACE)
 target_include_directories(verification_common INTERFACE ${CMAKE_CURRENT_SOURCE_DIR}/include)
@@ -41,6 +42,11 @@ add_test(NAME exact_global_uf_tiny
 add_test(NAME no_campaign_includes
   COMMAND ${CMAKE_COMMAND} -DROOT=${CMAKE_CURRENT_SOURCE_DIR}
           -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/no_campaign_includes.cmake)
+if(Python3_Interpreter_FOUND)
+  add_test(NAME stats_normalize_sweep_rows_py
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/stats/test_normalize_sweep_rows.py)
+endif()
 
 add_test(NAME span_cert_fixture_valid
   COMMAND span_cert_check ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/span_cert/minimal-valid.json)
@@ -81,6 +87,7 @@ set_tests_properties(tile_sample_fixture_under_quota_reject PROPERTIES WILL_FAIL
 
 foreach(postflight_case
     run-contract-pass:RUN_CONTRACT_PASS
+    analytical-telemetry-pass:RUN_CONTRACT_PASS
     tile-sample-audit-pass:TILE_SAMPLE_AUDIT_PASS
     span-proof-pass:SPAN_PROOF_PASS
     moat-claim-proof-missing:CLAIM_PROOF_MISSING)
@@ -96,3 +103,6 @@ endforeach()
 add_test(NAME postflight_fixture_reject_overflow
   COMMAND postflight_check ${CMAKE_CURRENT_SOURCE_DIR}/postflight/fixtures/reject-overflow.json)
 set_tests_properties(postflight_fixture_reject_overflow PROPERTIES WILL_FAIL TRUE)
+add_test(NAME postflight_fixture_reject_analytical_telemetry
+  COMMAND postflight_check ${CMAKE_CURRENT_SOURCE_DIR}/postflight/fixtures/reject-analytical-telemetry.json)
+set_tests_properties(postflight_fixture_reject_analytical_telemetry PROPERTIES WILL_FAIL TRUE)

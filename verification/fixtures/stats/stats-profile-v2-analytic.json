@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "telemetry_level": "profile",
+  "radii": {
+    "k_sq": 36,
+    "r_inner": 73359375,
+    "r_outer": 73392143,
+    "width": 32768
+  },
+  "region": "full-octant",
+  "verdict": "MOAT",
+  "tiles": {
+    "active": 29106320,
+    "produced": 29106320,
+    "ingested": 29106320,
+    "columns_ingested": 416250
+  },
+  "overflow_counters": {
+    "k1_cand_overflow_count": 0,
+    "k4_prime_overflow_count": 0,
+    "k4_group_overflow_count": 0,
+    "k5_port_overflow_count": 0
+  },
+  "stats_v2": {
+    "stats_level": "profile",
+    "telemetry_level": "profile",
+    "geo_i_tiles": 1374,
+    "geo_o_tiles": 1398,
+    "geo_i_ports": 2841,
+    "geo_o_ports": 2897,
+    "candidate_count_distribution": {
+      "buckets": [
+        {
+          "value": 1832,
+          "count": 2
+        },
+        {
+          "value": 1833,
+          "count": 11
+        }
+      ],
+      "observed_min": 1501,
+      "observed_max": 2264,
+      "sample_count": 29106320,
+      "total_count": 29106320
+    },
+    "gaussian_prime_count_distribution": {
+      "buckets": [
+        {
+          "value": 732,
+          "count": 7
+        }
+      ],
+      "observed_min": 524,
+      "observed_max": 981,
+      "sample_count": 29106320,
+      "total_count": 29106320
+    },
+    "group_count_distribution": {
+      "buckets": [
+        {
+          "value": 18,
+          "count": 41
+        }
+      ],
+      "observed_min": 0,
+      "observed_max": 51,
+      "sample_count": 29106320,
+      "total_count": 29106320
+    },
+    "total_port_count_distribution": {
+      "buckets": [
+        {
+          "value": 64,
+          "count": 19
+        }
+      ],
+      "observed_min": 0,
+      "observed_max": 192,
+      "sample_count": 29106320,
+      "total_count": 29106320
+    },
+    "max_face_port_count_distribution": {
+      "buckets": [
+        {
+          "value": 15,
+          "count": 88
+        }
+      ],
+      "observed_min": 0,
+      "observed_max": 16,
+      "sample_count": 29106320,
+      "total_count": 29106320
+    },
+    "high_pressure_tiles": [
+      {
+        "tile_index": 1048576,
+        "tile_i": 2048,
+        "tile_j": 512,
+        "candidate_count": 2264,
+        "gaussian_prime_count": 981,
+        "group_count": 51,
+        "total_port_count": 192,
+        "max_face_port_count": 16,
+        "geo_i": true,
+        "geo_o": false,
+        "classes": [
+          "candidate",
+          "max_face_port",
+          "geo_i"
+        ]
+      }
+    ],
+    "component_census": {
+      "total_components": 190331,
+      "i_only_components": 12,
+      "o_only_components": 19,
+      "i_and_o_components": 0,
+      "neither_components": 190300,
+      "largest_component_sizes": [
+        {
+          "rank": 1,
+          "component_id": 42,
+          "tile_count": 731,
+          "group_count": 1748,
+          "geo_i": false,
+          "geo_o": false
+        }
+      ],
+      "largest_boundary_touching_components": [
+        {
+          "rank": 1,
+          "component_id": 17,
+          "tile_count": 118,
+          "group_count": 287,
+          "geo_i": true,
+          "geo_o": false
+        }
+      ]
+    },
+    "sample_count": 128,
+    "tile_samples_written": 128,
+    "sample_seed": 36,
+    "sample_target_count": 128,
+    "sample_manifest_path": "/workspace/manifests/k36_lower_moat.samples.json",
+    "tile_sample_path": "/workspace/samples/k36_lower_moat.tiles.jsonl",
+    "snapshot_path": "/workspace/snapshots/k36_lower_moat.tileops.bin",
+    "snapshot_sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+  }
+}

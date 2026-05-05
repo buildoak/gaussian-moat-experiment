@@ -42,6 +42,14 @@ def get_path(data: dict[str, Any], *path: str) -> Any:
     return cur
 
 
+def get_any_path(data: dict[str, Any], paths: list[tuple[str, ...]]) -> Any:
+    for path in paths:
+        value = get_path(data, *path)
+        if value is not None:
+            return value
+    return None
+
+
 def first_value(*values: Any) -> Any:
     for value in values:
         if value is not None:
@@ -86,6 +94,42 @@ def profile_timing_seconds(
             get_path(profile, "timings_seconds", current_key),
             *legacy_values,
         )
+    )
+
+
+def stats_v2_distribution(stats_v2: dict[str, Any], *names: str) -> Any:
+    flat_values = [stats_v2.get(name) for name in names]
+    nested_paths = []
+    for name in names:
+        nested_paths.extend(
+            [
+                ("distributions", name),
+                ("histograms", name),
+                ("distribution", name),
+            ]
+        )
+    return first_value(*flat_values, get_any_path(stats_v2, nested_paths))
+
+
+def stats_v2_top_n(stats_v2: dict[str, Any], *names: str) -> Any:
+    flat_values = [stats_v2.get(name) for name in names]
+    nested_paths = []
+    for name in names:
+        nested_paths.extend(
+            [
+                ("top_n", name),
+                ("top_tiles", name),
+                ("ranked_tiles", name),
+            ]
+        )
+    return first_value(*flat_values, get_any_path(stats_v2, nested_paths))
+
+
+def stats_v2_component_census(stats_v2: dict[str, Any]) -> Any:
+    return first_value(
+        stats_v2.get("component_census"),
+        get_path(stats_v2, "components", "census"),
+        get_path(stats_v2, "component", "census"),
     )
 
 
@@ -278,35 +322,61 @@ def normalize_row(
         "emitted_overflow_bit_count": int_or_none(host.get("emitted_overflow_bit_count")),
         "geo_i_tiles": int_or_none(stats_v2.get("geo_i_tiles")),
         "geo_o_tiles": int_or_none(stats_v2.get("geo_o_tiles")),
-        "geo_i_ports": int_or_none(stats_v2.get("geo_i_ports")),
-        "geo_o_ports": int_or_none(stats_v2.get("geo_o_ports")),
-        "candidate_count_distribution": first_value(
-            stats_v2.get("candidate_count_distribution"),
-            stats_v2.get("candidate_counts"),
+        "geo_i_ports": int_or_none(
+            first_value(
+                stats_v2.get("geo_i_ports"),
+                get_path(stats_v2, "geo_I", "port_population"),
+            )
         ),
-        "gaussian_prime_count_distribution": first_value(
-            stats_v2.get("gaussian_prime_count_distribution"),
-            stats_v2.get("prime_count_distribution"),
-            stats_v2.get("prime_counts"),
+        "geo_o_ports": int_or_none(
+            first_value(
+                stats_v2.get("geo_o_ports"),
+                get_path(stats_v2, "geo_O", "port_population"),
+            )
         ),
-        "group_count_distribution": first_value(
-            stats_v2.get("group_count_distribution"),
-            stats_v2.get("group_counts"),
+        "candidate_count_distribution": stats_v2_distribution(
+            stats_v2,
+            "candidate_count_distribution",
+            "candidate_count",
+            "candidate_counts",
+            "candidates",
         ),
-        "total_port_count_distribution": first_value(
-            stats_v2.get("total_port_count_distribution"),
-            stats_v2.get("port_count_distribution"),
-            stats_v2.get("port_counts"),
+        "gaussian_prime_count_distribution": stats_v2_distribution(
+            stats_v2,
+            "gaussian_prime_count_distribution",
+            "prime_count_distribution",
+            "gaussian_prime_count",
+            "gaussian_prime_counts",
+            "prime_counts",
         ),
-        "max_face_port_count_distribution": first_value(
-            stats_v2.get("max_face_port_count_distribution"),
-            stats_v2.get("max_face_port_counts"),
+        "group_count_distribution": stats_v2_distribution(
+            stats_v2,
+            "group_count_distribution",
+            "group_count",
+            "group_counts",
+            "groups",
         ),
-        "high_pressure_tiles": first_value(
-            stats_v2.get("high_pressure_tiles"),
-            stats_v2.get("high_pressure_top_n"),
+        "total_port_count_distribution": stats_v2_distribution(
+            stats_v2,
+            "total_port_count_distribution",
+            "port_count_distribution",
+            "total_port_count",
+            "total_port_counts",
+            "port_counts",
         ),
-        "component_census": stats_v2.get("component_census"),
+        "max_face_port_count_distribution": stats_v2_distribution(
+            stats_v2,
+            "max_face_port_count_distribution",
+            "max_face_port_count",
+            "max_face_port_counts",
+        ),
+        "high_pressure_tiles": stats_v2_top_n(
+            stats_v2,
+            "high_pressure_tiles",
+            "high_pressure",
+            "high_pressure_top_n",
+        ),
+        "component_census": stats_v2_component_census(stats_v2),
         "sample_manifest_path": stats_v2.get("sample_manifest_path"),
         "tile_sample_path": stats_v2.get("tile_sample_path"),
         "sample_count": int_or_none(
