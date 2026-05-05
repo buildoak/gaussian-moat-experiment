@@ -42,11 +42,12 @@ Hardware:
 | Exact BZ enforcement | PASS for K36 square-K rows | `campaign_main_cuda` now embeds `bz.checked`, `bz.clean`, `bz.override_used`, candidate counts, and bad norm count in profiles; lower rows have `clean=true`, `override_used=false`, `bad_norm_count=0` |
 | Boundary semantics suite | PASS | local and remote `verification` CTest `5/5`; includes collar, axis, diagonal, partial clipping, geo predicates |
 | Independent bounded global-UF | PASS bounded smoke | `exact_global_uf --k-sq 36 --r-inner 100 --r-outer 500 --expect SPANNING`; matched CPU campaign verdict for same tiny annulus |
-| Same-commit CUDA preflight | PASS | remote verification CTest `5/5`; remote CUDA CTest `13/13` |
+| SPANNING certificate checker | PASS bounded smoke / BLOCKED at lower production row | `--emit-span-cert` now materializes a coordinate certificate from a reconstructed stitch path; remote small annulus `100..500` emitted `/tmp/small.cert.json`, and independent `span_cert_check` accepted it with `points=81`. The lower `73,339,843..73,372,611` row did not finish certificate-path tracing in bounded attempts and has no accepted coordinate certificate yet. |
+| Same-commit CUDA preflight | PASS | remote verification CTest `5/5`; remote CUDA CTest `13/13`; after certificate/compositor edits, local C++ CTest `115/115` and remote CUDA CTest `13/13` still passed |
 | Lower-K36 production reruns | PASS | full-ingest `--no-early-exit` runs for both rows; produced = ingested = active; zero overflows |
 | Production tile-sample oracle | PASS | independent checker accepted `1024` sampled tiles for SPANNING and `1024` for MOAT, comparing semantic TileOp signatures modulo label renaming |
 | Stats/anatomy report | PASS | `reports/k36_lower_anatomy.md` written; `geo_I`/`geo_O` tile populations are healthy on both rows |
-| Bundle validator | PASS with explicit residual | `validate_campaign_run.py --require-profile-bz --allow-spanning-without-path --no-recompute-bz` accepts the mirrored bundle |
+| Bundle validator | PASS with explicit residual | `validate_campaign_run.py --require-profile-bz --allow-spanning-without-path --no-recompute-bz` accepts the mirrored bundle; the explicit allowance remains necessary until the lower SPANNING row has a coordinate certificate |
 
 ## Production Run Results
 
@@ -96,6 +97,32 @@ cmake --build build-k36 -j"$(nproc)"
 ctest --test-dir build-k36 --output-on-failure
 ```
 
+Certificate smoke test:
+
+```bash
+./build-k36/campaign_main_cuda \
+  --k-sq=36 \
+  --r-inner 100 \
+  --r-outer 500 \
+  --region full-octant \
+  --timing \
+  --chunk-size 64 \
+  --trace-spanning-path \
+  --emit-span-cert /tmp/small.cert.json \
+  --profile /tmp/small.cert.profile.json
+
+/workspace/gaussian-moat-cuda/verification/build/span_cert_check \
+  /tmp/small.cert.json
+```
+
+Result:
+
+```text
+VERDICT: SPANNING
+SPANNING_PATH: reconstructed=1 recorded_edges=1 inner_path_edges=0 outer_path_edges=0
+span certificate PASS: points=81
+```
+
 Remote endpoint runs:
 
 ```bash
@@ -139,28 +166,40 @@ ecb2f37c7e518ebbb433b1f5c1b734c2adccf84dc9379f4681f40f2dbbb1072e  samples/k36_lo
 d2412d702107150e4f382848d19a269a4262f159e02198f40402806ff9558406  reports/k36_lower_anatomy.md
 a7777563db6747fee26b069d0857dfbd63968dc915aeaa8d3a0dd612bae3e33d  logs/build-and-ctest.log
 09cf13ae3c4278fa88204e7d7d50d5b46fb4d4b3b172ce740f64fe752bd424ea  logs/post-verifiers.log
+095375cc1d92bd172a7eb97da4473306a9552a05f5bc1084f4ecd53e6d639c7e  certs/k36_small_smoke.cert.json
+75f34f8b72f7f95d998ec2c16c521cfb9c86ddb6742d7381f0ba5602d5125323  profiles/k36_small_smoke.profile.json
+f684f38ceb204d0e59889e918696d6ce41c4132629379126303d182c233b03a9  logs/k36_small_smoke.cert.log
+320f889d1e66f6c85553e3a63d4f3811df6a89aa33f58129350139548ba1dada  logs/k36_small_smoke.cert_check.log
+9af2140dead37f9193268e6f518bf59cd5133e0d63957c194e3eb4379e99c0c6  logs/local-cpp-ctest-after-cert.log
+147cbda953ce33d45b3f51dc0f2eb93a27b02e43b169d5ca1d13afbf290b3fea  logs/k36_final_build_after_cert_help.log
+4fb3df9be7ed98a016836f9cdb0f3cbea859e353ecf20eeb20b6fd86caab9286  logs/k36_final_cuda_ctest_after_cert_help.log
 ```
 
 ## Residual Gaps
 
-- Coordinate SPANNING certificate emission is not implemented yet.
-  `--emit-span-cert` is deliberately rejected rather than pretending the
-  stitch trace is a mathematical coordinate certificate.
+- Coordinate SPANNING certificate emission is implemented and passes a bounded
+  remote smoke test, but the lower-K36 production SPANNING row still has no
+  accepted coordinate certificate. With `--trace-spanning-path`, the production
+  run remained CPU-bound in stitch tracing/materialization attempts and was
+  stopped without emitting a certificate.
+- Therefore this wave does not satisfy the plan's full acceptance condition
+  requiring an independently validated lower-K36 SPANNING coordinate path.
 - Production tile sampling strengthens local TileOp confidence but does not
   prove the negative MOAT row globally.
 - Full independent MOAT compositor replay is reserved for a later wave in
   `verification/compositor-replay/`.
 - The bounded global-UF oracle currently covers small/medium annuli only. It
   does not run at the 73M lower-K36 production radius.
-- Local CPU CTest has a stale `test_axis_zero_offset_NOT_BUILT` entry in the
-  existing build tree; the filtered local suite excluding that stale entry
-  passed `110/110`.
+- Local C++ CTest after the compositor/certificate edits passed `115/115`
+  with the expected two skipped debug/non-square cases.
 
 ## Next Gate
 
-Implement coordinate path certificate materialization for SPANNING rows:
+Make lower-production coordinate path certification fast enough to accept:
 
-1. Convert a stitch path into concrete Gaussian-prime coordinates.
-2. Validate it with `verification/span-cert/span_cert_check`.
-3. Require this certificate for the lower-K36 SPANNING endpoint and the
-   Tsuchimura `80,015,782` SPANNING row.
+1. Replace production `--trace-spanning-path` with an incremental predecessor
+   certificate mode that does not record/search the full stitch graph.
+2. Emit the lower `73,339,843..73,372,611` coordinate certificate.
+3. Validate it with `verification/span-cert/span_cert_check`.
+4. Only then remove `--allow-spanning-without-path` from the bundle validator
+   acceptance command for SPANNING rows.

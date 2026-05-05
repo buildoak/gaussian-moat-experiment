@@ -19,11 +19,14 @@
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <memory>
 #include <optional>
+#include <queue>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -31,6 +34,7 @@
 
 #include "campaign/campaign_constants.h"
 #include "campaign/constants.h"
+#include "campaign/geo_tests.h"
 #include "campaign/grid.h"
 #include "campaign/region.h"
 #include "campaign/sieve.h"
@@ -38,6 +42,7 @@
 #include "campaign/streaming_compositor.h"
 #include "campaign/tileop.h"
 #include "cuda_campaign/host_driver.h"
+#include "tileop_internal.h"
 
 namespace {
 
@@ -126,7 +131,7 @@ void print_help(const char* prog) {
       << "  --trace-spanning       Print/profile first SPANNING provenance\n"
       << "  --trace-spanning-path  Reconstruct first SPANNING stitch path\n"
       << "  --stats-level <level>  Optional stats level: profile\n"
-      << "  --emit-span-cert <p>   Reserved coordinate cert output path\n"
+      << "  --emit-span-cert <p>   Emit coordinate span cert from reconstructed trace\n"
       << "  --sample-manifest <p>  Record production sample manifest path\n"
       << "  --tile-sample-out <p>  Write sampled production TileOps as JSONL\n"
       << "  --allow-uncertified-boundary-band\n"
@@ -562,6 +567,326 @@ void account_tile_stats_and_samples(
     *tile_sample_out << rec.dump() << "\n";
     ++stats.tile_samples_written;
   }
+}
+
+struct CertPoint {
+  std::int64_t a = 0;
+  std::int64_t b = 0;
+
+  friend bool operator==(const CertPoint&, const CertPoint&) = default;
+};
+
+struct CertTileData {
+  campaign::TileCoord coord;
+  std::vector<campaign::Prime> primes;
+  std::unordered_map<std::uint64_t, int> index_by_coord;
+  campaign::DSU dsu{0};
+  campaign::internal::DenseRemap remap;
+  std::vector<campaign::internal::PrimeGeoFlags> flags;
+  std::map<int, std::vector<int>> members_by_label;
+};
+
+bool stitch_vertex_equal(const campaign::SpanningStitchVertex& lhs,
+                         const campaign::SpanningStitchVertex& rhs) {
+  return lhs.tile_index == rhs.tile_index &&
+         lhs.group_label == rhs.group_label;
+}
+
+campaign::SpanningStitchVertex other_vertex(
+    const campaign::SpanningStitchEdge& edge,
+    const campaign::SpanningStitchVertex& current) {
+  if (stitch_vertex_equal(edge.lhs, current)) return edge.rhs;
+  if (stitch_vertex_equal(edge.rhs, current)) return edge.lhs;
+  throw std::runtime_error("stitch edge is not incident to current vertex");
+}
+
+campaign::TileCoord coord_from_flat_index(const campaign::Grid& grid,
+                                          std::int64_t tile_index) {
+  for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
+    const std::size_t k = static_cast<std::size_t>(i - grid.i_min);
+    if (k + 1 >= grid.tower_offset.size()) break;
+    const std::int64_t begin = grid.tower_offset[k];
+    const std::int64_t end = grid.tower_offset[k + 1];
+    if (tile_index < begin || tile_index >= end) continue;
+    const std::int32_t j =
+        static_cast<std::int32_t>(grid.j_low[k] + (tile_index - begin));
+    return campaign::TileCoord{
+        i,
+        j,
+        static_cast<std::int64_t>(grid.o_x) +
+            static_cast<std::int64_t>(grid.S_value) * i,
+        static_cast<std::int64_t>(grid.o_y) +
+            static_cast<std::int64_t>(grid.S_value) * j,
+    };
+  }
+  throw std::runtime_error("spanning cert tile index outside grid");
+}
+
+bool within_k_sq(const campaign::Prime& lhs,
+                 const campaign::Prime& rhs) {
+  const __int128 da = static_cast<__int128>(lhs.a) -
+                      static_cast<__int128>(rhs.a);
+  const __int128 db = static_cast<__int128>(lhs.b) -
+                      static_cast<__int128>(rhs.b);
+  return da * da + db * db <= static_cast<__int128>(campaign::k_sq_value);
+}
+
+std::uint64_t cert_coord_key(std::int64_t a, std::int64_t b) {
+  if (a < 0 || b < 0 ||
+      a > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max()) ||
+      b > static_cast<std::int64_t>(std::numeric_limits<std::uint32_t>::max())) {
+    throw std::runtime_error("certificate coordinate outside packed key range");
+  }
+  return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(a)) << 32) |
+         static_cast<std::uint32_t>(b);
+}
+
+CertTileData build_cert_tile_data(const campaign::Grid& grid,
+                                  const campaign::CampaignConstants& constants,
+                                  std::int64_t tile_index) {
+  CertTileData data;
+  data.coord = coord_from_flat_index(grid, tile_index);
+  data.primes = campaign::sieve_tile(data.coord, constants);
+  data.index_by_coord.reserve(data.primes.size());
+  for (int i = 0; i < static_cast<int>(data.primes.size()); ++i) {
+    const campaign::Prime& prime = data.primes[static_cast<std::size_t>(i)];
+    data.index_by_coord.emplace(cert_coord_key(prime.a, prime.b), i);
+  }
+  data.flags.reserve(data.primes.size());
+  for (const campaign::Prime& prime : data.primes) {
+    const auto norm_sq = static_cast<std::int64_t>(prime.norm_sq);
+    data.flags.push_back(campaign::internal::PrimeGeoFlags{
+        campaign::is_inner_prime(norm_sq, constants),
+        campaign::is_outer_prime(norm_sq, constants),
+    });
+  }
+  data.dsu = campaign::internal::build_local_dsu(data.primes);
+  data.remap = campaign::internal::dense_remap_visible_roots(
+      &data.dsu, data.primes, data.flags, data.coord);
+  if (data.remap.overflow) {
+    throw std::runtime_error("cannot materialize certificate through overflow tile");
+  }
+  for (int i = 0; i < static_cast<int>(data.primes.size()); ++i) {
+    const int raw_root = data.dsu.find(i);
+    const int label =
+        data.remap.wire_label_by_raw_root[static_cast<std::size_t>(raw_root)];
+    if (label > 0) data.members_by_label[label].push_back(i);
+  }
+  return data;
+}
+
+CertTileData& cert_tile(
+    std::unordered_map<std::int64_t, CertTileData>& cache,
+    const campaign::Grid& grid,
+    const campaign::CampaignConstants& constants,
+    std::int64_t tile_index) {
+  const auto it = cache.find(tile_index);
+  if (it != cache.end()) return it->second;
+  auto inserted = cache.emplace(
+      tile_index, build_cert_tile_data(grid, constants, tile_index));
+  return inserted.first->second;
+}
+
+std::vector<int> local_prime_path(CertTileData& tile, int start, int goal) {
+  if (start == goal) return {start};
+  const int n = static_cast<int>(tile.primes.size());
+  std::vector<int> parent(static_cast<std::size_t>(n), -1);
+  std::queue<int> pending;
+  parent[static_cast<std::size_t>(start)] = start;
+  pending.push(start);
+  while (!pending.empty()) {
+    const int current = pending.front();
+    pending.pop();
+    const int root = tile.dsu.find(current);
+    const campaign::Prime& current_prime =
+        tile.primes[static_cast<std::size_t>(current)];
+    for (int da = -campaign::C; da <= campaign::C; ++da) {
+      for (int db = -campaign::C; db <= campaign::C; ++db) {
+        if (da == 0 && db == 0) continue;
+        const int d2 = da * da + db * db;
+        if (d2 > campaign::k_sq_value) continue;
+        const std::int64_t next_a = current_prime.a + da;
+        const std::int64_t next_b = current_prime.b + db;
+        if (next_a < 0 || next_b < 0) continue;
+        const auto it =
+            tile.index_by_coord.find(cert_coord_key(next_a, next_b));
+        if (it == tile.index_by_coord.end()) continue;
+        const int next = it->second;
+        if (parent[static_cast<std::size_t>(next)] >= 0) continue;
+        if (tile.dsu.find(next) != root) continue;
+        parent[static_cast<std::size_t>(next)] = current;
+        if (next == goal) {
+          std::vector<int> path;
+          for (int x = goal; x != start;
+               x = parent[static_cast<std::size_t>(x)]) {
+            path.push_back(x);
+          }
+          path.push_back(start);
+          std::reverse(path.begin(), path.end());
+          return path;
+        }
+        pending.push(next);
+      }
+    }
+  }
+  throw std::runtime_error("could not materialize local UF coordinate path");
+}
+
+std::pair<int, int> bridge_prime_pair(CertTileData& lhs,
+                                      int lhs_label,
+                                      CertTileData& rhs,
+                                      int rhs_label) {
+  const auto lhs_it = lhs.members_by_label.find(lhs_label);
+  const auto rhs_it = rhs.members_by_label.find(rhs_label);
+  if (lhs_it == lhs.members_by_label.end() ||
+      rhs_it == rhs.members_by_label.end()) {
+    throw std::runtime_error("stitch group label missing from tile data");
+  }
+  for (int li : lhs_it->second) {
+    for (int ri : rhs_it->second) {
+      if (within_k_sq(lhs.primes[static_cast<std::size_t>(li)],
+                     rhs.primes[static_cast<std::size_t>(ri)])) {
+        return {li, ri};
+      }
+    }
+  }
+  throw std::runtime_error("could not find concrete bridge prime pair");
+}
+
+void append_prime_path(std::vector<CertPoint>& out,
+                       const CertTileData& tile,
+                       const std::vector<int>& indices) {
+  for (int idx : indices) {
+    const campaign::Prime& p = tile.primes[static_cast<std::size_t>(idx)];
+    CertPoint point{p.a, p.b};
+    if (!out.empty() && out.back() == point) continue;
+    out.push_back(point);
+  }
+}
+
+std::vector<campaign::SpanningStitchVertex> ordered_stitch_vertices(
+    const campaign::SpanningStitchPath& path) {
+  if (!path.reconstructed || !path.final_bridge_present) {
+    throw std::runtime_error("stitch path is not reconstructed");
+  }
+  std::vector<campaign::SpanningStitchVertex> vertices;
+  campaign::SpanningStitchVertex current = path.inner_source;
+  vertices.push_back(current);
+  for (const auto& edge : path.inner_path_edges) {
+    current = other_vertex(edge, current);
+    vertices.push_back(current);
+  }
+  if (!stitch_vertex_equal(current, path.inner_endpoint)) {
+    throw std::runtime_error("inner stitch path endpoint mismatch");
+  }
+  current = other_vertex(path.final_bridge, current);
+  vertices.push_back(current);
+  if (!stitch_vertex_equal(current, path.outer_endpoint)) {
+    throw std::runtime_error("final bridge endpoint mismatch");
+  }
+  for (auto it = path.outer_path_edges.rbegin();
+       it != path.outer_path_edges.rend(); ++it) {
+    current = other_vertex(*it, current);
+    vertices.push_back(current);
+  }
+  if (!stitch_vertex_equal(current, path.outer_source)) {
+    throw std::runtime_error("outer stitch path source mismatch");
+  }
+  return vertices;
+}
+
+std::vector<campaign::SpanningStitchEdge> ordered_stitch_edges(
+    const campaign::SpanningStitchPath& path) {
+  std::vector<campaign::SpanningStitchEdge> edges;
+  edges.insert(edges.end(), path.inner_path_edges.begin(),
+               path.inner_path_edges.end());
+  edges.push_back(path.final_bridge);
+  for (auto it = path.outer_path_edges.rbegin();
+       it != path.outer_path_edges.rend(); ++it) {
+    edges.push_back(*it);
+  }
+  return edges;
+}
+
+int endpoint_prime(CertTileData& tile, int label, bool inner) {
+  const auto it = tile.members_by_label.find(label);
+  if (it == tile.members_by_label.end()) {
+    throw std::runtime_error("endpoint group label missing");
+  }
+  for (int idx : it->second) {
+    const auto& flags = tile.flags[static_cast<std::size_t>(idx)];
+    if ((inner && flags.inner) || (!inner && flags.outer)) return idx;
+  }
+  throw std::runtime_error(inner ? "inner endpoint prime missing"
+                                 : "outer endpoint prime missing");
+}
+
+void write_span_certificate(const std::filesystem::path& path,
+                            const campaign::Grid& grid,
+                            const campaign::CampaignConstants& constants,
+                            std::uint64_t k_sq,
+                            std::uint64_t r_inner,
+                            std::uint64_t r_outer,
+                            const std::string& region_spec,
+                            const campaign::SpanningTrace& trace) {
+  const auto vertices = ordered_stitch_vertices(trace.path);
+  const auto edges = ordered_stitch_edges(trace.path);
+  if (vertices.size() != edges.size() + 1) {
+    throw std::runtime_error("stitch path vertex/edge count mismatch");
+  }
+
+  std::unordered_map<std::int64_t, CertTileData> cache;
+  std::vector<int> entry(vertices.size(), -1);
+  std::vector<int> exit(vertices.size(), -1);
+
+  for (std::size_t e = 0; e < edges.size(); ++e) {
+    const auto& edge = edges[e];
+    const auto& from_v = vertices[e];
+    const auto& to_v = vertices[e + 1];
+    CertTileData& from =
+        cert_tile(cache, grid, constants, from_v.tile_index);
+    CertTileData& to =
+        cert_tile(cache, grid, constants, to_v.tile_index);
+    const auto pair = bridge_prime_pair(from, from_v.group_label,
+                                        to, to_v.group_label);
+    exit[e] = pair.first;
+    entry[e + 1] = pair.second;
+    (void)edge;
+  }
+
+  CertTileData& first = cert_tile(cache, grid, constants,
+                                  vertices.front().tile_index);
+  CertTileData& last = cert_tile(cache, grid, constants,
+                                 vertices.back().tile_index);
+  entry.front() = endpoint_prime(first, vertices.front().group_label, true);
+  exit.back() = endpoint_prime(last, vertices.back().group_label, false);
+
+  std::vector<CertPoint> cert_path;
+  for (std::size_t i = 0; i < vertices.size(); ++i) {
+    CertTileData& tile = cert_tile(cache, grid, constants,
+                                   vertices[i].tile_index);
+    append_prime_path(cert_path, tile, local_prime_path(tile, entry[i], exit[i]));
+  }
+
+  nlohmann::json points = nlohmann::json::array();
+  for (const CertPoint& p : cert_path) {
+    points.push_back({{"a", p.a}, {"b", p.b}});
+  }
+  nlohmann::json cert = {
+      {"schema_version", 1},
+      {"k_sq", k_sq},
+      {"r_inner", r_inner},
+      {"r_outer", r_outer},
+      {"region", region_spec},
+      {"source", "campaign_main_cuda stitch-path materializer"},
+      {"path", points},
+  };
+  std::ofstream out(path);
+  if (!out.is_open()) {
+    throw std::runtime_error("could not open span certificate output " +
+                             path.string());
+  }
+  out << cert.dump(2) << "\n";
 }
 
 void append_column_to_batch(ColumnBatch& batch,
@@ -1161,13 +1486,6 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  if (span_cert_path.has_value()) {
-    std::cerr << "Error: --emit-span-cert is reserved for coordinate "
-              << "certificates and is not implemented yet; use "
-              << "--trace-spanning-path for stitch traces\n";
-    return 2;
-  }
-
   if (static_cast<std::uint32_t>(*k_sq) !=
       static_cast<std::uint32_t>(campaign::k_sq_value)) {
     std::cerr << "Error: --k-sq=" << *k_sq
@@ -1408,6 +1726,14 @@ int main(int argc, char** argv) {
     verdict = run_stats.early_exit_taken ? campaign::Verdict::kSpanning
                                          : compositor.finalize();
     spanning_trace = compositor.spanning_trace();
+    if (span_cert_path.has_value()) {
+      if (verdict != campaign::Verdict::kSpanning) {
+        throw std::runtime_error("--emit-span-cert requested for non-SPANNING run");
+      }
+      write_span_certificate(std::filesystem::path(*span_cert_path), grid,
+                             constants, *k_sq, *r_inner, *r_outer,
+                             *region_spec, spanning_trace);
+    }
   } catch (const std::exception& e) {
     std::cerr << "Error in CUDA streaming campaign: " << e.what() << "\n";
     return 5;

@@ -235,17 +235,28 @@ struct StreamingCompositor::State {
       return path;
     }
 
-    std::queue<std::uint64_t> pending;
-    std::unordered_map<std::uint64_t, PathBackref> backrefs;
-    pending.push(source_key);
-    backrefs.emplace(source_key, PathBackref{source_key, kInvalidStitchEdge});
+    std::queue<std::uint64_t> source_pending;
+    std::queue<std::uint64_t> target_pending;
+    std::unordered_map<std::uint64_t, PathBackref> source_backrefs;
+    std::unordered_map<std::uint64_t, PathBackref> target_backrefs;
+    source_pending.push(source_key);
+    target_pending.push(target_key);
+    source_backrefs.emplace(source_key,
+                            PathBackref{source_key, kInvalidStitchEdge});
+    target_backrefs.emplace(target_key,
+                            PathBackref{target_key, kInvalidStitchEdge});
 
-    while (!pending.empty()) {
+    std::uint64_t meeting_key = 0;
+    auto expand_one = [&](std::queue<std::uint64_t>& pending,
+                          std::unordered_map<std::uint64_t, PathBackref>& own,
+                          const std::unordered_map<std::uint64_t, PathBackref>&
+                              other) -> bool {
+      if (pending.empty()) return false;
       const std::uint64_t current_key = pending.front();
       pending.pop();
 
       const auto adj_it = stitch_adjacency.find(current_key);
-      if (adj_it == stitch_adjacency.end()) continue;
+      if (adj_it == stitch_adjacency.end()) return false;
 
       for (std::size_t edge_index : adj_it->second) {
         if (edge_index == excluded_edge_index ||
@@ -264,23 +275,41 @@ struct StreamingCompositor::State {
           continue;
         }
 
-        if (backrefs.find(next_key) != backrefs.end()) continue;
-        backrefs.emplace(next_key, PathBackref{current_key, edge_index});
-        if (next_key == target_key) {
-          found = true;
-          break;
+        if (own.find(next_key) != own.end()) continue;
+        own.emplace(next_key, PathBackref{current_key, edge_index});
+        if (other.find(next_key) != other.end()) {
+          meeting_key = next_key;
+          return true;
         }
         pending.push(next_key);
       }
-      if (found) break;
+      return false;
+    };
+
+    while (!source_pending.empty() || !target_pending.empty()) {
+      const bool expand_source =
+          target_pending.empty() ||
+          (!source_pending.empty() &&
+           source_pending.size() <= target_pending.size());
+      if (expand_source) {
+        if (expand_one(source_pending, source_backrefs, target_backrefs)) {
+          found = true;
+          break;
+        }
+      } else {
+        if (expand_one(target_pending, target_backrefs, source_backrefs)) {
+          found = true;
+          break;
+        }
+      }
     }
 
     if (!found) return path;
 
     std::vector<std::size_t> edge_indices;
-    for (std::uint64_t key = target_key; key != source_key;) {
-      const auto backref_it = backrefs.find(key);
-      if (backref_it == backrefs.end() ||
+    for (std::uint64_t key = meeting_key; key != source_key;) {
+      const auto backref_it = source_backrefs.find(key);
+      if (backref_it == source_backrefs.end() ||
           backref_it->second.edge_index == kInvalidStitchEdge) {
         found = false;
         path.clear();
@@ -290,6 +319,17 @@ struct StreamingCompositor::State {
       key = backref_it->second.previous_key;
     }
     std::reverse(edge_indices.begin(), edge_indices.end());
+    for (std::uint64_t key = meeting_key; key != target_key;) {
+      const auto backref_it = target_backrefs.find(key);
+      if (backref_it == target_backrefs.end() ||
+          backref_it->second.edge_index == kInvalidStitchEdge) {
+        found = false;
+        path.clear();
+        return path;
+      }
+      edge_indices.push_back(backref_it->second.edge_index);
+      key = backref_it->second.previous_key;
+    }
     path.reserve(edge_indices.size());
     for (std::size_t edge_index : edge_indices) {
       path.push_back(stitch_edges[edge_index]);
