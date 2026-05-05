@@ -182,17 +182,16 @@ struct StreamingCompositor::State {
                static_cast<std::uint8_t>(vertex.group_label));
   }
 
-  std::size_t record_stitch_edge(const char* event,
-                                 std::int64_t lhs_tile_index,
-                                 std::int32_t lhs_group_label,
-                                 Face lhs_face,
-                                 std::uint8_t lhs_ordinal,
-                                 std::int64_t rhs_tile_index,
-                                 std::int32_t rhs_group_label,
-                                 Face rhs_face,
-                                 std::uint8_t rhs_ordinal) {
-    if (!trace_path_enabled || trace.detected) return kInvalidStitchEdge;
-
+  static SpanningStitchEdge make_stitch_edge(
+      const char* event,
+      std::int64_t lhs_tile_index,
+      std::int32_t lhs_group_label,
+      Face lhs_face,
+      std::uint8_t lhs_ordinal,
+      std::int64_t rhs_tile_index,
+      std::int32_t rhs_group_label,
+      Face rhs_face,
+      std::uint8_t rhs_ordinal) noexcept {
     SpanningStitchEdge edge;
     edge.event = event;
     edge.lhs = make_stitch_vertex(lhs_tile_index, lhs_group_label);
@@ -201,6 +200,11 @@ struct StreamingCompositor::State {
     edge.rhs_face = rhs_face;
     edge.lhs_ordinal = lhs_ordinal;
     edge.rhs_ordinal = rhs_ordinal;
+    return edge;
+  }
+
+  std::size_t record_stitch_edge(const SpanningStitchEdge& edge) {
+    if (!trace_path_enabled || trace.detected) return kInvalidStitchEdge;
 
     if (!is_valid_stitch_vertex(edge.lhs) ||
         !is_valid_stitch_vertex(edge.rhs)) {
@@ -457,11 +461,16 @@ struct StreamingCompositor::State {
                std::int32_t lhs_group_label = 0,
                std::int64_t rhs_tile_index = -1,
                std::int32_t rhs_group_label = 0,
-               std::size_t stitch_edge_index = kInvalidStitchEdge) {
+               const SpanningStitchEdge* stitch_edge = nullptr) {
     NodeId ra = find(a);
     NodeId rb = find(b);
     if (ra == rb) {
       const std::uint8_t before = reach[ra];
+      std::size_t stitch_edge_index = kInvalidStitchEdge;
+      if (!trace.detected && (before & kReachBoth) == kReachBoth &&
+          stitch_edge != nullptr) {
+        stitch_edge_index = record_stitch_edge(*stitch_edge);
+      }
       record_spanning(event, ra, before, before, 0, -1, 0,
                       lhs_tile_index, lhs_group_label, rhs_tile_index,
                       rhs_group_label, stitch_edge_index);
@@ -471,6 +480,9 @@ struct StreamingCompositor::State {
     if (rb < ra) std::swap(ra, rb);
     const std::uint8_t before = reach[ra];
     const std::uint8_t added = reach[rb];
+    const std::size_t stitch_edge_index =
+        stitch_edge == nullptr ? kInvalidStitchEdge
+                               : record_stitch_edge(*stitch_edge);
     parent[rb] = ra;
     reach[ra] = static_cast<std::uint8_t>(before | added);
     for (int bit = 0; bit < 2; ++bit) {
@@ -631,13 +643,13 @@ struct StreamingCompositor::State {
       const int a_group = a.face_groups[a_off + p];
       const int b_group = b.face_groups[b_off + p];
       const auto ordinal = static_cast<std::uint8_t>(p + 1);
-      const std::size_t stitch_edge_index = record_stitch_edge(
+      const SpanningStitchEdge stitch_edge = make_stitch_edge(
           "bridge_io", a_idx, a_group, Face::O, ordinal, b_idx, b_group,
           Face::I, ordinal);
       unite(node_for_group(a_idx, a_group),
             node_for_group(b_idx, b_group),
             "bridge_io", a_idx, a_group, b_idx, b_group,
-            stitch_edge_index);
+            &stitch_edge);
     }
   }
 
@@ -684,13 +696,13 @@ struct StreamingCompositor::State {
       const int b_group = b.face_groups[b_off + p];
       const FrontierNode& lhs = frontier_entry_for(
           frontier_cursor, a_coord.j, ordinal);
-      const std::size_t stitch_edge_index = record_stitch_edge(
+      const SpanningStitchEdge stitch_edge = make_stitch_edge(
           "bridge_lr", lhs.tile_index, lhs.group_label, Face::R, ordinal,
           b_idx, b_group, Face::L, ordinal);
       unite(lhs.node,
             node_for_group(b_idx, b_group),
             "bridge_lr", lhs.tile_index, lhs.group_label, b_idx, b_group,
-            stitch_edge_index);
+            &stitch_edge);
     }
   }
 

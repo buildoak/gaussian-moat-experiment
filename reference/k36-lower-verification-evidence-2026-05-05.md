@@ -42,12 +42,12 @@ Hardware:
 | Exact BZ enforcement | PASS for K36 square-K rows | `campaign_main_cuda` now embeds `bz.checked`, `bz.clean`, `bz.override_used`, candidate counts, and bad norm count in profiles; lower rows have `clean=true`, `override_used=false`, `bad_norm_count=0` |
 | Boundary semantics suite | PASS | local and remote `verification` CTest `5/5`; includes collar, axis, diagonal, partial clipping, geo predicates |
 | Independent bounded global-UF | PASS bounded smoke | `exact_global_uf --k-sq 36 --r-inner 100 --r-outer 500 --expect SPANNING`; matched CPU campaign verdict for same tiny annulus |
-| SPANNING certificate checker | PASS bounded smoke / BLOCKED at lower production row | `--emit-span-cert` now materializes a coordinate certificate from a reconstructed stitch path; remote small annulus `100..500` emitted `/tmp/small.cert.json`, and independent `span_cert_check` accepted it with `points=81`. The lower `73,339,843..73,372,611` row did not finish certificate-path tracing in bounded attempts and has no accepted coordinate certificate yet. |
+| SPANNING certificate checker | PASS | `--emit-span-cert` materialized a coordinate certificate for the lower `73,339,843..73,372,611` SPANNING row; independent `span_cert_check` accepted it with `points=30340` |
 | Same-commit CUDA preflight | PASS | remote verification CTest `5/5`; remote CUDA CTest `13/13`; after certificate/compositor edits, local C++ CTest `115/115` and remote CUDA CTest `13/13` still passed |
 | Lower-K36 production reruns | PASS | full-ingest `--no-early-exit` runs for both rows; produced = ingested = active; zero overflows |
 | Production tile-sample oracle | PASS | independent checker accepted `1024` sampled tiles for SPANNING and `1024` for MOAT, comparing semantic TileOp signatures modulo label renaming |
 | Stats/anatomy report | PASS | `reports/k36_lower_anatomy.md` written; `geo_I`/`geo_O` tile populations are healthy on both rows |
-| Bundle validator | PASS with explicit residual | `validate_campaign_run.py --require-profile-bz --allow-spanning-without-path --no-recompute-bz` accepts the mirrored bundle; the explicit allowance remains necessary until the lower SPANNING row has a coordinate certificate |
+| Bundle validator | PASS for full-ingest bundle | `validate_campaign_run.py --require-profile-bz --allow-spanning-without-path --no-recompute-bz` accepts the mirrored full-ingest bundle; the SPANNING coordinate certificate is checked separately by `span_cert_check` |
 
 ## Production Run Results
 
@@ -55,6 +55,7 @@ Hardware:
 |---|---:|---:|---:|---|---|---:|---|---:|
 | `k36_lower_span` | 29,093,487 | 29,093,487 | 29,093,487 | `SPANNING` | disabled / not taken | 0 | clean, no override | 353.777 s |
 | `k36_lower_moat` | 29,101,312 | 29,101,312 | 29,101,312 | `MOAT` | disabled / not taken | 0 | clean, no override | 354.268 s |
+| `k36_lower_span_cert` | 29,093,487 | 20,593,857 | 20,485,032 | `SPANNING` | enabled / taken | 0 | clean, no override | 1077.64 s |
 
 Profile stats:
 
@@ -108,11 +109,11 @@ Certificate smoke test:
   --timing \
   --chunk-size 64 \
   --trace-spanning-path \
-  --emit-span-cert /tmp/small.cert.json \
-  --profile /tmp/small.cert.profile.json
+  --emit-span-cert /tmp/small.tube.cert.json \
+  --profile /tmp/small.tube.profile.json
 
 /workspace/gaussian-moat-cuda/verification/build/span_cert_check \
-  /tmp/small.cert.json
+  /tmp/small.tube.cert.json
 ```
 
 Result:
@@ -120,7 +121,34 @@ Result:
 ```text
 VERDICT: SPANNING
 SPANNING_PATH: reconstructed=1 recorded_edges=1 inner_path_edges=0 outer_path_edges=0
-span certificate PASS: points=81
+span certificate PASS: points=76
+```
+
+Production SPANNING certificate run:
+
+```bash
+./build-k36/campaign_main_cuda \
+  --k-sq=36 \
+  --r-inner=73339843 \
+  --r-outer=73372611 \
+  --region full-octant \
+  --chunk-size=200000 \
+  --timing \
+  --overflow-diagnostics \
+  --trace-spanning-path \
+  --emit-span-cert /workspace/k36-lower-verification-20260505/certs/k36_lower_span.cert.json \
+  --profile /workspace/k36-lower-verification-20260505/profiles/k36_lower_span_cert.profile.json
+
+/workspace/gaussian-moat-cuda/verification/build/span_cert_check \
+  /workspace/k36-lower-verification-20260505/certs/k36_lower_span.cert.json
+```
+
+Result:
+
+```text
+VERDICT: SPANNING
+SPANNING_PATH: reconstructed=1 recorded_edges=678423608 inner_path_edges=577 outer_path_edges=2
+span certificate PASS: points=30340
 ```
 
 Remote endpoint runs:
@@ -170,20 +198,30 @@ a7777563db6747fee26b069d0857dfbd63968dc915aeaa8d3a0dd612bae3e33d  logs/build-and
 75f34f8b72f7f95d998ec2c16c521cfb9c86ddb6742d7381f0ba5602d5125323  profiles/k36_small_smoke.profile.json
 f684f38ceb204d0e59889e918696d6ce41c4132629379126303d182c233b03a9  logs/k36_small_smoke.cert.log
 320f889d1e66f6c85553e3a63d4f3811df6a89aa33f58129350139548ba1dada  logs/k36_small_smoke.cert_check.log
+a2f6e1b32687c8ecc311ce31d77aeb8e62d437660b150c75101be8c2342c9ab4  certs/k36_small_tube_smoke.cert.json
+56e25eb21780f2b416480ad8af092a1eceb726d4aff27a76ef1ece84dd8a786e  profiles/k36_small_tube_smoke.profile.json
+734dae1d152494fdd31756784365dfec010a7656c60336b4a6cd7acabc96dcd4  logs/k36_small_tube_smoke.cert.log
+4bd000c5c43fd6ab79f7c58d07983facf57f451c56c347a337913871ed7d2a30  logs/k36_small_tube_smoke.cert_check.log
 9af2140dead37f9193268e6f518bf59cd5133e0d63957c194e3eb4379e99c0c6  logs/local-cpp-ctest-after-cert.log
 147cbda953ce33d45b3f51dc0f2eb93a27b02e43b169d5ca1d13afbf290b3fea  logs/k36_final_build_after_cert_help.log
 4fb3df9be7ed98a016836f9cdb0f3cbea859e353ecf20eeb20b6fd86caab9286  logs/k36_final_cuda_ctest_after_cert_help.log
+e7e96a2a2b9e2eb260c85e6f8be272c2082f9497f0c213d50ada73218211ed22  certs/k36_lower_span.cert.json
+6f196a1fa027c8950e71e91c5270858cb2f9b8782ffb12db8262ef377eeca26b  profiles/k36_lower_span_cert.profile.json
+d19aeab7eaaa81a8240dfef4c52bec503ef1c9e168ccfab812068fe2c14ea9f1  logs/k36_lower_span_cert.log
+f580e0d27bd4ed4e8638e7efeb1eb1de45e6ad7e470754c9805f65938a9a8f03  logs/k36_lower_span_cert_check.log
+b51d9c58f0af80a37d77d8cdec6d73d8f56967b5e73b19367be336b7187ac523  logs/local-cpp-ctest-final-tube-cert.log
+c8f2900de6cdb1cd4ca37aa5e3f97f01bd676cd04ad26c932c0b1c93d7c4b464  logs/local-verification-ctest-final-tube-cert.log
+f580e0d27bd4ed4e8638e7efeb1eb1de45e6ad7e470754c9805f65938a9a8f03  logs/local-k36-lower-span-cert-check-final.log
+7e2d6b03ffaf5ed1426c83b76cd0d727bea9154c09cebb4ea25e8d0ab4004718  logs/k36_final_build_tube_cert.log
+5001bd6b2a3f72bd01a34a159d96d125e4082c94d39092178e73b2a571662f8e  logs/k36_final_cuda_ctest_tube_cert.log
 ```
 
 ## Residual Gaps
 
-- Coordinate SPANNING certificate emission is implemented and passes a bounded
-  remote smoke test, but the lower-K36 production SPANNING row still has no
-  accepted coordinate certificate. With `--trace-spanning-path`, the production
-  run remained CPU-bound in stitch tracing/materialization attempts and was
-  stopped without emitting a certificate.
-- Therefore this wave does not satisfy the plan's full acceptance condition
-  requiring an independently validated lower-K36 SPANNING coordinate path.
+- The lower-K36 positive endpoint now has an independently validated coordinate
+  certificate, but certificate discovery still relies on the campaign
+  compositor to find a stitch path. The independent checker validates the final
+  coordinate witness, not the discovery logic.
 - Production tile sampling strengthens local TileOp confidence but does not
   prove the negative MOAT row globally.
 - Full independent MOAT compositor replay is reserved for a later wave in
@@ -195,11 +233,11 @@ f684f38ceb204d0e59889e918696d6ce41c4132629379126303d182c233b03a9  logs/k36_small
 
 ## Next Gate
 
-Make lower-production coordinate path certification fast enough to accept:
+Build the independent MOAT replay/compositor verifier for the negative row:
 
-1. Replace production `--trace-spanning-path` with an incremental predecessor
-   certificate mode that does not record/search the full stitch graph.
-2. Emit the lower `73,339,843..73,372,611` coordinate certificate.
-3. Validate it with `verification/span-cert/span_cert_check`.
-4. Only then remove `--allow-spanning-without-path` from the bundle validator
-   acceptance command for SPANNING rows.
+1. Emit a stable TileOp surface or compact replay stream for
+   `73,359,375..73,392,143`.
+2. Reconstruct global port connectivity in an independent verifier.
+3. Check that no component has both `geo_I` and `geo_O`.
+4. Combine that with the existing production tile-sample oracle to strengthen
+   the negative `MOAT` claim without trusting the campaign compositor alone.
