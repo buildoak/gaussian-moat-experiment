@@ -9,7 +9,7 @@ The goal is not more gates. The goal is fewer gates with clearer authority:
 
 1. build sanity before runs;
 2. hard post-flight run contract after runs;
-3. claim-specific proof for `SPANNING` or `MOAT`;
+3. claim-specific coordinate proof for `SPANNING`;
 4. first-class telemetry for prediction and anomaly understanding.
 
 Post-flight reports must use explicit status vocabulary:
@@ -17,18 +17,19 @@ Post-flight reports must use explicit status vocabulary:
 - `REJECT` - evidence is invalid for the requested row class.
 - `RUN_CONTRACT_PASS` - bundle/run health is coherent, but no mathematical
   claim proof has been accepted.
+- `TILE_SAMPLE_AUDIT_PASS` - run health passed and stratified sampled TileOps
+  independently regenerate, but this is still sampled evidence.
 - `SPAN_PROOF_PASS` - `SPANNING` coordinate certificate passed.
-- `MOAT_SNAPSHOT_REPLAY_PASS` - emitted TileOps independently replay to
-  `MOAT`.
 - `MOAT_PROOF_PASS` - reserved for a future stronger negative proof that also
   closes TileOp mathematical faithfulness beyond sampled audits.
 - `CLAIM_PROOF_MISSING` - run health passed, but the required proof artifact
   is absent or not implemented.
 
 Only `SPAN_PROOF_PASS` and future `MOAT_PROOF_PASS` should be described as
-claim-proof acceptance. `MOAT_SNAPSHOT_REPLAY_PASS` is strong negative evidence
-over the emitted TileOp surface, not by itself a full mathematical proof that
-every emitted TileOp is correct.
+claim-proof acceptance. `MOAT_PROOF_PASS` is intentionally unreachable in this
+plan. MOAT replay is removed from the build plan: running a second compositor
+over emitted TileOps mostly checks the emitted surface, not TileOp mathematical
+faithfulness.
 
 Current campaign verdicts remain static-annulus claims:
 
@@ -55,9 +56,8 @@ or Tsuchimura-style source-connected bounds.
   deterministic random background.
 - New C++ verifier surface should live under `verification/postflight/` and
   remain independent from `campaign/` and `cuda_campaign/` imports.
-- `MOAT` replay should use a full TileOp snapshot first, while explicitly
-  tracking artifact size. Near `R ~= 1B`, full snapshots require an explicit
-  artifact budget and streaming replay.
+- Full TileOp snapshots are optional forensic/debug surfaces only. MOAT replay
+  is not an official post-flight gate or implementation wave.
 - Telemetry overhead of about `5-10%` is acceptable for accepted/profile runs,
   not for broad exploratory sweeps unless explicitly enabled.
 - Telemetry levels are `none`, `profile`, `audit`, and `full`.
@@ -122,8 +122,6 @@ zero-overflow, and tied to the intended build/input/artifacts?
 - any CUDA or emitted TileOp overflow counter is nonzero;
 - `MOAT` without full ingest;
 - accepted `SPANNING` without required certificate artifacts;
-- accepted `MOAT` without required snapshot/replay artifacts once replay is
-  implemented;
 - missing artifact hashes, sizes, or schema versions;
 - missing or mismatched grid hash, constants hash, MR witness hash, commit,
   build identity, or CUDA architecture;
@@ -138,7 +136,7 @@ zero-overflow, and tied to the intended build/input/artifacts?
 - command/build/commit metadata;
 - sample manifest and samples JSONL when telemetry is `audit` or `full`;
 - optional SPANNING certificate;
-- optional TileOp snapshot and snapshot manifest.
+- optional TileOp snapshot and snapshot manifest for forensic/debug work.
 
 **Outputs:**
 
@@ -192,42 +190,20 @@ The certificate checker must verify:
 
 #### MOAT
 
-For every accepted `MOAT` claim once replay exists:
+There is no official `MOAT` proof gate in this plan.
 
-1. The run must be full ingest.
-2. CUDA/campaign emits a full TileOp snapshot and manifest.
-3. Post-flight independently parses the snapshot.
-4. Post-flight independently replays the TileOp port graph.
-5. The row is accepted only if no replay component carries both `geo_I` and
-   `geo_O` reach.
+For current work, a `MOAT` row can pass run contract and tile-sample audit, but
+it should still report `CLAIM_PROOF_MISSING` for mathematical negative proof.
+This is an honesty rule, not a blocker for sweeps. The row may be used as
+high-confidence static-annulus detector evidence and telemetry, but not as a
+paper-grade negative certificate.
 
-The replay checker must verify:
-
-- exact file size `120 + tile_count * 256`;
-- snapshot header magic, version, bytes-per-tile, and reserved padding;
-- snapshot manifest/header hash agreement;
-- payload hash;
-- tile count and active tile order;
-- no overflow bits;
-- every TileOp structural invariant;
-- allowed `tile_flags` only;
-- zero reserved bytes;
-- zero padding past `sum(n)`;
-- `sum(n) <= 192`;
-- active labels are in `1..128`;
-- canonical empty/overflow encodings;
-- port count equality on shared faces;
-- group-label validity;
-- I/O and L/R bridge replay;
-- final component reach census;
-- `I&O` component count is zero for `MOAT`.
-
-Tile samples alone are not a `MOAT` proof. Snapshot replay alone proves the
-emitted TileOp surface composes to `MOAT`; it still depends on the TileOps being
-faithfully emitted. For now, the accepted negative status after replay is
-`MOAT_SNAPSHOT_REPLAY_PASS`. Promotion to `MOAT_PROOF_PASS` requires either
-full independent TileOp regeneration plus replay or another explicitly accepted
-negative-proof strategy.
+MOAT replay is deliberately not part of the official spine. Full TileOp
+snapshots may be used later for forensic debugging, compositor regression
+checks, or artifact preservation, but replay should not consume implementation
+attention now.
+The next valuable negative-proof idea would need to attack TileOp faithfulness
+directly, not merely run another compositor over emitted TileOps.
 
 ### 4. Tile Audit And Telemetry
 
@@ -302,14 +278,12 @@ Additional hard rejects:
 `full`
 
 - `audit` plus:
-  - full TileOp snapshot;
-  - replay manifest;
-  - replay output;
-  - component census.
+  - optional full TileOp snapshot;
+  - component census and heavy diagnostics;
+  - large artifact hashes/sizes when snapshots are emitted.
 
-`full` is not for broad sweeps unless explicitly budgeted.
-For `MOAT`, `full` currently enables `MOAT_SNAPSHOT_REPLAY_PASS`, not
-`MOAT_PROOF_PASS`.
+`full` is not for broad sweeps unless explicitly budgeted. It does not upgrade
+`MOAT` to proof status.
 
 #### Prediction Telemetry
 
@@ -335,7 +309,7 @@ Add C++ profile fields for:
 This is how future sweeps distinguish real connectivity failure from boundary
 population artifacts.
 
-## MOAT Artifact Size
+## Snapshot Artifact Size
 
 Current TileOp snapshot size is:
 
@@ -353,9 +327,13 @@ Existing profile tile counts imply:
 | `R ~= 980M`, W32768 | 388.7M | 99.5 GB |
 | `R ~= 1B`, W32768 | 396.6M | 101.5 GB |
 
-Full snapshot/replay is acceptable for lower K36 and roughly `R ~= 100M`.
-Near `R ~= 1B`, it needs explicit artifact budget, local-disk planning,
-streaming replay, and likely compression/summary strategy.
+Full snapshots are technically feasible for lower K36 and roughly `R ~= 100M`.
+Near `R ~= 1B`, they need explicit artifact budget, local-disk planning,
+streaming processing, and likely compression/summary strategy.
+
+Because snapshots become very large and do not close TileOp faithfulness by
+themselves, they are optional forensic/debug artifacts in this plan rather than
+required post-flight gates.
 
 ## Migration Plan
 
@@ -402,7 +380,7 @@ Acceptance:
 
 - current lower-K36 evidence bundle emits precise statuses:
   `SPAN_PROOF_PASS` for the SPANNING row with valid certificate, and
-  `CLAIM_PROOF_MISSING` or `RUN_CONTRACT_PASS` for MOAT until replay exists;
+  `CLAIM_PROOF_MISSING` or `TILE_SAMPLE_AUDIT_PASS` for MOAT;
 - hostile fixtures hard reject;
 - no campaign/cuda imports in post-flight code.
 
@@ -413,7 +391,7 @@ Add `--telemetry=none|profile|audit|full`.
 Acceptance:
 
 - `profile` preserves existing profile fields and adds stable telemetry level;
-- `audit` and `full` are accepted only with their required artifacts;
+- `audit` and `full` are accepted only with their required telemetry artifacts;
 - old `--stats-level profile` is mapped or deprecated deliberately.
 
 ### Wave 3 - Stratified Tile Sampling
@@ -439,16 +417,19 @@ Acceptance:
 - corrupted coordinate, non-prime point, out-of-annulus point, too-long step,
   wrong endpoint band, or wrong artifact binding hard rejects.
 
-### Wave 5 - MOAT Replay
+### Wave 5 - Telemetry And Sweep Rows
 
-Implement streaming independent replay over full TileOp snapshots.
+Make telemetry useful for prediction and future moat selection.
 
 Acceptance:
 
-- lower-K36 MOAT full snapshot replays to `MOAT_SNAPSHOT_REPLAY_PASS`;
-- injected snapshot mutation that creates an `I&O` bridge hard rejects;
-- injected malformed TileOp/port-count/group-label cases hard reject;
-- replay can run streaming without holding a 100 GB snapshot in memory.
+- profile/audit outputs can be normalized into `sweep_rows.jsonl`;
+- K36 50/60/70M and K40+ rows can be represented with nullable fields for old
+  evidence;
+- C++ telemetry includes the pressure and component-census fields needed to
+  explain connectivity transitions;
+- snapshot fields are recorded only when optional forensic snapshots are
+  explicitly emitted.
 
 ### Wave 6 - Docs And Gate Board Cleanup
 
@@ -459,7 +440,8 @@ Acceptance:
 - `reference/README.md` points to this plan;
 - old gate-board language is marked superseded or scoped to historical/dev
   sanity;
-- lower-K36 evidence report names the remaining MOAT replay gap precisely.
+- lower-K36 evidence report names the remaining MOAT proof gap precisely without
+  implying replay is the next official gate.
 
 ## GPT-5.5 High Worker Execution Strategy
 
@@ -529,27 +511,18 @@ metadata is required.
 out-of-annulus, too-long step, wrong endpoint band, wrong binding, and missing
 hash reject.
 
-### Worker W5A - Snapshot Parser
+### Worker W5 - Telemetry And Sweep Rows
 
-**Scope:** independent `verification/postflight/snapshot_*`, parser fixtures,
-CMake/tests.
+**Scope:** telemetry normalization code, schemas, and report integration for
+`sweep_rows.jsonl`; C++ telemetry fields needed for prediction; docs/examples
+for K36 50/60/70M and K40+ rows.
 
-**Non-goals:** no connectivity replay yet.
+**Non-goals:** no MOAT replay, no large snapshot parser, no negative proof
+claim.
 
-**Gate:** valid tiny snapshot parses; malformed header, length, schema,
-overflow, reserved bytes, padding, and group-label fixtures reject.
-
-### Worker W5B - MOAT Replay
-
-**Scope:** independent `verification/postflight/moat_replay_*`, replay tests,
-fixtures, post-flight `full` integration.
-
-**Non-goals:** no CUDA optimization, no compression strategy beyond streaming
-read.
-
-**Gate:** lower-K36 MOAT snapshot reaches `MOAT_SNAPSHOT_REPLAY_PASS`; injected
-`I&O` bridge rejects; replay never requires loading a large snapshot into
-memory.
+**Gate:** existing evidence can be normalized with nullable fields; new
+profile/audit rows include pressure/component telemetry; rows distinguish
+detector evidence from proof status.
 
 ### Worker W6 - Docs Cleanup
 
@@ -559,16 +532,16 @@ memory.
 **Non-goals:** no code, no tickets.
 
 **Gate:** search finds no misleading “official acceptance spine” language for
-deprecated gates; docs do not claim `MOAT_PROOF_PASS` until the stronger
-negative proof exists.
+deprecated gates; docs do not present MOAT replay as the next official gate;
+docs do not claim `MOAT_PROOF_PASS`.
 
 ## Global Stop Rules
 
 Stop if a worker needs to change methodology semantics, claim meanings, or
 accepted row definitions. Stop if post-flight links against campaign/CUDA code.
 Stop if CUDA telemetry adds overhead outside the accepted `5-10%`
-profile/audit budget. Stop if MOAT replay needs non-streaming full-snapshot
-memory. Stop before pushing, publishing, deleting artifacts, mutating remote
+profile/audit budget. Stop before reintroducing MOAT replay as an official
+gate. Stop before pushing, publishing, deleting artifacts, mutating remote
 services, or staging generated large files.
 
 ## Immediate Next Gate
