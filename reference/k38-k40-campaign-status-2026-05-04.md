@@ -10,6 +10,12 @@ inner-to-outer crossing; it is not evidence of connectivity to the origin.
 Do not treat any result here as an origin-component verifier result. The origin
 component verifier is explicitly out of delivery scope for this campaign.
 
+Follow-up correctness audit:
+
+- `reference/k38-k40-correctness-audit-2026-05-04.md`
+- records the K38 no-early endpoint diagnostics, same-annulus monotonicity
+  sentinel, and residual hardening work.
+
 Local branch:
 
 - `debug/k34-static-annulus-gauntlet`
@@ -329,6 +335,85 @@ The final K38 radius bracket from this campaign at width `32768` is:
 
 - `R_inner=71875000`: SPANNING
 - `R_inner=73437500`: MOAT
+
+## K38 Endpoint Diagnostic Confirmation
+
+Campaign tag:
+
+- `k38-bracket-diag-20260504T163900Z`
+
+Remote campaign dir:
+
+- `/workspace/k38-bracket-diag-20260504T163900Z`
+
+Pulled local evidence mirror:
+
+- `/Users/otonashi/thinking/pratchett-os/data/pratchett-os/research-assets/gaussian-moat-cuda/2026-05-04-4090-results/remote/k38-bracket-diag-20260504T163900Z`
+
+Purpose:
+
+- diagnostic confirmation of the K38 `71.875M SPANNING` / `73.4375M MOAT`
+  bracket at width `32768`
+- commands include `--no-early-exit` and `--overflow-diagnostics`
+- the SPANNING endpoint also includes `--trace-spanning-path`
+- per-run BZ before CUDA
+
+Confirmed diagnostic rows:
+
+| R_inner | width | verdict | produced | ingested | overflow counters | early exit | note |
+| ---: | ---: | --- | ---: | ---: | ---: | --- | --- |
+| 71875000 | 32768 | SPANNING | 28512666 | 28512666 | 0 | disabled | path reconstructed |
+| 73437500 | 32768 | MOAT | 29132322 | 29132322 | 0 | disabled | no spanning trace |
+
+The K38 `71875000/32768` diagnostic strengthened the earlier early-exit
+SPANNING row:
+
+- `active tiles = produced tiles = ingested tiles = 28512666`
+- CUDA return code: `0`
+- BZ check: pass
+- `early-exit: disabled`
+- all overflow counters: `0`
+- `SPANNING_PATH reconstructed=1`
+- final bridge: `459215/42:R#19` to `459344/4:L#19`
+- inner source: `452307/2`
+- outer source: `455273/1`
+- total runtime: `365.671s`
+
+The K38 `73437500/32768` diagnostic confirmed the MOAT endpoint:
+
+- `active tiles = produced tiles = ingested tiles = 29132322`
+- CUDA return code: `0`
+- BZ check: pass
+- `early-exit: disabled`
+- all overflow counters: `0`
+- `SPANNING_TRACE detected=0`
+- total runtime: `354.138s`
+
+Same-annulus monotonicity control:
+
+- `K=36, R_inner=73437500, R_outer=73470268, width=32768`
+- remote dir: `/workspace/k36-same-annulus-control-20260504T165239Z`
+- pulled mirror:
+  `/Users/otonashi/thinking/pratchett-os/data/pratchett-os/research-assets/gaussian-moat-cuda/2026-05-04-4090-results/remote/k36-same-annulus-control-20260504T165239Z`
+- verdict: `MOAT`
+- `active tiles = produced tiles = ingested tiles = 29132322`
+- `early-exit: disabled`
+- all overflow counters: `0`
+
+This passes the same-annulus implication `K38 MOAT => K36 MOAT`.
+
+Second same-annulus monotonicity control:
+
+- `K=40, R_inner=71875000, R_outer=71907768, width=32768`
+- remote dir: `/workspace/k40-same-annulus-control-20260504T170020Z`
+- pulled mirror:
+  `/Users/otonashi/thinking/pratchett-os/data/pratchett-os/research-assets/gaussian-moat-cuda/2026-05-04-4090-results/remote/k40-same-annulus-control-20260504T170020Z`
+- verdict: `SPANNING`
+- `active tiles = produced tiles = ingested tiles = 28512666`
+- `early-exit: disabled`
+- all overflow counters: `0`
+
+This passes the paired same-annulus implication `K38 SPANNING => K40 SPANNING`.
 
 ## K40 Overnight Campaign
 

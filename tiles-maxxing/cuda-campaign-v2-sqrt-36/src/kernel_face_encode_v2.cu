@@ -10,6 +10,12 @@
 #endif
 
 namespace cuda_campaign {
+
+static_assert(FACE_ENCODE_BLOCK_THREADS >= NUM_FACES * 32,
+              "face encode needs one full warp per face");
+static_assert(FACE_ENCODE_BLOCK_THREADS % 32 == 0,
+              "face encode block size must be warp-aligned");
+
 namespace {
 
 __device__ __forceinline__ void write_flag_tileop(TileOp* out,
