@@ -9,32 +9,85 @@
     "k_sq",
     "r_inner",
     "r_outer",
+    "width",
     "region",
     "seed",
+    "target_tile_samples",
+    "sample_count",
+    "class_counts",
     "selection"
   ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2] },
     "claim_id": { "type": "string", "minLength": 1 },
     "k_sq": { "type": "integer", "minimum": 1 },
     "r_inner": { "type": "integer", "minimum": 1 },
     "r_outer": { "type": "integer", "minimum": 1 },
+    "width": { "type": "integer", "minimum": 1 },
     "region": { "enum": ["full-octant"] },
     "seed": { "type": "integer", "minimum": 0 },
+    "row_class": { "enum": ["accepted", "accepted_proof", "profile", "audit", "sweep"] },
     "target_tile_samples": { "type": "integer", "minimum": 1 },
+    "sample_count": { "type": "integer", "minimum": 0 },
     "target_seam_samples": { "type": "integer", "minimum": 0 },
+    "class_counts": {
+      "type": "object",
+      "required": ["geo_I", "geo_O", "axis", "diagonal", "high_pressure", "deterministic_random"],
+      "properties": {
+        "geo_I": { "type": "integer", "minimum": 0 },
+        "geo_O": { "type": "integer", "minimum": 0 },
+        "axis": { "type": "integer", "minimum": 0 },
+        "diagonal": { "type": "integer", "minimum": 0 },
+        "high_pressure": { "type": "integer", "minimum": 0 },
+        "deterministic_random": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "population_exhaustion": {
+      "type": "object",
+      "properties": {
+        "geo_I": { "$ref": "#/$defs/exhaustionFlag" },
+        "geo_O": { "$ref": "#/$defs/exhaustionFlag" },
+        "axis": { "$ref": "#/$defs/exhaustionFlag" },
+        "diagonal": { "$ref": "#/$defs/exhaustionFlag" },
+        "high_pressure": { "$ref": "#/$defs/exhaustionFlag" },
+        "deterministic_random": { "$ref": "#/$defs/exhaustionFlag" }
+      },
+      "additionalProperties": false
+    },
     "selection": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["class", "description"],
+        "required": ["class", "description", "target_count"],
         "properties": {
-          "class": { "type": "string" },
+          "class": { "$ref": "#/$defs/sampleClass" },
           "description": { "type": "string" },
-          "target_count": { "type": "integer", "minimum": 0 }
+          "target_count": { "type": "integer", "minimum": 0 },
+          "population_exhausted": { "type": "boolean" },
+          "exhausted": { "type": "boolean" }
         },
-        "additionalProperties": true
+        "additionalProperties": false
       }
+    }
+  },
+  "$defs": {
+    "sampleClass": {
+      "enum": ["geo_I", "geo_O", "axis", "diagonal", "high_pressure", "deterministic_random"]
+    },
+    "exhaustionFlag": {
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "properties": {
+            "exhausted": { "type": "boolean" },
+            "population_exhausted": { "type": "boolean" },
+            "population": { "type": "integer", "minimum": 0 }
+          },
+          "additionalProperties": false
+        }
+      ]
     }
   },
   "additionalProperties": true

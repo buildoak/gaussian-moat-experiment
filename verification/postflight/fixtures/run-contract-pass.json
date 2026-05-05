@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "bundle_id": "fixture-run-contract-pass",
+  "row": {
+    "claim_id": "tiny-profile-only",
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "verdict_mode": "ANY-SPAN",
+    "row_class": "sweep",
+    "telemetry_level": "profile",
+    "claim_proof_required": false
+  },
+  "profile": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "command": "campaign_main_cuda --fixture tiny-profile-only",
+    "build": {
+      "commit": "abcdef1",
+      "identity": "fixture-build",
+      "cuda_arch": "sm_89"
+    },
+    "hashes": {
+      "grid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "constants": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mr_witness": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "tiles": {
+      "active": 12,
+      "produced": 12,
+      "ingested": 6
+    },
+    "early_exit": {
+      "taken": true,
+      "full_ingest": false
+    }
+  },
+  "run_contract": {
+    "enumerated_active_tiles": 12
+  },
+  "bz": {
+    "checked": true,
+    "clean": true,
+    "override_used": false,
+    "bad_norm_count": 0
+  },
+  "overflow_counters": {
+    "tileop": 0,
+    "cuda": {
+      "ports": 0,
+      "groups": 0
+    }
+  }
+}

@@ -224,8 +224,10 @@ f580e0d27bd4ed4e8638e7efeb1eb1de45e6ad7e470754c9805f65938a9a8f03  logs/local-k36
   coordinate witness, not the discovery logic.
 - Production tile sampling strengthens local TileOp confidence but does not
   prove the negative MOAT row globally.
-- Full independent MOAT compositor replay is reserved for a later wave in
-  `verification/compositor-replay/`.
+- Full TileOp-surface replay is reserved only as optional forensic/compositor
+  regression work. It is not the official next MOAT proof gate in the
+  post-flight spine because replaying emitted TileOps does not close TileOp
+  mathematical faithfulness.
 - The bounded global-UF oracle currently covers small/medium annuli only. It
   does not run at the 73M lower-K36 production radius.
 - Local C++ CTest after the compositor/certificate edits passed `115/115`
@@ -233,11 +235,8 @@ f580e0d27bd4ed4e8638e7efeb1eb1de45e6ad7e470754c9805f65938a9a8f03  logs/local-k36
 
 ## Next Gate
 
-Build the independent MOAT replay/compositor verifier for the negative row:
-
-1. Emit a stable TileOp surface or compact replay stream for
-   `73,359,375..73,392,143`.
-2. Reconstruct global port connectivity in an independent verifier.
-3. Check that no component has both `geo_I` and `geo_O`.
-4. Combine that with the existing production tile-sample oracle to strengthen
-   the negative `MOAT` claim without trusting the campaign compositor alone.
+Normalize the lower-K36 profiles and any post-flight/audit JSON into
+`sweep_rows.jsonl` rows that keep detector status separate from proof status.
+The negative row should remain `detector_status=ANY_SHELL_MOAT_DETECTED` and
+`proof_status=CLAIM_PROOF_MISSING` until a future negative-proof design attacks
+TileOp faithfulness directly, not merely compositor replay over emitted TileOps.

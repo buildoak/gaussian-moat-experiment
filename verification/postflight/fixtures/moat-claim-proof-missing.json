@@ -1,0 +1,105 @@
+{
+  "schema_version": 1,
+  "bundle_id": "fixture-moat-claim-proof-missing",
+  "row": {
+    "claim_id": "tiny-moat",
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "MOAT",
+    "verdict_mode": "ANY-SHELL-MOAT",
+    "row_class": "accepted",
+    "telemetry_level": "audit",
+    "claim_proof_required": true
+  },
+  "profile": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "MOAT",
+    "command": "campaign_main_cuda --fixture tiny-moat",
+    "build": {
+      "commit": "abcdef1",
+      "identity": "fixture-build",
+      "cuda_arch": "sm_89"
+    },
+    "hashes": {
+      "grid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "constants": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mr_witness": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "tiles": {
+      "active": 12,
+      "produced": 12,
+      "ingested": 12
+    },
+    "early_exit": {
+      "taken": false,
+      "full_ingest": true
+    }
+  },
+  "run_contract": {
+    "enumerated_active_tiles": 12
+  },
+  "bz": {
+    "checked": true,
+    "clean": true,
+    "override_used": false,
+    "bad_norm_count": 0
+  },
+  "overflow_counters": {
+    "tileop": 0,
+    "cuda": {
+      "ports": 0,
+      "groups": 0
+    }
+  },
+  "artifacts": [
+    {
+      "name": "profile",
+      "path": "profiles/tiny-moat.json",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size_bytes": 1024,
+      "schema_version": 1
+    },
+    {
+      "name": "sample_manifest",
+      "path": "samples/tiny-moat.manifest.json",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "size_bytes": 256,
+      "schema_version": 1
+    }
+  ],
+  "sample_audit": {
+    "status": "PASS",
+    "sample_count": 4096,
+    "manifest": {
+      "k_sq": 36,
+      "r_inner": 2,
+      "r_outer": 8,
+      "width": 6,
+      "region": "full-octant",
+      "verdict": "MOAT"
+    },
+    "quotas": {
+      "geo_I": 1,
+      "geo_O": 1,
+      "axis": 1,
+      "diagonal": 1,
+      "high_pressure": 1,
+      "deterministic_random": 1
+    },
+    "class_counts": {
+      "geo_I": 100,
+      "geo_O": 100,
+      "axis": 100,
+      "diagonal": 100,
+      "high_pressure": 100,
+      "deterministic_random": 3596
+    }
+  }
+}

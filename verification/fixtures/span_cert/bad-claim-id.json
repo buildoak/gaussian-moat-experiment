@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "claim_id": "bad claim id",
+  "k_sq": 16,
+  "r_inner": 3,
+  "r_outer": 7,
+  "region": "full-octant",
+  "path": [
+    { "a": 0, "b": 3 },
+    { "a": 0, "b": 7 }
+  ]
+}

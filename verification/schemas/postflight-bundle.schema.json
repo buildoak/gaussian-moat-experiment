@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaussian-moat.local/schemas/postflight-bundle.schema.json",
+  "title": "Gaussian moat post-flight compact bundle",
+  "type": "object",
+  "required": ["schema_version", "row", "profile", "bz", "overflow_counters"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "bundle_id": { "type": "string" },
+    "row": {
+      "type": "object",
+      "required": [
+        "claim_id",
+        "k_sq",
+        "r_inner",
+        "r_outer",
+        "width",
+        "region",
+        "verdict",
+        "verdict_mode",
+        "row_class",
+        "telemetry_level"
+      ],
+      "properties": {
+        "claim_id": { "type": "string", "minLength": 1 },
+        "k_sq": { "type": "integer", "minimum": 1 },
+        "r_inner": { "type": "integer", "minimum": 1 },
+        "r_outer": { "type": "integer", "minimum": 1 },
+        "width": { "type": "integer", "minimum": 1 },
+        "region": { "enum": ["full-octant"] },
+        "verdict": { "enum": ["SPANNING", "MOAT"] },
+        "verdict_mode": { "enum": ["ANY-SPAN", "ANY-SHELL-MOAT"] },
+        "row_class": { "enum": ["accepted", "profile", "sweep", "audit"] },
+        "telemetry_level": { "enum": ["none", "profile", "audit", "full"] },
+        "claim_proof_required": { "type": "boolean" }
+      },
+      "additionalProperties": true
+    },
+    "profile": {
+      "type": "object",
+      "required": ["k_sq", "r_inner", "r_outer", "width", "region", "verdict", "command"],
+      "additionalProperties": true
+    },
+    "run_index": { "type": "object", "additionalProperties": true },
+    "stdout": { "type": "object", "additionalProperties": true },
+    "bz": {
+      "type": "object",
+      "required": ["checked", "clean", "override_used", "bad_norm_count"],
+      "properties": {
+        "checked": { "const": true },
+        "clean": { "const": true },
+        "override_used": { "const": false },
+        "bad_norm_count": { "const": 0 }
+      },
+      "additionalProperties": true
+    },
+    "overflow_counters": {
+      "type": "object",
+      "additionalProperties": {
+        "oneOf": [
+          { "type": "integer", "const": 0 },
+          { "type": "boolean", "const": false },
+          { "type": "object" }
+        ]
+      }
+    },
+    "artifacts": {
+      "oneOf": [
+        {
+          "type": "array",
+          "items": { "$ref": "#/$defs/artifact" }
+        },
+        {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/artifact" }
+        }
+      ]
+    },
+    "sample_audit": {
+      "type": "object",
+      "required": ["status", "sample_count", "manifest"],
+      "properties": {
+        "present": { "type": "boolean" },
+        "status": { "enum": ["PASS", "FAIL"] },
+        "sample_count": { "type": "integer", "minimum": 0 },
+        "manifest": { "type": "object", "additionalProperties": true },
+        "quotas": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "class_counts": {
+          "type": "object",
+          "additionalProperties": { "type": "integer", "minimum": 0 }
+        },
+        "population_exhausted": {
+          "type": "object",
+          "additionalProperties": { "type": "boolean" }
+        }
+      },
+      "additionalProperties": true
+    },
+    "span_certificate": {
+      "type": "object",
+      "properties": {
+        "present": { "type": "boolean" },
+        "claim_id": { "type": "string" },
+        "k_sq": { "type": "integer", "minimum": 1 },
+        "r_inner": { "type": "integer", "minimum": 1 },
+        "r_outer": { "type": "integer", "minimum": 1 },
+        "width": { "type": "integer", "minimum": 1 },
+        "region": { "enum": ["full-octant"] },
+        "verdict": { "enum": ["SPANNING"] },
+        "path": { "type": "string" },
+        "points": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": ["a", "b"],
+            "properties": {
+              "a": { "type": "integer", "minimum": 0 },
+              "b": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        },
+        "binding": { "type": "object", "additionalProperties": true }
+      },
+      "additionalProperties": true
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["sha256", "size_bytes", "schema_version"],
+      "properties": {
+        "name": { "type": "string" },
+        "type": { "type": "string" },
+        "path": { "type": "string" },
+        "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+        "size_bytes": { "type": "integer", "minimum": 0 },
+        "schema_version": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

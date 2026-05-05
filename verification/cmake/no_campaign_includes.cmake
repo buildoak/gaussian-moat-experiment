@@ -2,6 +2,7 @@ file(GLOB_RECURSE VERIFY_SOURCES
   "${ROOT}/include/*.hpp"
   "${ROOT}/include/*.h"
   "${ROOT}/src/*.cpp"
+  "${ROOT}/postflight/src/*.cpp"
 )
 
 set(BAD "")

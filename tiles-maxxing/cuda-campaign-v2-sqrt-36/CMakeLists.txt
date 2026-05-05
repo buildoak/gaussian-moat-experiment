@@ -8,6 +8,23 @@ if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
   set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "CUDA architectures")
 endif()
 
+set(GAUSSIAN_MOAT_GIT_COMMIT "unknown" CACHE STRING
+  "Source commit recorded in campaign profiles")
+find_package(Git QUIET)
+if(GIT_FOUND AND GAUSSIAN_MOAT_GIT_COMMIT STREQUAL "unknown")
+  execute_process(
+    COMMAND ${GIT_EXECUTABLE} -C ${CMAKE_CURRENT_SOURCE_DIR} rev-parse --short=12 HEAD
+    OUTPUT_VARIABLE GAUSSIAN_MOAT_GIT_COMMIT_DETECTED
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+    RESULT_VARIABLE GAUSSIAN_MOAT_GIT_COMMIT_RESULT
+  )
+  if(GAUSSIAN_MOAT_GIT_COMMIT_RESULT EQUAL 0)
+    set(GAUSSIAN_MOAT_GIT_COMMIT "${GAUSSIAN_MOAT_GIT_COMMIT_DETECTED}" CACHE STRING
+      "Source commit recorded in campaign profiles" FORCE)
+  endif()
+endif()
+
 set(MR_BLOCK_THREADS 256 CACHE STRING "CUDA threads per MR kernel block")
 set(MR_MAXRREGCOUNT "" CACHE STRING "Optional --maxrregcount value for kernel_mr.cu")
 set(K1_BLOCK_THREADS 288 CACHE STRING "CUDA threads per K1 sieve kernel block")
@@ -122,6 +139,8 @@ target_link_libraries(campaign_main_cuda
 target_compile_definitions(campaign_main_cuda
   PRIVATE
     K_SQ=${K_SQ}
+    GAUSSIAN_MOAT_GIT_COMMIT="${GAUSSIAN_MOAT_GIT_COMMIT}"
+    GAUSSIAN_MOAT_CUDA_ARCH="${CMAKE_CUDA_ARCHITECTURES}"
 )
 
 add_executable(cuda_golden_dump

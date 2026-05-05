@@ -421,6 +421,23 @@ Acceptance:
 
 Make telemetry useful for prediction and future moat selection.
 
+`sweep_rows.jsonl` rows must keep:
+
+- `detector_status`: what the static-annulus detector observed
+  (`ANY_SPAN_DETECTED`, `ANY_SHELL_MOAT_DETECTED`, or
+  `UNKNOWN_DETECTOR_STATUS`);
+- `proof_status`: whether the mathematical claim proof has been accepted
+  (`SPAN_PROOF_PASS`, future `MOAT_PROOF_PASS`, or
+  `CLAIM_PROOF_MISSING`);
+- post-flight/audit health as separate fields such as `postflight_status`,
+  `run_contract_status`, and `tile_sample_audit_status`.
+
+Profile-only rows may be normalized for analysis, but nullable fields must stay
+nullable and missing proof artifacts must not be inferred from detector
+verdicts. In particular, a current `MOAT` profile normalizes to detector
+evidence plus `proof_status=CLAIM_PROOF_MISSING` unless a future negative-proof
+gate explicitly accepts it.
+
 Acceptance:
 
 - profile/audit outputs can be normalized into `sweep_rows.jsonl`;

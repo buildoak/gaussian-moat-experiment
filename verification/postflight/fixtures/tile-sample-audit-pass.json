@@ -1,0 +1,95 @@
+{
+  "schema_version": 1,
+  "bundle_id": "fixture-tile-sample-audit-pass",
+  "row": {
+    "claim_id": "tiny-audit-only",
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "MOAT",
+    "verdict_mode": "ANY-SHELL-MOAT",
+    "row_class": "audit",
+    "telemetry_level": "audit",
+    "claim_proof_required": false
+  },
+  "profile": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "MOAT",
+    "command": "campaign_main_cuda --fixture tiny-audit-only",
+    "build": {
+      "commit": "abcdef1",
+      "identity": "fixture-build",
+      "cuda_arch": "sm_89"
+    },
+    "hashes": {
+      "grid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "constants": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mr_witness": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "tiles": {
+      "active": 12,
+      "produced": 12,
+      "ingested": 12
+    },
+    "early_exit": {
+      "taken": false,
+      "full_ingest": true
+    }
+  },
+  "bz": {
+    "checked": true,
+    "clean": true,
+    "override_used": false,
+    "bad_norm_count": 0
+  },
+  "overflow_counters": {
+    "tileop": 0,
+    "cuda": {
+      "ports": 0,
+      "groups": 0
+    }
+  },
+  "artifacts": [
+    {
+      "name": "sample_manifest",
+      "path": "samples/tiny-audit.manifest.json",
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "size_bytes": 256,
+      "schema_version": 1
+    }
+  ],
+  "sample_audit": {
+    "status": "PASS",
+    "sample_count": 1024,
+    "manifest": {
+      "k_sq": 36,
+      "r_inner": 2,
+      "r_outer": 8,
+      "width": 6,
+      "region": "full-octant",
+      "verdict": "MOAT"
+    },
+    "quotas": {
+      "geo_I": 1,
+      "geo_O": 1,
+      "axis": 1,
+      "diagonal": 1,
+      "high_pressure": 1,
+      "deterministic_random": 1
+    },
+    "class_counts": {
+      "geo_I": 32,
+      "geo_O": 32,
+      "axis": 32,
+      "diagonal": 32,
+      "high_pressure": 32,
+      "deterministic_random": 864
+    }
+  }
+}

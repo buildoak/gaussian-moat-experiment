@@ -1,17 +1,17 @@
 # Compositor Replay
 
-Reserved for a future independent full TileOp-surface replay verifier.
+Reserved for optional forensic/debug work over emitted TileOp surfaces.
 
-This is intentionally not an acceptance gate for the lower-K36 first hardening
-wave. The current wave uses:
+This is not an official acceptance gate. The current post-flight spine uses:
 
 - exact BZ enforcement,
 - boundary semantics tests,
 - bounded independent global-UF,
 - SPANNING coordinate certificate checking once coordinate certificates exist,
 - deterministic production tile sampling,
-- stats/anatomy reporting.
+- first-class telemetry and sweep-row normalization.
 
-A full MOAT replay gate should be added here only after the campaign can emit a
-stable TileOp surface stream with bridge/port metadata that a separate
-compositor can replay without sharing the production compositor code path.
+MOAT replay is deliberately demoted from the verification spine. Running a
+second compositor over emitted TileOps mostly checks the emitted surface, not
+TileOp mathematical faithfulness. Future negative-proof work should attack
+TileOp faithfulness directly before it is promoted as a claim-proof gate.

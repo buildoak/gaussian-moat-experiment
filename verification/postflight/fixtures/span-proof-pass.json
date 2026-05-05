@@ -1,0 +1,145 @@
+{
+  "schema_version": 1,
+  "bundle_id": "fixture-span-proof-pass",
+  "row": {
+    "claim_id": "tiny-span",
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "verdict_mode": "ANY-SPAN",
+    "row_class": "accepted",
+    "telemetry_level": "audit",
+    "claim_proof_required": true
+  },
+  "profile": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "command": "campaign_main_cuda --fixture tiny-span",
+    "build": {
+      "commit": "abcdef1",
+      "identity": "fixture-build",
+      "cuda_arch": "sm_89"
+    },
+    "hashes": {
+      "grid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "constants": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mr_witness": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    },
+    "tiles": {
+      "active": 12,
+      "produced": 12,
+      "ingested": 6
+    },
+    "early_exit": {
+      "taken": true,
+      "full_ingest": false
+    }
+  },
+  "run_index": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING"
+  },
+  "stdout": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "command": "campaign_main_cuda --fixture tiny-span"
+  },
+  "run_contract": {
+    "enumerated_active_tiles": 12
+  },
+  "bz": {
+    "checked": true,
+    "clean": true,
+    "override_used": false,
+    "bad_norm_count": 0
+  },
+  "overflow_counters": {
+    "tileop": 0,
+    "cuda": {
+      "ports": 0,
+      "groups": 0
+    }
+  },
+  "artifacts": [
+    {
+      "name": "profile",
+      "path": "profiles/tiny-span.json",
+      "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "size_bytes": 1024,
+      "schema_version": 1
+    },
+    {
+      "name": "span_certificate",
+      "type": "span_certificate",
+      "path": "certs/tiny-span.json",
+      "sha256": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "size_bytes": 512,
+      "schema_version": 1
+    }
+  ],
+  "sample_audit": {
+    "status": "PASS",
+    "sample_count": 4096,
+    "manifest": {
+      "k_sq": 36,
+      "r_inner": 2,
+      "r_outer": 8,
+      "width": 6,
+      "region": "full-octant",
+      "verdict": "SPANNING"
+    },
+    "quotas": {
+      "geo_I": 1,
+      "geo_O": 1,
+      "axis": 1,
+      "diagonal": 1,
+      "high_pressure": 1,
+      "deterministic_random": 1
+    },
+    "class_counts": {
+      "geo_I": 100,
+      "geo_O": 100,
+      "axis": 100,
+      "diagonal": 100,
+      "high_pressure": 100,
+      "deterministic_random": 3596
+    }
+  },
+  "span_certificate": {
+    "claim_id": "tiny-span",
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
+    "verdict": "SPANNING",
+    "path": "certs/tiny-span.json",
+    "points": [
+      { "a": 1, "b": 4 },
+      { "a": 0, "b": 3 }
+    ],
+    "binding": {
+      "commit": "abcdef1",
+      "build_identity": "fixture-build",
+      "grid_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "constants_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "mr_witness_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "command": "campaign_main_cuda --fixture tiny-span"
+    }
+  }
+}

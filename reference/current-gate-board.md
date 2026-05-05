@@ -2,10 +2,17 @@
 
 Updated: 2026-05-05 after May 4 static-annulus campaign consolidation.
 
+Post-flight note: this board is now scoped to historical/dev sanity and
+performance baselines. The active claim-acceptance spine and status vocabulary
+are defined in `reference/postflight-verification-telemetry-plan-2026-05-05.md`.
+Do not use this board to imply `MOAT` proof acceptance or to collapse detector
+status into proof status.
+
 This board records accepted executable gates and baseline performance checks.
-It is not the active branch state and not the chronological K34/K36/K38/K40
-campaign ledger. For accepted May 4 static-annulus rows and raw evidence
-pointers, read `reference/2026-05-04-static-annulus-evidence-index.md`.
+It is not the active branch state, not the post-flight claim-proof spine, and
+not the chronological K34/K36/K38/K40 campaign ledger. For accepted May 4
+static-annulus rows and raw evidence pointers, read
+`reference/2026-05-04-static-annulus-evidence-index.md`.
 
 ## Baseline
 
@@ -22,7 +29,8 @@ accepted executable gates or baseline performance move.
 
 ## Required Gates
 
-Use this stack when accepting optimization work:
+Use this stack when accepting optimization work or preserving historical/dev
+sanity. For post-flight claim rows, use the post-flight plan instead.
 
 1. Local CPU gate:
 

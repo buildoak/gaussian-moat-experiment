@@ -1,0 +1,12 @@
+{
+  "schema_version": 2,
+  "claim_id": "bad metadata",
+  "k_sq": 16,
+  "r_inner": 7,
+  "r_outer": 3,
+  "region": "full-octant",
+  "path": [
+    { "a": 0, "b": 3 },
+    { "a": 0, "b": 7 }
+  ]
+}

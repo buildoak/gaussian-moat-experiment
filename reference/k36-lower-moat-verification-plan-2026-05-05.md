@@ -125,12 +125,15 @@ tiles-maxxing/cuda-campaign-v2-sqrt-36/src/streaming_compositor*.cpp
    - Sampling strengthens confidence in production TileOps; it is not a proof
      of the negative `MOAT` row.
 
-7. Stats and Tsuchimura boundary anatomy.
+7. Post-flight telemetry and boundary anatomy.
    - Emit cheap profile-level distributions: candidate counts, active primes,
      ports, groups, face load, boundary flags, geo band population, component
      summaries, and high-pressure tile classes.
    - Explain whether the K36 moat transition is caused by real connectivity
      failure rather than `geo_O` thinning or boundary-band artifacts.
+   - Normalize profiles into sweep rows that keep `detector_status` separate
+     from `proof_status`; a current `MOAT` detector row remains
+     `CLAIM_PROOF_MISSING` for negative mathematical proof.
 
 8. Same-commit gate-board preflight.
    - Re-run the relevant local/remote correctness gates on the commit that
@@ -205,6 +208,11 @@ verification/production-tile-oracle/build/tile_sample_check \
 verification/stats/anatomy_report.py \
   --profiles /workspace/profiles/k36_lower_span.profile.json \
              /workspace/profiles/k36_lower_moat.profile.json
+
+verification/stats/normalize_sweep_rows.py \
+  --profiles /workspace/profiles/k36_lower_span.profile.json \
+             /workspace/profiles/k36_lower_moat.profile.json \
+  --out /workspace/reports/sweep_rows.jsonl
 ```
 
 ## Acceptance For This Goal
@@ -220,7 +228,8 @@ This wave is accepted when:
 - lower-K36 `SPANNING` path certificate validates independently;
 - lower-K36 `SPANNING` and `MOAT` production tile samples validate
   independently;
-- stats/anatomy report is written for the two lower-K36 rows;
+- stats/anatomy report and normalized sweep rows are written for the two
+  lower-K36 rows;
 - campaign profiles show zero overflow counters and no uncertified BZ override;
 - the `SPANNING` endpoint is full-ingest if full-annulus samples or stats are
   claimed;

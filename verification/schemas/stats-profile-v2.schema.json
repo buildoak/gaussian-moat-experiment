@@ -2,10 +2,125 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://gaussian-moat.local/schemas/stats-profile-v2.schema.json",
   "title": "Gaussian moat stats profile v2 extension",
+  "description": "Profile telemetry schema plus the normalized sweep row contract used by verification/stats/normalize_sweep_rows.py. Nullable normalized fields are intentional so older profile JSON can be represented without inventing measurements.",
   "type": "object",
   "required": ["schema_version", "radii", "verdict", "tiles", "overflow_counters"],
+  "$defs": {
+    "nullableInteger": { "type": ["integer", "null"] },
+    "nullableNumber": { "type": ["number", "null"] },
+    "nullableString": { "type": ["string", "null"] },
+    "nullableBoolean": { "type": ["boolean", "null"] },
+    "detectorStatus": {
+      "enum": [
+        "ANY_SPAN_DETECTED",
+        "ANY_SHELL_MOAT_DETECTED",
+        "UNKNOWN_DETECTOR_STATUS"
+      ]
+    },
+    "proofStatus": {
+      "enum": [
+        "CLAIM_PROOF_MISSING",
+        "MOAT_PROOF_PASS",
+        "SPAN_PROOF_PASS"
+      ]
+    },
+    "postflightStatus": {
+      "enum": [
+        null,
+        "CLAIM_PROOF_MISSING",
+        "MOAT_PROOF_PASS",
+        "REJECT",
+        "RUN_CONTRACT_PASS",
+        "SPAN_PROOF_PASS",
+        "TILE_SAMPLE_AUDIT_PASS"
+      ]
+    },
+    "distribution": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": {
+            "type": ["integer", "number", "null"]
+          }
+        },
+        {
+          "type": "array",
+          "items": { "type": ["integer", "number", "object", "null"] }
+        }
+      ]
+    },
+    "normalizedSweepRow": {
+      "type": "object",
+      "required": [
+        "sweep_row_schema_version",
+        "source_profile",
+        "claim_id",
+        "k_sq",
+        "r_inner",
+        "r_outer",
+        "width",
+        "region",
+        "verdict",
+        "verdict_mode",
+        "detector_status",
+        "proof_status"
+      ],
+      "properties": {
+        "sweep_row_schema_version": { "const": 1 },
+        "source_profile": { "type": "string" },
+        "source_audit": { "$ref": "#/$defs/nullableString" },
+        "claim_id": { "type": "string", "minLength": 1 },
+        "k_sq": { "$ref": "#/$defs/nullableInteger" },
+        "r_inner": { "$ref": "#/$defs/nullableInteger" },
+        "r_outer": { "$ref": "#/$defs/nullableInteger" },
+        "width": { "$ref": "#/$defs/nullableInteger" },
+        "region": { "$ref": "#/$defs/nullableString" },
+        "verdict": { "enum": ["SPANNING", "MOAT", "UNKNOWN", null] },
+        "verdict_mode": { "enum": ["ANY-SPAN", "ANY-SHELL-MOAT", null] },
+        "detector_status": { "$ref": "#/$defs/detectorStatus" },
+        "proof_status": { "$ref": "#/$defs/proofStatus" },
+        "postflight_status": { "$ref": "#/$defs/postflightStatus" },
+        "run_contract_status": { "$ref": "#/$defs/postflightStatus" },
+        "tile_sample_audit_status": { "$ref": "#/$defs/postflightStatus" },
+        "telemetry_level": { "enum": ["none", "profile", "audit", "full", null] },
+        "active_tiles": { "$ref": "#/$defs/nullableInteger" },
+        "produced_tiles": { "$ref": "#/$defs/nullableInteger" },
+        "ingested_tiles": { "$ref": "#/$defs/nullableInteger" },
+        "early_exit_enabled": { "$ref": "#/$defs/nullableBoolean" },
+        "early_exit_taken": { "$ref": "#/$defs/nullableBoolean" },
+        "bz_checked": { "$ref": "#/$defs/nullableBoolean" },
+        "bz_clean": { "$ref": "#/$defs/nullableBoolean" },
+        "bz_override_used": { "$ref": "#/$defs/nullableBoolean" },
+        "bz_bad_norm_count": { "$ref": "#/$defs/nullableInteger" },
+        "overflow_total": { "$ref": "#/$defs/nullableInteger" },
+        "emitted_overflow_bit_count": { "$ref": "#/$defs/nullableInteger" },
+        "geo_i_tiles": { "$ref": "#/$defs/nullableInteger" },
+        "geo_o_tiles": { "$ref": "#/$defs/nullableInteger" },
+        "geo_i_ports": { "$ref": "#/$defs/nullableInteger" },
+        "geo_o_ports": { "$ref": "#/$defs/nullableInteger" },
+        "candidate_count_distribution": { "$ref": "#/$defs/distribution" },
+        "gaussian_prime_count_distribution": { "$ref": "#/$defs/distribution" },
+        "group_count_distribution": { "$ref": "#/$defs/distribution" },
+        "total_port_count_distribution": { "$ref": "#/$defs/distribution" },
+        "max_face_port_count_distribution": { "$ref": "#/$defs/distribution" },
+        "high_pressure_tiles": { "type": ["array", "null"] },
+        "component_census": { "type": ["object", "null"] },
+        "sample_manifest_path": { "$ref": "#/$defs/nullableString" },
+        "tile_sample_path": { "$ref": "#/$defs/nullableString" },
+        "sample_count": { "$ref": "#/$defs/nullableInteger" },
+        "snapshot_path": { "$ref": "#/$defs/nullableString" },
+        "snapshot_sha256": { "$ref": "#/$defs/nullableString" },
+        "total_seconds": { "$ref": "#/$defs/nullableNumber" },
+        "cuda_k1_k5_seconds": { "$ref": "#/$defs/nullableNumber" },
+        "compositor_seconds": { "$ref": "#/$defs/nullableNumber" }
+      },
+      "additionalProperties": true
+    }
+  },
   "properties": {
     "schema_version": { "type": "integer", "minimum": 1 },
+    "telemetry_level": { "enum": ["none", "profile", "audit", "full"] },
     "radii": {
       "type": "object",
       "required": ["k_sq", "r_inner", "r_outer"]
@@ -24,8 +139,30 @@
       "properties": {
         "geo_i_tiles": { "type": "integer", "minimum": 0 },
         "geo_o_tiles": { "type": "integer", "minimum": 0 },
+        "geo_i_ports": { "type": "integer", "minimum": 0 },
+        "geo_o_ports": { "type": "integer", "minimum": 0 },
+        "candidate_count_distribution": { "$ref": "#/$defs/distribution" },
+        "gaussian_prime_count_distribution": { "$ref": "#/$defs/distribution" },
+        "group_count_distribution": { "$ref": "#/$defs/distribution" },
+        "total_port_count_distribution": { "$ref": "#/$defs/distribution" },
+        "max_face_port_count_distribution": { "$ref": "#/$defs/distribution" },
+        "high_pressure_tiles": { "type": "array" },
+        "component_census": {
+          "type": "object",
+          "properties": {
+            "i_only_components": { "type": "integer", "minimum": 0 },
+            "o_only_components": { "type": "integer", "minimum": 0 },
+            "i_and_o_components": { "type": "integer", "minimum": 0 },
+            "largest_component_sizes": { "type": "array" },
+            "largest_boundary_touching_components": { "type": "array" }
+          },
+          "additionalProperties": true
+        },
+        "sample_count": { "type": "integer", "minimum": 0 },
         "sample_manifest_path": { "type": "string" },
-        "tile_sample_path": { "type": "string" }
+        "tile_sample_path": { "type": "string" },
+        "snapshot_path": { "type": "string" },
+        "snapshot_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
       },
       "additionalProperties": true
     }

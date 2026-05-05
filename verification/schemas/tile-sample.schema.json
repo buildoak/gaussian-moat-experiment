@@ -3,13 +3,37 @@
   "$id": "https://gaussian-moat.local/schemas/tile-sample.schema.json",
   "title": "Production tile sample JSONL record",
   "type": "object",
-  "required": ["schema_version", "k_sq", "r_inner", "r_outer", "tile", "tileop"],
+  "required": [
+    "schema_version",
+    "k_sq",
+    "r_inner",
+    "r_outer",
+    "width",
+    "region",
+    "sample_class",
+    "tile",
+    "tileop"
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
+    "schema_version": { "enum": [1, 2] },
+    "claim_id": { "type": "string", "minLength": 1 },
     "k_sq": { "type": "integer", "minimum": 1 },
     "r_inner": { "type": "integer", "minimum": 1 },
     "r_outer": { "type": "integer", "minimum": 1 },
-    "sample_class": { "type": "string" },
+    "width": { "type": "integer", "minimum": 1 },
+    "region": { "enum": ["full-octant"] },
+    "sample_class": {
+      "enum": ["geo_I", "geo_O", "axis", "diagonal", "high_pressure", "deterministic_random"]
+    },
+    "pressure": {
+      "type": "object",
+      "properties": {
+        "score": { "type": "number" },
+        "port_count": { "type": "integer", "minimum": 0 },
+        "group_count": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": true
+    },
     "tile": {
       "type": "object",
       "required": ["i", "j", "a_lo", "b_lo"],

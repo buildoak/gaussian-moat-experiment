@@ -9,8 +9,12 @@ from compact evidence rows rather than copied here wholesale.
 First-read order:
 
 1. `../AGENTS.md` - repo law, authority chain, semantics, compute/git rules.
-2. `current-gate-board.md` - accepted executable correctness/performance gates.
-3. `2026-05-04-static-annulus-evidence-index.md` - compact accepted campaign
+2. `postflight-verification-telemetry-plan-2026-05-05.md` - active replacement
+   plan for the post-flight verification spine and telemetry status vocabulary.
+3. `current-gate-board.md` - historical/dev executable correctness and
+   performance gates; superseded by the post-flight plan for claim acceptance
+   wording.
+4. `2026-05-04-static-annulus-evidence-index.md` - compact accepted campaign
    evidence rows and raw evidence pointers.
 
 ## Current Evidence
@@ -36,7 +40,7 @@ First-read order:
 
 | File | Role | Status |
 |---|---|---|
-| `current-gate-board.md` | Accepted executable gates and baseline performance | current gate board |
+| `current-gate-board.md` | Historical/dev executable gates and baseline performance; no longer the official claim-proof spine once post-flight rows are in use | scoped/superseded by post-flight plan |
 | `postflight-verification-telemetry-plan-2026-05-05.md` | Planned replacement for gate sprawl: reduced post-flight verification spine plus runtime telemetry levels | current plan |
 | `k36-lower-moat-verification-plan-2026-05-05.md` | Agreed first implementation plan for paper-grade verification substrate around the lower-K36 W32768 bracket | current goal pointer |
 | `k36-lower-verification-evidence-2026-05-05.md` | Evidence report for the first lower-K36 verification hardening wave | current evidence report |

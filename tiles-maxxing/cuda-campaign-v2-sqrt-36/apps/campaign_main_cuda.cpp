@@ -8,6 +8,7 @@
 // driver entry point.
 //
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
@@ -27,6 +28,7 @@
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -44,6 +46,14 @@
 #include "cuda_campaign/host_driver.h"
 #include "tileop_internal.h"
 
+#ifndef GAUSSIAN_MOAT_GIT_COMMIT
+#define GAUSSIAN_MOAT_GIT_COMMIT "unknown"
+#endif
+
+#ifndef GAUSSIAN_MOAT_CUDA_ARCH
+#define GAUSSIAN_MOAT_CUDA_ARCH "unknown"
+#endif
+
 namespace {
 
 using Clock = std::chrono::steady_clock;
@@ -51,7 +61,35 @@ using Duration = Clock::duration;
 
 inline constexpr std::size_t kDefaultChunkSize = 200000;
 inline constexpr std::size_t kMaxOverflowDiagnostics = 10;
-inline constexpr std::size_t kDefaultTileSampleLimit = 1024;
+inline constexpr std::size_t kDefaultAuditTileSampleTarget = 4096;
+inline constexpr std::size_t kLegacyStatsTileSampleTarget = 1024;
+
+enum class TelemetryLevel {
+  kNone,
+  kProfile,
+  kAudit,
+  kFull,
+};
+
+enum class SampleClass : std::size_t {
+  kGeoI = 0,
+  kGeoO,
+  kAxis,
+  kDiagonal,
+  kHighPressure,
+  kDeterministicRandom,
+  kCount,
+};
+
+constexpr std::array<SampleClass, static_cast<std::size_t>(SampleClass::kCount)>
+    kSampleClassOrder = {
+        SampleClass::kGeoI,
+        SampleClass::kGeoO,
+        SampleClass::kAxis,
+        SampleClass::kDiagonal,
+        SampleClass::kHighPressure,
+        SampleClass::kDeterministicRandom,
+};
 
 struct BzRecord {
   bool checked = false;
@@ -102,6 +140,58 @@ struct RunStats {
   cuda_campaign::DispatchStats dispatch;
 };
 
+struct SampleCandidate {
+  SampleClass sample_class = SampleClass::kDeterministicRandom;
+  std::uint64_t rank_hash = 0;
+  std::uint64_t pressure_score = 0;
+  campaign::TileCoord coord{};
+  campaign::TileOp tileop{};
+};
+
+struct SampleClassCompare {
+  bool operator()(const SampleCandidate& lhs,
+                  const SampleCandidate& rhs) const {
+    if (lhs.sample_class == SampleClass::kHighPressure ||
+        rhs.sample_class == SampleClass::kHighPressure) {
+      if (lhs.pressure_score != rhs.pressure_score) {
+        return lhs.pressure_score > rhs.pressure_score;
+      }
+    }
+    if (lhs.rank_hash != rhs.rank_hash) return lhs.rank_hash < rhs.rank_hash;
+    if (lhs.coord.i != rhs.coord.i) return lhs.coord.i < rhs.coord.i;
+    return lhs.coord.j < rhs.coord.j;
+  }
+};
+
+class SampleReservoir {
+ public:
+  explicit SampleReservoir(std::size_t capacity) : capacity_(capacity) {}
+
+  void consider(const SampleCandidate& candidate) {
+    if (capacity_ == 0) return;
+    if (heap_.size() < capacity_) {
+      heap_.push_back(candidate);
+      std::push_heap(heap_.begin(), heap_.end(), SampleClassCompare{});
+      return;
+    }
+    SampleClassCompare better;
+    if (!better(candidate, heap_.front())) return;
+    std::pop_heap(heap_.begin(), heap_.end(), SampleClassCompare{});
+    heap_.back() = candidate;
+    std::push_heap(heap_.begin(), heap_.end(), SampleClassCompare{});
+  }
+
+  std::vector<SampleCandidate> sorted() const {
+    std::vector<SampleCandidate> out = heap_;
+    std::sort(out.begin(), out.end(), SampleClassCompare{});
+    return out;
+  }
+
+ private:
+  std::size_t capacity_ = 0;
+  std::vector<SampleCandidate> heap_;
+};
+
 struct Timings {
   Duration grid = Duration::zero();
   Duration cuda = Duration::zero();
@@ -128,12 +218,15 @@ void print_help(const char* prog) {
       << "  --no-early-exit        Ingest all columns even after SPANNING is found\n"
       << "  --timing               Print timing and chunk accounting\n"
       << "  --profile <path>       Write JSON profile; implies --timing\n"
+      << "  --telemetry <level>    none, profile, audit, or full\n"
       << "  --trace-spanning       Print/profile first SPANNING provenance\n"
       << "  --trace-spanning-path  Reconstruct first SPANNING stitch path\n"
-      << "  --stats-level <level>  Optional stats level: profile\n"
+      << "  --stats-level <level>  Legacy alias: profile maps to telemetry profile\n"
       << "  --emit-span-cert <p>   Emit coordinate span cert from reconstructed trace\n"
       << "  --sample-manifest <p>  Record production sample manifest path\n"
       << "  --tile-sample-out <p>  Write sampled production TileOps as JSONL\n"
+      << "  --tile-sample-count=N  Stratified audit sample target; default 4096\n"
+      << "  --sample-seed=N        Override deterministic sample seed\n"
       << "  --allow-uncertified-boundary-band\n"
       << "                         Allow accepted output without clean BZ record\n"
       << "  --overflow-diagnostics Capture first overflow tiles in profile output\n"
@@ -392,6 +485,64 @@ const char* face_name(campaign::Face face) noexcept {
   return "?";
 }
 
+const char* telemetry_level_name(TelemetryLevel level) noexcept {
+  switch (level) {
+    case TelemetryLevel::kNone:
+      return "none";
+    case TelemetryLevel::kProfile:
+      return "profile";
+    case TelemetryLevel::kAudit:
+      return "audit";
+    case TelemetryLevel::kFull:
+      return "full";
+  }
+  return "none";
+}
+
+bool parse_telemetry_level(const std::string& s, TelemetryLevel& out) {
+  if (s == "none") {
+    out = TelemetryLevel::kNone;
+    return true;
+  }
+  if (s == "profile") {
+    out = TelemetryLevel::kProfile;
+    return true;
+  }
+  if (s == "audit") {
+    out = TelemetryLevel::kAudit;
+    return true;
+  }
+  if (s == "full") {
+    out = TelemetryLevel::kFull;
+    return true;
+  }
+  return false;
+}
+
+bool telemetry_writes_samples(TelemetryLevel level) noexcept {
+  return level == TelemetryLevel::kAudit || level == TelemetryLevel::kFull;
+}
+
+const char* sample_class_name(SampleClass sample_class) noexcept {
+  switch (sample_class) {
+    case SampleClass::kGeoI:
+      return "geo_I";
+    case SampleClass::kGeoO:
+      return "geo_O";
+    case SampleClass::kAxis:
+      return "axis";
+    case SampleClass::kDiagonal:
+      return "diagonal";
+    case SampleClass::kHighPressure:
+      return "high_pressure";
+    case SampleClass::kDeterministicRandom:
+      return "deterministic_random";
+    case SampleClass::kCount:
+      break;
+  }
+  return "deterministic_random";
+}
+
 nlohmann::json stitch_vertex_json(
     const campaign::SpanningStitchVertex& vertex) {
   return {
@@ -496,19 +647,206 @@ bool tile_has_any_flag(const std::uint8_t* flags) {
   return false;
 }
 
+std::uint64_t deterministic_string_hash(const std::string& s) {
+  std::uint64_t h = 1469598103934665603ULL;
+  for (unsigned char c : s) {
+    h ^= static_cast<std::uint64_t>(c);
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
 std::uint64_t sample_hash(const campaign::TileCoord& coord,
                           std::uint64_t r_inner,
-                          std::uint64_t r_outer) {
+                          std::uint64_t r_outer,
+                          std::uint64_t seed,
+                          SampleClass sample_class) {
   std::uint64_t h = 0x9e3779b97f4a7c15ULL;
   const auto mix = [&](std::uint64_t v) {
     h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
   };
+  mix(seed);
+  mix(static_cast<std::uint64_t>(sample_class));
   mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(coord.i)));
   mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(coord.j)));
   mix(r_inner);
   mix(r_outer);
   return h;
 }
+
+std::uint64_t default_sample_seed(std::uint64_t k_sq,
+                                  std::uint64_t r_inner,
+                                  std::uint64_t r_outer,
+                                  const std::string& region_spec) {
+  std::uint64_t h = deterministic_string_hash(region_spec);
+  const auto mix = [&](std::uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+  };
+  mix(k_sq);
+  mix(r_inner);
+  mix(r_outer);
+  mix(static_cast<std::uint64_t>(campaign::S));
+  mix(static_cast<std::uint64_t>(campaign::OFFSET_X));
+  mix(static_cast<std::uint64_t>(campaign::OFFSET_Y));
+  return h;
+}
+
+std::uint64_t tile_pressure_score(const campaign::TileOp& op) {
+  std::uint64_t score = 0;
+  for (int i = 0; i < 4; ++i) score += op.n[i];
+  for (std::uint8_t value : op.face_groups) {
+    if (value != 0) ++score;
+  }
+  for (std::uint8_t value : op.inner_flags) {
+    if (value != 0) ++score;
+  }
+  for (std::uint8_t value : op.outer_flags) {
+    if (value != 0) ++score;
+  }
+  if ((op.tile_flags & campaign::OVERFLOW_BIT) != 0) {
+    score += 1000000ULL;
+  }
+  return score;
+}
+
+std::uint64_t sample_coord_key(const campaign::TileCoord& coord) {
+  return (static_cast<std::uint64_t>(static_cast<std::uint32_t>(coord.i))
+          << 32) |
+         static_cast<std::uint64_t>(static_cast<std::uint32_t>(coord.j));
+}
+
+std::array<std::size_t, static_cast<std::size_t>(SampleClass::kCount)>
+sample_quotas(std::size_t target_count) {
+  std::array<std::size_t, static_cast<std::size_t>(SampleClass::kCount)> quotas{};
+  const std::size_t base = target_count / quotas.size();
+  std::size_t remaining = target_count;
+  for (SampleClass sample_class : kSampleClassOrder) {
+    const std::size_t idx = static_cast<std::size_t>(sample_class);
+    quotas[idx] = base;
+    remaining -= base;
+  }
+  quotas[static_cast<std::size_t>(SampleClass::kDeterministicRandom)] +=
+      remaining;
+  return quotas;
+}
+
+class StratifiedTileSampler {
+ public:
+  StratifiedTileSampler(TelemetryLevel level,
+                        std::uint64_t seed,
+                        std::size_t target_count)
+      : level_(level),
+        seed_(seed),
+        target_count_(target_count),
+        quotas_(sample_quotas(target_count)) {
+    const std::size_t reservoir_capacity = std::max<std::size_t>(
+        target_count_, kDefaultAuditTileSampleTarget);
+    for (std::size_t i = 0; i < reservoirs_.size(); ++i) {
+      reservoirs_[i] = std::make_unique<SampleReservoir>(
+          std::max<std::size_t>(reservoir_capacity, quotas_[i] * 4 + 64));
+    }
+  }
+
+  void consider(const campaign::TileCoord& coord,
+                const campaign::TileOp& op,
+                bool has_i,
+                bool has_o,
+                std::uint64_t r_inner,
+                std::uint64_t r_outer) {
+    const std::uint64_t pressure = tile_pressure_score(op);
+    std::array<bool, static_cast<std::size_t>(SampleClass::kCount)> member{};
+    member[static_cast<std::size_t>(SampleClass::kGeoI)] = has_i;
+    member[static_cast<std::size_t>(SampleClass::kGeoO)] = has_o;
+    member[static_cast<std::size_t>(SampleClass::kAxis)] = coord.i == 0;
+    member[static_cast<std::size_t>(SampleClass::kDiagonal)] =
+        coord.j == coord.i;
+    member[static_cast<std::size_t>(SampleClass::kHighPressure)] =
+        pressure > 0;
+    member[static_cast<std::size_t>(SampleClass::kDeterministicRandom)] = true;
+
+    for (SampleClass sample_class : kSampleClassOrder) {
+      const std::size_t idx = static_cast<std::size_t>(sample_class);
+      if (!member[idx]) continue;
+      ++population_counts_[idx];
+      reservoirs_[idx]->consider(SampleCandidate{
+          sample_class,
+          sample_hash(coord, r_inner, r_outer, seed_, sample_class),
+          pressure,
+          coord,
+          op,
+      });
+    }
+  }
+
+  std::vector<SampleCandidate> selected_samples() const {
+    std::vector<SampleCandidate> selected;
+    selected.reserve(target_count_);
+    std::unordered_set<std::uint64_t> seen;
+    std::array<std::vector<SampleCandidate>,
+               static_cast<std::size_t>(SampleClass::kCount)>
+        sorted;
+    for (SampleClass sample_class : kSampleClassOrder) {
+      const std::size_t idx = static_cast<std::size_t>(sample_class);
+      sorted[idx] = reservoirs_[idx]->sorted();
+    }
+
+    const auto take_for_class = [&](SampleClass sample_class,
+                                    std::size_t requested) {
+      const std::size_t idx = static_cast<std::size_t>(sample_class);
+      std::size_t taken = 0;
+      for (const SampleCandidate& candidate : sorted[idx]) {
+        if (taken >= requested || selected.size() >= target_count_) break;
+        const std::uint64_t key = sample_coord_key(candidate.coord);
+        if (!seen.insert(key).second) continue;
+        selected.push_back(candidate);
+        ++taken;
+      }
+    };
+
+    for (SampleClass sample_class : kSampleClassOrder) {
+      take_for_class(sample_class, quotas_[static_cast<std::size_t>(sample_class)]);
+    }
+
+    if (selected.size() < target_count_) {
+      take_for_class(SampleClass::kDeterministicRandom,
+                     target_count_ - selected.size());
+    }
+    return selected;
+  }
+
+  nlohmann::json quotas_json() const {
+    nlohmann::json out = nlohmann::json::object();
+    for (SampleClass sample_class : kSampleClassOrder) {
+      out[sample_class_name(sample_class)] =
+          quotas_[static_cast<std::size_t>(sample_class)];
+    }
+    return out;
+  }
+
+  nlohmann::json population_counts_json() const {
+    nlohmann::json out = nlohmann::json::object();
+    for (SampleClass sample_class : kSampleClassOrder) {
+      out[sample_class_name(sample_class)] =
+          population_counts_[static_cast<std::size_t>(sample_class)];
+    }
+    return out;
+  }
+
+  std::uint64_t seed() const noexcept { return seed_; }
+  std::size_t target_count() const noexcept { return target_count_; }
+  TelemetryLevel level() const noexcept { return level_; }
+
+ private:
+  TelemetryLevel level_ = TelemetryLevel::kAudit;
+  std::uint64_t seed_ = 0;
+  std::size_t target_count_ = 0;
+  std::array<std::size_t, static_cast<std::size_t>(SampleClass::kCount)> quotas_{};
+  std::array<std::uint64_t, static_cast<std::size_t>(SampleClass::kCount)>
+      population_counts_{};
+  std::array<std::unique_ptr<SampleReservoir>,
+             static_cast<std::size_t>(SampleClass::kCount)>
+      reservoirs_{};
+};
 
 nlohmann::json tileop_json(const campaign::TileOp& op) {
   nlohmann::json n = nlohmann::json::array();
@@ -531,11 +869,10 @@ nlohmann::json tileop_json(const campaign::TileOp& op) {
 void account_tile_stats_and_samples(
     const std::vector<campaign::TileCoord>& coords,
     std::span<const campaign::TileOp> tileops,
-    std::uint64_t k_sq,
-    std::uint64_t r_inner,
-    std::uint64_t r_outer,
     RunStats& stats,
-    std::ofstream* tile_sample_out) {
+    StratifiedTileSampler* sampler,
+    std::uint64_t r_inner,
+    std::uint64_t r_outer) {
   for (std::size_t idx = 0; idx < tileops.size(); ++idx) {
     const campaign::TileOp& op = tileops[idx];
     const campaign::TileCoord& coord = coords[idx];
@@ -543,29 +880,9 @@ void account_tile_stats_and_samples(
     const bool has_o = tile_has_any_flag(op.outer_flags);
     if (has_i) ++stats.geo_i_tiles;
     if (has_o) ++stats.geo_o_tiles;
-    if (tile_sample_out == nullptr ||
-        stats.tile_samples_written >= kDefaultTileSampleLimit) {
-      continue;
+    if (sampler != nullptr) {
+      sampler->consider(coord, op, has_i, has_o, r_inner, r_outer);
     }
-    const bool priority = has_i || has_o || coord.i == 0 || coord.j == coord.i;
-    const bool selected =
-        priority || (sample_hash(coord, r_inner, r_outer) % 997ULL) == 0ULL;
-    if (!selected) continue;
-    nlohmann::json rec = {
-        {"schema_version", 1},
-        {"k_sq", k_sq},
-        {"r_inner", r_inner},
-        {"r_outer", r_outer},
-        {"sample_class", priority ? "boundary_priority" : "deterministic_random"},
-        {"tile",
-         {{"i", coord.i},
-          {"j", coord.j},
-          {"a_lo", coord.a_lo},
-          {"b_lo", coord.b_lo}}},
-        {"tileop", tileop_json(op)},
-    };
-    *tile_sample_out << rec.dump() << "\n";
-    ++stats.tile_samples_written;
   }
 }
 
@@ -953,6 +1270,143 @@ void write_span_certificate(const std::filesystem::path& path,
   out << cert.dump(2) << "\n";
 }
 
+void write_sample_artifacts(
+    const std::filesystem::path& manifest_path,
+    const std::filesystem::path& samples_path,
+    const StratifiedTileSampler& sampler,
+    std::uint64_t k_sq,
+    std::uint64_t r_inner,
+    std::uint64_t r_outer,
+    const std::string& region_spec,
+    RunStats& stats) {
+  const std::uint64_t width = r_outer - r_inner;
+  const std::string claim_id = "k" + std::to_string(k_sq) + "-r" +
+                               std::to_string(r_inner) + "-w" +
+                               std::to_string(width);
+  const std::vector<SampleCandidate> samples = sampler.selected_samples();
+
+  nlohmann::json class_counts = nlohmann::json::object();
+  for (SampleClass sample_class : kSampleClassOrder) {
+    class_counts[sample_class_name(sample_class)] = 0;
+  }
+
+  std::ofstream sample_out(samples_path);
+  if (!sample_out.is_open()) {
+    throw std::runtime_error("could not open tile sample output " +
+                             samples_path.string());
+  }
+  for (const SampleCandidate& sample : samples) {
+    class_counts[sample_class_name(sample.sample_class)] =
+        class_counts[sample_class_name(sample.sample_class)].get<std::size_t>() +
+        1;
+    nlohmann::json rec = {
+        {"schema_version", 2},
+        {"claim_id", claim_id},
+        {"k_sq", k_sq},
+        {"r_inner", r_inner},
+        {"r_outer", r_outer},
+        {"width", width},
+        {"region", region_spec},
+        {"telemetry_level", telemetry_level_name(sampler.level())},
+        {"sample_plan",
+         {{"seed", sampler.seed()},
+          {"target_count", sampler.target_count()},
+          {"quotas", sampler.quotas_json()}}},
+        {"sample_class", sample_class_name(sample.sample_class)},
+        {"tile",
+         {{"i", sample.coord.i},
+          {"j", sample.coord.j},
+          {"a_lo", sample.coord.a_lo},
+          {"b_lo", sample.coord.b_lo}}},
+        {"pressure", {{"score", sample.pressure_score}}},
+        {"tileop", tileop_json(sample.tileop)},
+    };
+    sample_out << rec.dump() << "\n";
+  }
+  if (!sample_out.good()) {
+    throw std::runtime_error("failed while writing tile sample output " +
+                             samples_path.string());
+  }
+
+  stats.tile_samples_written = static_cast<std::uint64_t>(samples.size());
+
+  nlohmann::json quota_status = nlohmann::json::object();
+  nlohmann::json selection = nlohmann::json::array();
+  nlohmann::json population_exhaustion = nlohmann::json::object();
+  const nlohmann::json quotas = sampler.quotas_json();
+  const nlohmann::json populations = sampler.population_counts_json();
+  const std::size_t total_unique_population =
+      populations.at(sample_class_name(SampleClass::kDeterministicRandom))
+          .get<std::size_t>();
+  const bool global_population_exhausted =
+      samples.size() >= total_unique_population;
+  for (SampleClass sample_class : kSampleClassOrder) {
+    const char* name = sample_class_name(sample_class);
+    const std::size_t quota = quotas.at(name).get<std::size_t>();
+    const std::size_t population = populations.at(name).get<std::size_t>();
+    const std::size_t emitted = class_counts.at(name).get<std::size_t>();
+    const bool exhausted =
+        emitted < quota && (population <= emitted || global_population_exhausted);
+    quota_status[name] = {
+        {"quota", quota},
+        {"population", population},
+        {"emitted", emitted},
+        {"population_exhausted", exhausted},
+    };
+    population_exhaustion[name] = {
+        {"population", population},
+        {"population_exhausted", exhausted},
+    };
+    selection.push_back({
+        {"class", name},
+        {"description", std::string("deterministic stratified ") + name +
+                            " tile sample"},
+        {"target_count", quota},
+        {"population_exhausted", exhausted},
+    });
+  }
+
+  nlohmann::json manifest = {
+      {"schema_version", 2},
+      {"claim_id", claim_id},
+      {"k_sq", k_sq},
+      {"r_inner", r_inner},
+      {"r_outer", r_outer},
+      {"width", width},
+      {"region", region_spec},
+      {"seed", sampler.seed()},
+      {"target_tile_samples", sampler.target_count()},
+      {"sample_count", samples.size()},
+      {"class_counts", class_counts},
+      {"population_exhaustion", population_exhaustion},
+      {"selection", selection},
+      {"telemetry_level", telemetry_level_name(sampler.level())},
+      {"sample_plan",
+       {{"seed", sampler.seed()},
+        {"target_count", sampler.target_count()},
+        {"classes",
+         {"geo_I", "geo_O", "axis", "diagonal", "high_pressure",
+          "deterministic_random"}},
+        {"quotas", quotas},
+        {"population_counts", populations},
+        {"sample_class_counts", class_counts},
+        {"quota_status", quota_status},
+        {"emitted_count", samples.size()}}},
+      {"artifacts", {{"tile_sample_path", samples_path.string()}}},
+  };
+
+  std::ofstream manifest_out(manifest_path);
+  if (!manifest_out.is_open()) {
+    throw std::runtime_error("could not open sample manifest output " +
+                             manifest_path.string());
+  }
+  manifest_out << manifest.dump(2) << "\n";
+  if (!manifest_out.good()) {
+    throw std::runtime_error("failed while writing sample manifest output " +
+                             manifest_path.string());
+  }
+}
+
 void append_column_to_batch(ColumnBatch& batch,
                             const campaign::Grid& grid,
                             std::int32_t i,
@@ -981,6 +1435,8 @@ void write_profile_json(const std::filesystem::path& path,
                         std::uint64_t r_inner,
                         std::uint64_t r_outer,
                         const std::string& region_spec,
+                        const campaign::Grid& grid,
+                        const campaign::CampaignConstants& constants,
                         std::size_t chunk_size,
                         std::uint64_t active_tiles,
                         const RunStats& stats,
@@ -992,7 +1448,10 @@ void write_profile_json(const std::filesystem::path& path,
                         const std::optional<std::string>& span_cert_path,
                         const std::optional<std::string>& sample_manifest_path,
                         const std::optional<std::string>& tile_sample_path,
+                        TelemetryLevel telemetry_level,
                         const std::optional<std::string>& stats_level,
+                        std::uint64_t sample_seed,
+                        std::size_t sample_target_count,
                         bool trace_spanning,
                         const campaign::SpanningTrace& spanning_trace) {
   nlohmann::json overflow_diags = nlohmann::json::array();
@@ -1015,9 +1474,28 @@ void write_profile_json(const std::filesystem::path& path,
 
   nlohmann::json profile = {
       {"schema_version", 1},
+      {"telemetry_level", telemetry_level_name(telemetry_level)},
       {"command", command},
-      {"radii", {{"k_sq", k_sq}, {"r_inner", r_inner}, {"r_outer", r_outer}}},
+      {"build",
+       {{"commit", GAUSSIAN_MOAT_GIT_COMMIT},
+        {"identity", std::string("campaign_main_cuda:") +
+                         GAUSSIAN_MOAT_GIT_COMMIT + ":sm_" +
+                         GAUSSIAN_MOAT_CUDA_ARCH},
+        {"cuda_arch", std::string("sm_") + GAUSSIAN_MOAT_CUDA_ARCH}}},
+      {"radii",
+       {{"k_sq", k_sq},
+        {"r_inner", r_inner},
+        {"r_outer", r_outer},
+        {"width", r_outer - r_inner}}},
       {"region", region_spec},
+      {"hashes",
+       {{"grid", campaign::grid_params_hash(grid)},
+        {"grid_hash", campaign::grid_params_hash(grid)},
+        {"constants", constants.canonical_hash()},
+        {"constants_hash", constants.canonical_hash()},
+        {"mr_witness", campaign::CampaignConstants::mr_witness_set_sha256()},
+        {"mr_witness_hash",
+         campaign::CampaignConstants::mr_witness_set_sha256()}}},
       {"snapshot_enabled", snapshot_enabled},
       {"early_exit_enabled", early_exit_enabled},
       {"early_exit_taken", stats.early_exit_taken},
@@ -1076,15 +1554,23 @@ void write_profile_json(const std::filesystem::path& path,
         {"phase2_peak_bytes", stats.dispatch.phase2_peak_bytes},
         {"pinned_host_bytes", stats.dispatch.pinned_host_bytes}}},
       {"overflow_diagnostics", overflow_diags},
+      {"artifacts",
+       {{"span_cert_path", span_cert_path.value_or("")},
+        {"sample_manifest_path", sample_manifest_path.value_or("")},
+        {"tile_sample_path", tile_sample_path.value_or("")}}},
   };
 
   if (span_cert_path.has_value() || sample_manifest_path.has_value() ||
-      tile_sample_path.has_value() || stats_level.has_value()) {
+      tile_sample_path.has_value() || stats_level.has_value() ||
+      telemetry_level != TelemetryLevel::kNone) {
     profile["stats_v2"] = {
         {"stats_level", stats_level.value_or("")},
+        {"telemetry_level", telemetry_level_name(telemetry_level)},
         {"geo_i_tiles", stats.geo_i_tiles},
         {"geo_o_tiles", stats.geo_o_tiles},
         {"tile_samples_written", stats.tile_samples_written},
+        {"sample_seed", sample_seed},
+        {"sample_target_count", sample_target_count},
         {"span_cert_path", span_cert_path.value_or("")},
         {"sample_manifest_path", sample_manifest_path.value_or("")},
         {"tile_sample_path", tile_sample_path.value_or("")},
@@ -1186,7 +1672,7 @@ bool flush_batch(ColumnBatch& batch,
                  std::uint64_t k_sq,
                  std::uint64_t r_inner,
                  std::uint64_t r_outer,
-                 std::ofstream* tile_sample_out,
+                 StratifiedTileSampler* sampler,
                  bool early_exit_enabled) {
   if (batch.tiles.empty()) {
     batch.clear();
@@ -1204,8 +1690,9 @@ bool flush_batch(ColumnBatch& batch,
   stats.app_batches += 1;
   stats.emitted_overflow_tileops += count_emitted_overflow_tileops(tileops);
   accumulate_dispatch_stats(stats.dispatch, batch_stats);
-  account_tile_stats_and_samples(batch.tiles, tileops, k_sq, r_inner, r_outer,
-                                 stats, tile_sample_out);
+  (void)k_sq;
+  account_tile_stats_and_samples(batch.tiles, tileops, stats, sampler, r_inner,
+                                 r_outer);
 
   std::size_t offset = 0;
   for (const ColumnBatch::Column& column : batch.columns) {
@@ -1382,10 +1869,15 @@ int main(int argc, char** argv) {
   std::optional<std::string> out_alias_path;
   std::optional<std::string> profile_path;
   std::optional<std::string> stats_level;
+  std::optional<TelemetryLevel> telemetry_level_arg;
   std::optional<std::string> span_cert_path;
   std::optional<std::string> sample_manifest_path;
   std::optional<std::string> tile_sample_path;
+  std::optional<std::uint64_t> sample_seed_arg;
+  std::optional<std::size_t> tile_sample_count_arg;
   std::size_t chunk_size = kDefaultChunkSize;
+  std::size_t tile_sample_count = kDefaultAuditTileSampleTarget;
+  bool legacy_stats_level_profile = false;
   bool no_early_exit = false;
   bool overlap_compositor = false;
   bool overflow_diagnostics = false;
@@ -1469,12 +1961,20 @@ int main(int argc, char** argv) {
     } else if (take_val("--profile", val)) {
       profile_path = val;
       timing = true;
+    } else if (take_val("--telemetry", val)) {
+      TelemetryLevel parsed;
+      if (!parse_telemetry_level(val, parsed)) {
+        std::cerr << "Error: unsupported --telemetry value: " << val << "\n";
+        return 2;
+      }
+      telemetry_level_arg = parsed;
     } else if (take_val("--stats-level", val)) {
       if (val != "profile") {
         std::cerr << "Error: unsupported --stats-level value: " << val << "\n";
         return 2;
       }
       stats_level = val;
+      legacy_stats_level_profile = true;
     } else if (take_val("--emit-span-cert", val)) {
       span_cert_path = val;
       trace_spanning = true;
@@ -1483,6 +1983,23 @@ int main(int argc, char** argv) {
       sample_manifest_path = val;
     } else if (take_val("--tile-sample-out", val)) {
       tile_sample_path = val;
+    } else if (take_val("--tile-sample-count", val)) {
+      std::uint64_t v;
+      if (!parse_uint64(val, v) || v == 0 ||
+          v > std::numeric_limits<std::size_t>::max()) {
+        std::cerr << "Error: invalid --tile-sample-count value: " << val
+                  << "\n";
+        return 2;
+      }
+      tile_sample_count_arg = static_cast<std::size_t>(v);
+      tile_sample_count = static_cast<std::size_t>(v);
+    } else if (take_val("--sample-seed", val)) {
+      std::uint64_t v;
+      if (!parse_uint64(val, v)) {
+        std::cerr << "Error: invalid --sample-seed value: " << val << "\n";
+        return 2;
+      }
+      sample_seed_arg = v;
     } else if (a == "--allow-uncertified-boundary-band") {
       allow_uncertified_boundary_band = true;
     } else if (take_val("--threads", val)) {
@@ -1522,6 +2039,46 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  TelemetryLevel telemetry_level = telemetry_level_arg.value_or(
+      profile_path.has_value() ? TelemetryLevel::kProfile
+                               : TelemetryLevel::kNone);
+  if (legacy_stats_level_profile) {
+    if (telemetry_level_arg.has_value() &&
+        telemetry_level_arg.value() != TelemetryLevel::kProfile) {
+      std::cerr << "Error: --stats-level profile is a legacy alias for "
+                << "--telemetry=profile and cannot be combined with a "
+                << "different --telemetry value\n";
+      return 2;
+    }
+    telemetry_level = TelemetryLevel::kProfile;
+  }
+  if (tile_sample_path.has_value() || sample_manifest_path.has_value()) {
+    if (telemetry_level == TelemetryLevel::kNone ||
+        telemetry_level == TelemetryLevel::kProfile) {
+      telemetry_level = TelemetryLevel::kAudit;
+    }
+    if (legacy_stats_level_profile && !tile_sample_count_arg.has_value()) {
+      tile_sample_count = kLegacyStatsTileSampleTarget;
+    }
+  }
+  const bool sample_artifacts_enabled = telemetry_writes_samples(telemetry_level);
+
+  if (sample_artifacts_enabled && !tile_sample_path.has_value()) {
+    std::cerr << "Error: --telemetry=" << telemetry_level_name(telemetry_level)
+              << " requires --tile-sample-out\n";
+    return 2;
+  }
+  if (sample_artifacts_enabled && !sample_manifest_path.has_value()) {
+    std::cerr << "Error: --telemetry=" << telemetry_level_name(telemetry_level)
+              << " requires --sample-manifest\n";
+    return 2;
+  }
+  if (!sample_artifacts_enabled &&
+      (tile_sample_count_arg.has_value() || sample_seed_arg.has_value())) {
+    std::cerr << "Error: sample count/seed require --telemetry=audit or full\n";
+    return 2;
+  }
+
   if (snapshot_out_path.has_value() && out_alias_path.has_value() &&
       *snapshot_out_path != *out_alias_path) {
     std::cerr << "Error: --out and --snapshot-out differ\n";
@@ -1536,17 +2093,16 @@ int main(int argc, char** argv) {
     return 2;
   }
 
-  if (overlap_compositor &&
-      (tile_sample_path.has_value() || stats_level.has_value())) {
+  if (overlap_compositor && sample_artifacts_enabled) {
     std::cerr << "Error: --overlap-compositor is not supported with "
-              << "--tile-sample-out or --stats-level in verification mode\n";
+              << "--telemetry=audit/full sample emission\n";
     return 2;
   }
 
   if (!no_early_exit && !snapshot_path.has_value() &&
-      (tile_sample_path.has_value() || stats_level.has_value())) {
-    std::cerr << "Error: --tile-sample-out/--stats-level require "
-              << "--no-early-exit so artifacts cover the full annulus\n";
+      sample_artifacts_enabled) {
+    std::cerr << "Error: --telemetry=audit/full require --no-early-exit so "
+              << "sample artifacts cover the full annulus\n";
     return 2;
   }
 
@@ -1635,6 +2191,12 @@ int main(int argc, char** argv) {
   RunStats run_stats;
   const bool snapshot_enabled = snapshot_path.has_value();
   const bool early_exit_enabled = !snapshot_enabled && !no_early_exit;
+  const std::uint64_t sample_seed = sample_seed_arg.value_or(
+      default_sample_seed(*k_sq, *r_inner, *r_outer, *region_spec));
+  std::optional<StratifiedTileSampler> sampler;
+  if (sample_artifacts_enabled) {
+    sampler.emplace(telemetry_level, sample_seed, tile_sample_count);
+  }
   campaign::Verdict verdict = campaign::Verdict::kUnknown;
   campaign::SpanningTrace spanning_trace;
 
@@ -1657,17 +2219,6 @@ int main(int argc, char** argv) {
           std::filesystem::path(*snapshot_path), grid, constants);
       timings.snapshot += Clock::now() - snapshot_start;
     }
-
-    std::ofstream tile_sample_stream;
-    if (tile_sample_path.has_value()) {
-      tile_sample_stream.open(*tile_sample_path);
-      if (!tile_sample_stream.is_open()) {
-        throw std::runtime_error("could not open tile sample output " +
-                                 *tile_sample_path);
-      }
-    }
-    std::ofstream* tile_sample_out =
-        tile_sample_path.has_value() ? &tile_sample_stream : nullptr;
 
     ColumnBatch batch;
     if (overlap_compositor) {
@@ -1743,7 +2294,8 @@ int main(int argc, char** argv) {
           if (column_tiles == 0) {
             if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
                             timings, run_stats, *k_sq, *r_inner, *r_outer,
-                            tile_sample_out, early_exit_enabled)) {
+                            sampler.has_value() ? &*sampler : nullptr,
+                            early_exit_enabled)) {
               break;
             }
           if (ingest_empty_column(i, compositor, snapshot_writer.get(), timings,
@@ -1757,7 +2309,8 @@ int main(int argc, char** argv) {
             batch.tiles.size() + column_tiles > chunk_size) {
           if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
                           timings, run_stats, *k_sq, *r_inner, *r_outer,
-                          tile_sample_out, early_exit_enabled)) {
+                          sampler.has_value() ? &*sampler : nullptr,
+                          early_exit_enabled)) {
             break;
           }
         }
@@ -1775,7 +2328,8 @@ int main(int argc, char** argv) {
       if (!run_stats.early_exit_taken) {
         if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
                         timings, run_stats, *k_sq, *r_inner, *r_outer,
-                        tile_sample_out, early_exit_enabled)) {
+                        sampler.has_value() ? &*sampler : nullptr,
+                        early_exit_enabled)) {
           // SPANNING was observed after the final dispatched column.
         }
       }
@@ -1798,6 +2352,12 @@ int main(int argc, char** argv) {
                              constants, *k_sq, *r_inner, *r_outer,
                              *region_spec, spanning_trace);
     }
+    if (sampler.has_value()) {
+      write_sample_artifacts(std::filesystem::path(*sample_manifest_path),
+                             std::filesystem::path(*tile_sample_path), *sampler,
+                             *k_sq, *r_inner, *r_outer, *region_spec,
+                             run_stats);
+    }
   } catch (const std::exception& e) {
     std::cerr << "Error in CUDA streaming campaign: " << e.what() << "\n";
     return 5;
@@ -1808,12 +2368,13 @@ int main(int argc, char** argv) {
   if (profile_path.has_value()) {
     try {
       write_profile_json(std::filesystem::path(*profile_path), command, *k_sq,
-                         *r_inner, *r_outer, *region_spec, chunk_size,
-                         static_cast<std::uint64_t>(grid.total_tiles),
+                         *r_inner, *r_outer, *region_spec, grid, constants,
+                         chunk_size, static_cast<std::uint64_t>(grid.total_tiles),
                          run_stats, timings, verdict, snapshot_enabled,
                          early_exit_enabled, bz_record, span_cert_path,
-                         sample_manifest_path, tile_sample_path, stats_level,
-                         trace_spanning, spanning_trace);
+                         sample_manifest_path, tile_sample_path,
+                         telemetry_level, stats_level, sample_seed,
+                         tile_sample_count, trace_spanning, spanning_trace);
     } catch (const std::exception& e) {
       std::cerr << "Error writing profile: " << e.what() << "\n";
       return 7;
@@ -1829,6 +2390,7 @@ int main(int argc, char** argv) {
             << "  produced tiles: " << run_stats.produced_tiles << "\n"
             << "  ingested tiles: " << run_stats.ingested_tiles << "\n"
             << "  ingested columns: " << run_stats.ingested_columns << "\n"
+            << "  telemetry: " << telemetry_level_name(telemetry_level) << "\n"
             << "  chunk-size: " << chunk_size << "\n"
             << "  app batches: " << run_stats.app_batches << "\n"
             << "  chunk_overshoot_tiles: "
@@ -1854,6 +2416,15 @@ int main(int argc, char** argv) {
             << "  constants_hash: " << constants.canonical_hash() << "\n"
             << "  mr_witness_sha256: "
             << campaign::CampaignConstants::mr_witness_set_sha256() << "\n";
+
+  if (sample_artifacts_enabled) {
+    std::cout << "  sample_manifest: " << *sample_manifest_path << "\n"
+              << "  tile_sample_out: " << *tile_sample_path << "\n"
+              << "  tile_samples_written: "
+              << run_stats.tile_samples_written << "\n"
+              << "  sample_seed: " << sample_seed << "\n"
+              << "  sample_target_count: " << tile_sample_count << "\n";
+  }
 
   if (timing) {
     std::cout << "  grid-init:    " << std::setw(6)

@@ -1,0 +1,53 @@
+{
+  "schema_version": 1,
+  "claim_id": "fixture-k36-r100-r500",
+  "k_sq": 36,
+  "r_inner": 100,
+  "r_outer": 500,
+  "width": 400,
+  "region": "full-octant",
+  "seed": 1,
+  "target_tile_samples": 1,
+  "sample_count": 1,
+  "class_counts": {
+    "geo_I": 1,
+    "geo_O": 0,
+    "axis": 0,
+    "diagonal": 0,
+    "high_pressure": 0,
+    "deterministic_random": 0
+  },
+  "selection": [
+    {
+      "class": "geo_I",
+      "description": "Fixture inner-band tile.",
+      "target_count": 1
+    },
+    {
+      "class": "geo_O",
+      "description": "Exhausted outer-band quota for the tiny fixture.",
+      "target_count": 1,
+      "population_exhausted": true
+    },
+    {
+      "class": "axis",
+      "description": "No axis quota for the tiny fixture.",
+      "target_count": 0
+    },
+    {
+      "class": "diagonal",
+      "description": "No diagonal quota for the tiny fixture.",
+      "target_count": 0
+    },
+    {
+      "class": "high_pressure",
+      "description": "No pressure quota for the tiny fixture.",
+      "target_count": 0
+    },
+    {
+      "class": "deterministic_random",
+      "description": "No deterministic deterministic random quota for the tiny fixture.",
+      "target_count": 0
+    }
+  ]
+}

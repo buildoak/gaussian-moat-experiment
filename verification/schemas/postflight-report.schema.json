@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaussian-moat.local/schemas/postflight-report.schema.json",
+  "title": "Gaussian moat post-flight checker report",
+  "type": "object",
+  "required": ["schema_version", "status", "errors", "warnings"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "bundle_id": { "type": "string" },
+    "status": {
+      "enum": [
+        "REJECT",
+        "RUN_CONTRACT_PASS",
+        "TILE_SAMPLE_AUDIT_PASS",
+        "SPAN_PROOF_PASS",
+        "MOAT_PROOF_PASS",
+        "CLAIM_PROOF_MISSING"
+      ]
+    },
+    "status_vocabulary": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "REJECT",
+          "RUN_CONTRACT_PASS",
+          "TILE_SAMPLE_AUDIT_PASS",
+          "SPAN_PROOF_PASS",
+          "MOAT_PROOF_PASS",
+          "CLAIM_PROOF_MISSING"
+        ]
+      }
+    },
+    "detail": {
+      "type": "object",
+      "properties": {
+        "claim_id": { "type": "string" },
+        "verdict": { "enum": ["SPANNING", "MOAT"] },
+        "row_class": { "type": "string" },
+        "telemetry_level": { "type": "string" },
+        "run_contract": { "enum": ["PASS", "FAIL"] },
+        "sample_audit": { "enum": ["PASS", "NOT_PRESENT"] },
+        "span_proof": { "enum": ["PASS", "NOT_PRESENT"] }
+      },
+      "additionalProperties": true
+    },
+    "errors": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "warnings": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "additionalProperties": true
+}
