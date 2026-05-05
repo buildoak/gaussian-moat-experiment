@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "claim_id": "k36-lower-moat-73359375-w32768",
+  "k_sq": 36,
+  "r_inner": 73359375,
+  "r_outer": 73392143,
+  "region": "full-octant",
+  "seed": 36073359375,
+  "target_tile_samples": 1024,
+  "target_seam_samples": 256,
+  "selection": [
+    {
+      "class": "geo_i_band",
+      "description": "Tiles with primes flagged in the inner geometric band.",
+      "target_count": 160
+    },
+    {
+      "class": "geo_o_band",
+      "description": "Tiles with primes flagged in the outer geometric band.",
+      "target_count": 160
+    },
+    {
+      "class": "axis_near",
+      "description": "Tiles near x=0.",
+      "target_count": 64
+    },
+    {
+      "class": "diagonal_near",
+      "description": "Tiles near y=x.",
+      "target_count": 64
+    },
+    {
+      "class": "tower_tip",
+      "description": "Tiles near the final closing tip of the octant tower.",
+      "target_count": 64
+    },
+    {
+      "class": "chunk_boundary",
+      "description": "Tiles around app chunk boundaries.",
+      "target_count": 128
+    },
+    {
+      "class": "deterministic_random",
+      "description": "Seeded deterministic reservoir over active production tiles.",
+      "target_count": 448
+    }
+  ]
+}

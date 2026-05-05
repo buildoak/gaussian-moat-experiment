@@ -37,6 +37,8 @@ First-read order:
 | File | Role | Status |
 |---|---|---|
 | `current-gate-board.md` | Accepted executable gates and baseline performance | current gate board |
+| `k36-lower-moat-verification-plan-2026-05-05.md` | Agreed first implementation plan for paper-grade verification substrate around the lower-K36 W32768 bracket | current goal pointer |
+| `k36-lower-verification-evidence-2026-05-05.md` | Evidence report for the first lower-K36 verification hardening wave | current evidence report |
 | `agentic-optimization-workflow.md` | Long-running optimization workflow | current workflow |
 | `optimization-safety-checklist.md` | Do-not-break checklist for math/TileOp/port/verdict semantics | current checklist |
 | `performance-report-template.md` | Required performance report shape | current template |

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaussian-moat.local/schemas/span-cert.schema.json",
+  "title": "SPANNING coordinate certificate",
+  "type": "object",
+  "required": ["schema_version", "k_sq", "r_inner", "r_outer", "region", "path"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "claim_id": { "type": "string" },
+    "k_sq": { "type": "integer", "minimum": 1 },
+    "r_inner": { "type": "integer", "minimum": 1 },
+    "r_outer": { "type": "integer", "minimum": 1 },
+    "region": { "enum": ["full-octant"] },
+    "source": { "type": "string" },
+    "path": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": ["a", "b"],
+        "properties": {
+          "a": { "type": "integer", "minimum": 0 },
+          "b": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaussian-moat.local/schemas/sample-manifest.schema.json",
+  "title": "Production tile sample manifest",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "claim_id",
+    "k_sq",
+    "r_inner",
+    "r_outer",
+    "region",
+    "seed",
+    "selection"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "claim_id": { "type": "string", "minLength": 1 },
+    "k_sq": { "type": "integer", "minimum": 1 },
+    "r_inner": { "type": "integer", "minimum": 1 },
+    "r_outer": { "type": "integer", "minimum": 1 },
+    "region": { "enum": ["full-octant"] },
+    "seed": { "type": "integer", "minimum": 0 },
+    "target_tile_samples": { "type": "integer", "minimum": 1 },
+    "target_seam_samples": { "type": "integer", "minimum": 0 },
+    "selection": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["class", "description"],
+        "properties": {
+          "class": { "type": "string" },
+          "description": { "type": "string" },
+          "target_count": { "type": "integer", "minimum": 0 }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

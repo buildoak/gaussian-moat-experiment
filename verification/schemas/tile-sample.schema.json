@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaussian-moat.local/schemas/tile-sample.schema.json",
+  "title": "Production tile sample JSONL record",
+  "type": "object",
+  "required": ["schema_version", "k_sq", "r_inner", "r_outer", "tile", "tileop"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "k_sq": { "type": "integer", "minimum": 1 },
+    "r_inner": { "type": "integer", "minimum": 1 },
+    "r_outer": { "type": "integer", "minimum": 1 },
+    "sample_class": { "type": "string" },
+    "tile": {
+      "type": "object",
+      "required": ["i", "j", "a_lo", "b_lo"],
+      "properties": {
+        "i": { "type": "integer" },
+        "j": { "type": "integer" },
+        "a_lo": { "type": "integer" },
+        "b_lo": { "type": "integer" }
+      },
+      "additionalProperties": false
+    },
+    "tileop": {
+      "type": "object",
+      "required": ["n", "face_groups", "inner_flags", "outer_flags", "tile_flags"],
+      "properties": {
+        "n": { "type": "array", "minItems": 4, "maxItems": 4, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+        "face_groups": { "type": "array", "minItems": 192, "maxItems": 192, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+        "inner_flags": { "type": "array", "minItems": 16, "maxItems": 16, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+        "outer_flags": { "type": "array", "minItems": 16, "maxItems": 16, "items": { "type": "integer", "minimum": 0, "maximum": 255 } },
+        "tile_flags": { "type": "integer", "minimum": 0, "maximum": 255 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": true
+}

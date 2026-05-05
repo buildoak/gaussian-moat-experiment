@@ -33,6 +33,7 @@
 #include "campaign/constants.h"
 #include "campaign/grid.h"
 #include "campaign/region.h"
+#include "campaign/sieve.h"
 #include "campaign/snapshot.h"
 #include "campaign/streaming_compositor.h"
 #include "campaign/tileop.h"
@@ -45,6 +46,17 @@ using Duration = Clock::duration;
 
 inline constexpr std::size_t kDefaultChunkSize = 200000;
 inline constexpr std::size_t kMaxOverflowDiagnostics = 10;
+inline constexpr std::size_t kDefaultTileSampleLimit = 1024;
+
+struct BzRecord {
+  bool checked = false;
+  bool clean = false;
+  bool override_used = false;
+  std::uint64_t sqrt_k = 0;
+  std::uint64_t bz_i_candidate_count = 0;
+  std::uint64_t bz_o_candidate_count = 0;
+  std::uint64_t bad_norm_count = 0;
+};
 
 struct ColumnBatch {
   struct Column {
@@ -78,6 +90,9 @@ struct RunStats {
   std::uint64_t total_chunk_overshoot_tiles = 0;
   std::uint64_t max_chunk_overshoot_tiles = 0;
   std::uint64_t emitted_overflow_tileops = 0;
+  std::uint64_t geo_i_tiles = 0;
+  std::uint64_t geo_o_tiles = 0;
+  std::uint64_t tile_samples_written = 0;
   bool early_exit_taken = false;
   cuda_campaign::DispatchStats dispatch;
 };
@@ -110,6 +125,12 @@ void print_help(const char* prog) {
       << "  --profile <path>       Write JSON profile; implies --timing\n"
       << "  --trace-spanning       Print/profile first SPANNING provenance\n"
       << "  --trace-spanning-path  Reconstruct first SPANNING stitch path\n"
+      << "  --stats-level <level>  Optional stats level: profile\n"
+      << "  --emit-span-cert <p>   Reserved coordinate cert output path\n"
+      << "  --sample-manifest <p>  Record production sample manifest path\n"
+      << "  --tile-sample-out <p>  Write sampled production TileOps as JSONL\n"
+      << "  --allow-uncertified-boundary-band\n"
+      << "                         Allow accepted output without clean BZ record\n"
       << "  --overflow-diagnostics Capture first overflow tiles in profile output\n"
       << "  --threads=N            Accepted for CPU CLI compatibility; ignored\n"
       << "\n"
@@ -151,6 +172,71 @@ bool annulus_thickness_ok(std::uint64_t r_inner,
   const unsigned __int128 lhs =
       static_cast<unsigned __int128>(delta) * delta;
   return lhs > static_cast<unsigned __int128>(annulus_thickness_rhs(k_sq));
+}
+
+bool is_square_u64(std::uint64_t n, std::uint64_t& root) {
+  root = static_cast<std::uint64_t>(campaign::floor_isqrt(
+      static_cast<std::int64_t>(n)));
+  return root * root == n;
+}
+
+bool in_bz_i(std::uint64_t n, std::uint64_t r, std::uint64_t sqrt_k) {
+  const unsigned __int128 upper =
+      static_cast<unsigned __int128>(r + sqrt_k) * (r + sqrt_k);
+  if (static_cast<unsigned __int128>(n) > upper) return false;
+  const unsigned __int128 base =
+      static_cast<unsigned __int128>(r) * r - 1 +
+      static_cast<unsigned __int128>(sqrt_k) * sqrt_k;
+  if (static_cast<unsigned __int128>(n) <= base) return false;
+  const unsigned __int128 x = static_cast<unsigned __int128>(n) - base;
+  return x * x >
+         4 * static_cast<unsigned __int128>(sqrt_k) * sqrt_k *
+             (static_cast<unsigned __int128>(r) * r - 1);
+}
+
+bool in_bz_o(std::uint64_t n, std::uint64_t r, std::uint64_t sqrt_k) {
+  const unsigned __int128 lower =
+      static_cast<unsigned __int128>(r - sqrt_k) * (r - sqrt_k);
+  if (static_cast<unsigned __int128>(n) < lower) return false;
+  const unsigned __int128 base =
+      static_cast<unsigned __int128>(r) * r + 1 +
+      static_cast<unsigned __int128>(sqrt_k) * sqrt_k;
+  if (static_cast<unsigned __int128>(n) >= base) return false;
+  const unsigned __int128 x = base - static_cast<unsigned __int128>(n);
+  return x * x >
+         4 * static_cast<unsigned __int128>(sqrt_k) * sqrt_k *
+             (static_cast<unsigned __int128>(r) * r + 1);
+}
+
+BzRecord compute_bz_record(std::uint64_t k_sq,
+                           std::uint64_t r_inner,
+                           std::uint64_t r_outer,
+                           bool override_used) {
+  BzRecord record;
+  record.override_used = override_used;
+  if (!is_square_u64(k_sq, record.sqrt_k)) {
+    record.checked = false;
+    record.clean = false;
+    return record;
+  }
+  record.checked = true;
+  const std::uint64_t inner_upper = (r_inner + record.sqrt_k) *
+                                    (r_inner + record.sqrt_k);
+  for (std::uint64_t n = inner_upper - 8; n <= inner_upper; ++n) {
+    if (!in_bz_i(n, r_inner, record.sqrt_k)) continue;
+    ++record.bz_i_candidate_count;
+    if (campaign::is_gaussian_prime_norm(n)) ++record.bad_norm_count;
+    if (n == std::numeric_limits<std::uint64_t>::max()) break;
+  }
+  const std::uint64_t outer_lower = (r_outer - record.sqrt_k) *
+                                    (r_outer - record.sqrt_k);
+  for (std::uint64_t n = outer_lower; n <= outer_lower + 8; ++n) {
+    if (!in_bz_o(n, r_outer, record.sqrt_k)) continue;
+    ++record.bz_o_candidate_count;
+    if (campaign::is_gaussian_prime_norm(n)) ++record.bad_norm_count;
+  }
+  record.clean = record.bad_norm_count == 0;
+  return record;
 }
 
 campaign::Region resolve_region(const std::string& spec,
@@ -398,6 +484,86 @@ std::uint64_t count_emitted_overflow_tileops(
   return count;
 }
 
+bool tile_has_any_flag(const std::uint8_t* flags) {
+  for (int i = 0; i < 16; ++i) {
+    if (flags[i] != 0) return true;
+  }
+  return false;
+}
+
+std::uint64_t sample_hash(const campaign::TileCoord& coord,
+                          std::uint64_t r_inner,
+                          std::uint64_t r_outer) {
+  std::uint64_t h = 0x9e3779b97f4a7c15ULL;
+  const auto mix = [&](std::uint64_t v) {
+    h ^= v + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
+  };
+  mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(coord.i)));
+  mix(static_cast<std::uint64_t>(static_cast<std::uint32_t>(coord.j)));
+  mix(r_inner);
+  mix(r_outer);
+  return h;
+}
+
+nlohmann::json tileop_json(const campaign::TileOp& op) {
+  nlohmann::json n = nlohmann::json::array();
+  for (int i = 0; i < 4; ++i) n.push_back(op.n[i]);
+  nlohmann::json face_groups = nlohmann::json::array();
+  for (std::uint8_t value : op.face_groups) face_groups.push_back(value);
+  nlohmann::json inner_flags = nlohmann::json::array();
+  for (std::uint8_t value : op.inner_flags) inner_flags.push_back(value);
+  nlohmann::json outer_flags = nlohmann::json::array();
+  for (std::uint8_t value : op.outer_flags) outer_flags.push_back(value);
+  return {
+      {"n", n},
+      {"face_groups", face_groups},
+      {"inner_flags", inner_flags},
+      {"outer_flags", outer_flags},
+      {"tile_flags", op.tile_flags},
+  };
+}
+
+void account_tile_stats_and_samples(
+    const std::vector<campaign::TileCoord>& coords,
+    std::span<const campaign::TileOp> tileops,
+    std::uint64_t k_sq,
+    std::uint64_t r_inner,
+    std::uint64_t r_outer,
+    RunStats& stats,
+    std::ofstream* tile_sample_out) {
+  for (std::size_t idx = 0; idx < tileops.size(); ++idx) {
+    const campaign::TileOp& op = tileops[idx];
+    const campaign::TileCoord& coord = coords[idx];
+    const bool has_i = tile_has_any_flag(op.inner_flags);
+    const bool has_o = tile_has_any_flag(op.outer_flags);
+    if (has_i) ++stats.geo_i_tiles;
+    if (has_o) ++stats.geo_o_tiles;
+    if (tile_sample_out == nullptr ||
+        stats.tile_samples_written >= kDefaultTileSampleLimit) {
+      continue;
+    }
+    const bool priority = has_i || has_o || coord.i == 0 || coord.j == coord.i;
+    const bool selected =
+        priority || (sample_hash(coord, r_inner, r_outer) % 997ULL) == 0ULL;
+    if (!selected) continue;
+    nlohmann::json rec = {
+        {"schema_version", 1},
+        {"k_sq", k_sq},
+        {"r_inner", r_inner},
+        {"r_outer", r_outer},
+        {"sample_class", priority ? "boundary_priority" : "deterministic_random"},
+        {"tile",
+         {{"i", coord.i},
+          {"j", coord.j},
+          {"a_lo", coord.a_lo},
+          {"b_lo", coord.b_lo}}},
+        {"tileop", tileop_json(op)},
+    };
+    *tile_sample_out << rec.dump() << "\n";
+    ++stats.tile_samples_written;
+  }
+}
+
 void append_column_to_batch(ColumnBatch& batch,
                             const campaign::Grid& grid,
                             std::int32_t i,
@@ -433,6 +599,11 @@ void write_profile_json(const std::filesystem::path& path,
                         campaign::Verdict verdict,
                         bool snapshot_enabled,
                         bool early_exit_enabled,
+                        const BzRecord& bz_record,
+                        const std::optional<std::string>& span_cert_path,
+                        const std::optional<std::string>& sample_manifest_path,
+                        const std::optional<std::string>& tile_sample_path,
+                        const std::optional<std::string>& stats_level,
                         bool trace_spanning,
                         const campaign::SpanningTrace& spanning_trace) {
   nlohmann::json overflow_diags = nlohmann::json::array();
@@ -462,6 +633,14 @@ void write_profile_json(const std::filesystem::path& path,
       {"early_exit_enabled", early_exit_enabled},
       {"early_exit_taken", stats.early_exit_taken},
       {"verdict", verdict_name(verdict)},
+      {"bz",
+       {{"checked", bz_record.checked},
+        {"clean", bz_record.clean},
+        {"override_used", bz_record.override_used},
+        {"sqrt_k", bz_record.sqrt_k},
+        {"bz_i_candidate_count", bz_record.bz_i_candidate_count},
+        {"bz_o_candidate_count", bz_record.bz_o_candidate_count},
+        {"bad_norm_count", bz_record.bad_norm_count}}},
       {"chunk",
        {{"target_tiles", chunk_size},
         {"app_batches", stats.app_batches},
@@ -509,6 +688,19 @@ void write_profile_json(const std::filesystem::path& path,
         {"pinned_host_bytes", stats.dispatch.pinned_host_bytes}}},
       {"overflow_diagnostics", overflow_diags},
   };
+
+  if (span_cert_path.has_value() || sample_manifest_path.has_value() ||
+      tile_sample_path.has_value() || stats_level.has_value()) {
+    profile["stats_v2"] = {
+        {"stats_level", stats_level.value_or("")},
+        {"geo_i_tiles", stats.geo_i_tiles},
+        {"geo_o_tiles", stats.geo_o_tiles},
+        {"tile_samples_written", stats.tile_samples_written},
+        {"span_cert_path", span_cert_path.value_or("")},
+        {"sample_manifest_path", sample_manifest_path.value_or("")},
+        {"tile_sample_path", tile_sample_path.value_or("")},
+    };
+  }
 
   if (trace_spanning) {
     profile["spanning_trace"] = {
@@ -602,6 +794,10 @@ bool flush_batch(ColumnBatch& batch,
                  campaign::SnapshotWriter* snapshot_writer,
                  Timings& timings,
                  RunStats& stats,
+                 std::uint64_t k_sq,
+                 std::uint64_t r_inner,
+                 std::uint64_t r_outer,
+                 std::ofstream* tile_sample_out,
                  bool early_exit_enabled) {
   if (batch.tiles.empty()) {
     batch.clear();
@@ -619,6 +815,8 @@ bool flush_batch(ColumnBatch& batch,
   stats.app_batches += 1;
   stats.emitted_overflow_tileops += count_emitted_overflow_tileops(tileops);
   accumulate_dispatch_stats(stats.dispatch, batch_stats);
+  account_tile_stats_and_samples(batch.tiles, tileops, k_sq, r_inner, r_outer,
+                                 stats, tile_sample_out);
 
   std::size_t offset = 0;
   for (const ColumnBatch::Column& column : batch.columns) {
@@ -794,10 +992,15 @@ int main(int argc, char** argv) {
   std::optional<std::string> snapshot_out_path;
   std::optional<std::string> out_alias_path;
   std::optional<std::string> profile_path;
+  std::optional<std::string> stats_level;
+  std::optional<std::string> span_cert_path;
+  std::optional<std::string> sample_manifest_path;
+  std::optional<std::string> tile_sample_path;
   std::size_t chunk_size = kDefaultChunkSize;
   bool no_early_exit = false;
   bool overlap_compositor = false;
   bool overflow_diagnostics = false;
+  bool allow_uncertified_boundary_band = false;
   bool trace_spanning = false;
   bool trace_spanning_path = false;
   bool timing = false;
@@ -877,6 +1080,22 @@ int main(int argc, char** argv) {
     } else if (take_val("--profile", val)) {
       profile_path = val;
       timing = true;
+    } else if (take_val("--stats-level", val)) {
+      if (val != "profile") {
+        std::cerr << "Error: unsupported --stats-level value: " << val << "\n";
+        return 2;
+      }
+      stats_level = val;
+    } else if (take_val("--emit-span-cert", val)) {
+      span_cert_path = val;
+      trace_spanning = true;
+      trace_spanning_path = true;
+    } else if (take_val("--sample-manifest", val)) {
+      sample_manifest_path = val;
+    } else if (take_val("--tile-sample-out", val)) {
+      tile_sample_path = val;
+    } else if (a == "--allow-uncertified-boundary-band") {
+      allow_uncertified_boundary_band = true;
     } else if (take_val("--threads", val)) {
       std::uint64_t v;
       if (!parse_uint64(val, v) || v == 0) {
@@ -928,6 +1147,27 @@ int main(int argc, char** argv) {
     return 2;
   }
 
+  if (overlap_compositor &&
+      (tile_sample_path.has_value() || stats_level.has_value())) {
+    std::cerr << "Error: --overlap-compositor is not supported with "
+              << "--tile-sample-out or --stats-level in verification mode\n";
+    return 2;
+  }
+
+  if (!no_early_exit && !snapshot_path.has_value() &&
+      (tile_sample_path.has_value() || stats_level.has_value())) {
+    std::cerr << "Error: --tile-sample-out/--stats-level require "
+              << "--no-early-exit so artifacts cover the full annulus\n";
+    return 2;
+  }
+
+  if (span_cert_path.has_value()) {
+    std::cerr << "Error: --emit-span-cert is reserved for coordinate "
+              << "certificates and is not implemented yet; use "
+              << "--trace-spanning-path for stitch traces\n";
+    return 2;
+  }
+
   if (static_cast<std::uint32_t>(*k_sq) !=
       static_cast<std::uint32_t>(campaign::k_sq_value)) {
     std::cerr << "Error: --k-sq=" << *k_sq
@@ -955,6 +1195,16 @@ int main(int argc, char** argv) {
         *r_inner, *r_outer, k_sq_u32);
   } catch (const std::exception& e) {
     std::cerr << "Error building CampaignConstants: " << e.what() << "\n";
+    return 3;
+  }
+
+  const BzRecord bz_record = compute_bz_record(
+      *k_sq, *r_inner, *r_outer, allow_uncertified_boundary_band);
+  if (!bz_record.clean && !allow_uncertified_boundary_band) {
+    std::cerr << "ERROR: boundary band is not BZ-clean or exact BZ check is "
+              << "unsupported for K=" << *k_sq << ". Use "
+              << "--allow-uncertified-boundary-band only for non-accepted "
+              << "diagnostics.\n";
     return 3;
   }
 
@@ -1025,6 +1275,17 @@ int main(int argc, char** argv) {
           std::filesystem::path(*snapshot_path), grid, constants);
       timings.snapshot += Clock::now() - snapshot_start;
     }
+
+    std::ofstream tile_sample_stream;
+    if (tile_sample_path.has_value()) {
+      tile_sample_stream.open(*tile_sample_path);
+      if (!tile_sample_stream.is_open()) {
+        throw std::runtime_error("could not open tile sample output " +
+                                 *tile_sample_path);
+      }
+    }
+    std::ofstream* tile_sample_out =
+        tile_sample_path.has_value() ? &tile_sample_stream : nullptr;
 
     ColumnBatch batch;
     if (overlap_compositor) {
@@ -1097,11 +1358,12 @@ int main(int argc, char** argv) {
     } else {
       for (std::int32_t i = grid.i_min; i <= grid.i_max; ++i) {
         const std::size_t column_tiles = column_tile_count(grid, i);
-        if (column_tiles == 0) {
-          if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
-                          timings, run_stats, early_exit_enabled)) {
-            break;
-          }
+          if (column_tiles == 0) {
+            if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
+                            timings, run_stats, *k_sq, *r_inner, *r_outer,
+                            tile_sample_out, early_exit_enabled)) {
+              break;
+            }
           if (ingest_empty_column(i, compositor, snapshot_writer.get(), timings,
                                   run_stats, early_exit_enabled)) {
             break;
@@ -1112,7 +1374,8 @@ int main(int argc, char** argv) {
         if (!batch.tiles.empty() &&
             batch.tiles.size() + column_tiles > chunk_size) {
           if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
-                          timings, run_stats, early_exit_enabled)) {
+                          timings, run_stats, *k_sq, *r_inner, *r_outer,
+                          tile_sample_out, early_exit_enabled)) {
             break;
           }
         }
@@ -1129,7 +1392,8 @@ int main(int argc, char** argv) {
 
       if (!run_stats.early_exit_taken) {
         if (flush_batch(batch, dispatcher, compositor, snapshot_writer.get(),
-                        timings, run_stats, early_exit_enabled)) {
+                        timings, run_stats, *k_sq, *r_inner, *r_outer,
+                        tile_sample_out, early_exit_enabled)) {
           // SPANNING was observed after the final dispatched column.
         }
       }
@@ -1157,7 +1421,9 @@ int main(int argc, char** argv) {
                          *r_inner, *r_outer, *region_spec, chunk_size,
                          static_cast<std::uint64_t>(grid.total_tiles),
                          run_stats, timings, verdict, snapshot_enabled,
-                         early_exit_enabled, trace_spanning, spanning_trace);
+                         early_exit_enabled, bz_record, span_cert_path,
+                         sample_manifest_path, tile_sample_path, stats_level,
+                         trace_spanning, spanning_trace);
     } catch (const std::exception& e) {
       std::cerr << "Error writing profile: " << e.what() << "\n";
       return 7;

@@ -134,6 +134,11 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="only inspect stored BZ logs; do not rerun bz_check.py",
     )
+    parser.add_argument(
+        "--require-profile-bz",
+        action="store_true",
+        help="require profile-embedded exact BZ status to be clean",
+    )
     return parser.parse_args()
 
 
@@ -436,6 +441,10 @@ def parse_command(command: Any) -> dict[str, str | bool]:
         "--profile",
         "--snapshot-out",
         "--out",
+        "--stats-level",
+        "--emit-span-cert",
+        "--sample-manifest",
+        "--tile-sample-out",
     }
     bool_flags = {
         "--no-early-exit",
@@ -444,6 +453,7 @@ def parse_command(command: Any) -> dict[str, str | bool]:
         "--trace-spanning-path",
         "--overlap-compositor",
         "--timing",
+        "--allow-uncertified-boundary-band",
     }
     while i < len(command):
         part = command[i]
@@ -785,6 +795,7 @@ def validate_row(
     allow_spanning_without_path: bool,
     allow_early_spanning: bool,
     recompute: bool,
+    require_profile_bz: bool,
 ) -> None:
     label = row.get("label") or "<missing-label>"
     if label == "<missing-label>":
@@ -900,6 +911,26 @@ def validate_row(
         host_counts.get("emitted_overflow_bit_count"),
     )
 
+    bz = profile.get("bz", {})
+    if bz == {} and not require_profile_bz:
+        pass
+    elif not isinstance(bz, dict):
+        fail(findings, label, "profile bz is not an object")
+        bz = {}
+    if bz != {} or require_profile_bz:
+        checked = require_json_bool(findings, label, bz, "checked")
+        clean = require_json_bool(findings, label, bz, "clean")
+        override_used = require_json_bool(findings, label, bz, "override_used")
+        if checked is not None:
+            expect_equal(findings, label, "profile bz.checked", checked, True)
+        if clean is not None:
+            expect_equal(findings, label, "profile bz.clean", clean, True)
+        if override_used is not None:
+            expect_equal(findings, label, "profile bz.override_used", override_used, False)
+        bad_norm_count = bz.get("bad_norm_count")
+        if bad_norm_count is not None:
+            expect_zero(findings, label, "profile bz.bad_norm_count", bad_norm_count)
+
     expect_equal(findings, label, "stdout K_SQ", stdout.ints["K_SQ"], k_sq)
     expect_equal(findings, label, "stdout r_inner", stdout.r_inner, r_inner)
     expect_equal(findings, label, "stdout r_outer", stdout.r_outer, r_outer)
@@ -954,11 +985,18 @@ def validate_row(
     if recompute:
         recompute_bz(findings, label, k_sq=k_sq, r_inner=r_inner, r_outer=r_outer)
 
+    trace_present = "spanning_trace" in profile
     trace = profile.get("spanning_trace", {})
-    if not isinstance(trace, dict):
+    if not trace_present:
+        trace = {}
+    elif not isinstance(trace, dict):
         fail(findings, label, "profile spanning_trace is not an object")
         trace = {}
-    trace_detected = require_json_bool(findings, label, trace, "detected")
+    trace_detected = (
+        require_json_bool(findings, label, trace, "detected")
+        if trace_present
+        else None
+    )
     if stdout.spanning_detected is not None:
         expect_equal(findings, label, "stdout/profile spanning trace", stdout.spanning_detected, trace_detected)
 
@@ -967,9 +1005,13 @@ def validate_row(
         expect_equal(findings, label, "MOAT active/ingested", active, ingested)
         expect_equal(findings, label, "MOAT early_exit_enabled", early_exit_enabled, False)
         expect_equal(findings, label, "MOAT early_exit_taken", early_exit_taken, False)
-        expect_equal(findings, label, "MOAT spanning_trace.detected", trace_detected, False)
+        if trace_present:
+            expect_equal(findings, label, "MOAT spanning_trace.detected", trace_detected, False)
     elif verdict == "SPANNING":
-        expect_equal(findings, label, "SPANNING spanning_trace.detected", trace_detected, True)
+        if trace_present:
+            expect_equal(findings, label, "SPANNING spanning_trace.detected", trace_detected, True)
+        elif not allow_spanning_without_path:
+            fail(findings, label, "SPANNING row lacks spanning_trace evidence")
         if not allow_early_spanning:
             expect_equal(findings, label, "SPANNING early_exit_enabled", early_exit_enabled, False)
             expect_equal(findings, label, "SPANNING early_exit_taken", early_exit_taken, False)
@@ -1036,6 +1078,7 @@ def main() -> int:
             allow_spanning_without_path=args.allow_spanning_without_path,
             allow_early_spanning=args.allow_early_spanning,
             recompute=not args.no_recompute_bz,
+            require_profile_bz=args.require_profile_bz,
         )
 
     if findings:

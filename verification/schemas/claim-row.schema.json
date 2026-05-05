@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaussian-moat.local/schemas/claim-row.schema.json",
+  "title": "Gaussian moat static-annulus claim row",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "claim_id",
+    "k_sq",
+    "r_inner",
+    "r_outer",
+    "width",
+    "region",
+    "verdict",
+    "verdict_mode",
+    "commit"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "claim_id": { "type": "string", "minLength": 1 },
+    "k_sq": { "type": "integer", "minimum": 1 },
+    "r_inner": { "type": "integer", "minimum": 1 },
+    "r_outer": { "type": "integer", "minimum": 1 },
+    "width": { "type": "integer", "minimum": 1 },
+    "region": { "enum": ["full-octant"] },
+    "verdict": { "enum": ["SPANNING", "MOAT"] },
+    "verdict_mode": { "enum": ["ANY-SPAN", "ANY-SHELL-MOAT"] },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" },
+    "profile_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "artifact_sha256": {
+      "type": "object",
+      "additionalProperties": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+    }
+  },
+  "additionalProperties": true
+}

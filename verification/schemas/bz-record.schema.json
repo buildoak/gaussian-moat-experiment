@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://gaussian-moat.local/schemas/bz-record.schema.json",
+  "title": "Exact BZ record",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "tool",
+    "k_sq",
+    "r_inner",
+    "r_outer",
+    "bz_clean",
+    "bad_norm_count"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tool": { "const": "bz_exact_check" },
+    "k_sq": { "type": "integer", "minimum": 1 },
+    "r_inner": { "type": "integer", "minimum": 1 },
+    "r_outer": { "type": "integer", "minimum": 1 },
+    "sqrt_k": { "type": "integer", "minimum": 1 },
+    "bz_clean": { "type": "boolean" },
+    "bz_i_candidate_count": { "type": "integer", "minimum": 0 },
+    "bz_o_candidate_count": { "type": "integer", "minimum": 0 },
+    "bad_norm_count": { "type": "integer", "minimum": 0 }
+  },
+  "additionalProperties": true
+}
