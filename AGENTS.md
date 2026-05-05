@@ -25,6 +25,8 @@ The project is restarting from the mathematical methodology plus a heavily revie
 | `agents-directives/` | Single home for operational instructions created for agents. Every file here must be referenced from this `AGENTS.md`. |
 | `agents-directives/experiment-contract.md` | Operational contract for CUDA experiments, validation gates, golden usage, and performance reports. |
 | `reference/` | Current operational reference docs for gates, optimization workflow, pre-push checks, and history cleanup. Every durable workflow doc here should be named from the job it gates. |
+| `reference/README.md` | Map of reference documents by role/status. Read this before digging through campaign ledgers. |
+| `reference/2026-05-04-static-annulus-evidence-index.md` | Compact K34/K36/K38/K40 static-annulus evidence spine with raw Pratchett research-asset pointers. |
 | `reference/current-gate-board.md` | Current baseline/verified commits, exact required gates, Tsuchimura commands, and baseline performance numbers. Read before optimization work. |
 | `reference/sqrt34-gate-feasibility.md` | Feasibility note for the rejected K34 annulus gate and what would be required for a real K34 external truth gate. |
 | `reference/agentic-optimization-workflow.md` | Long-running agent workflow for optimization branches: preflight, post-correctness, and post-performance reporting. |
@@ -47,9 +49,10 @@ Do not recreate root-level `docs/`, `artifacts/`, `results/`, or old campaign fo
 ## Current Gate Board
 
 Before any optimization branch, read `reference/current-gate-board.md`.
-It records the current verified baseline, the exact CPU/CUDA/Tsuchimura gates,
-and the RTX 4090 performance baseline. If it disagrees with a newer verified
-run, update the gate board in the same commit as the new verification note.
+It records accepted executable CPU/CUDA/Tsuchimura gates and the RTX 4090
+performance baseline. It is not the chronological campaign ledger. For current
+accepted static-annulus campaign rows, read
+`reference/2026-05-04-static-annulus-evidence-index.md`.
 
 ## Ground Truth Gate - Tsuchimura k^2=36
 
@@ -61,6 +64,22 @@ Tsuchimura's published `k^2=36` boundary remains the known-answer gate:
 | `80,015,790` | `MOAT` | Full annulus anchored with `R_inner=80,000,000` |
 
 This gate is evidence that an implementation is on the right track. It does not make the implementation the source of truth. A passing known-answer gate plus methodology alignment is the minimum trust package.
+
+## Current Static-Annulus Semantics
+
+Current `campaign_main_cuda` verdicts are static-annulus detector results:
+
+- `SPANNING` means `ANY-SPAN`: some component connects the geometric inner and
+  outer bands inside the tested static annulus.
+- Full-ingest `MOAT` means `ANY-SHELL-MOAT`: no component spans the tested
+  static annulus.
+- `SOURCE-SPAN`, `WIRED-SPAN`, and `ORIGIN-SPAN` are not implemented accepted
+  campaign modes.
+
+Do not report current K38/K40 rows as origin-component moat proofs, exact global
+threshold proofs, or publication-grade mathematical certificates. They are
+local static-annulus engineering evidence until an independent verifier or a
+source/origin-connected mode is built and accepted.
 
 ## Rejected Candidate Gate - Tsuchimura k^2=34
 

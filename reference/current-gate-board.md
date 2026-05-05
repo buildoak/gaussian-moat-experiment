@@ -1,17 +1,24 @@
 # Current Gate Board
 
-Updated: 2026-05-03 after zero-offset axis-alignment verification.
+Updated: 2026-05-05 after May 4 static-annulus campaign consolidation.
+
+This board records accepted executable gates and baseline performance checks.
+It is not the active branch state and not the chronological K34/K36/K38/K40
+campaign ledger. For accepted May 4 static-annulus rows and raw evidence
+pointers, read `reference/2026-05-04-static-annulus-evidence-index.md`.
 
 ## Baseline
 
-- Current branch: `fix/zero-offset-axis-alignment`.
-- Verified implementation commit: `102b367 Align grid offset with canonical axis ownership`.
+- Historical branch at baseline verification time: `fix/zero-offset-axis-alignment`.
+- Historical verified implementation commit: `102b367 Align grid offset with canonical axis ownership`.
 - Current documentation commit containing this board update: the commit containing this edit.
 - Verified hardware: Vast RTX 4090 at `/workspace/gaussian-moat-cuda-timing`, CUDA architecture `89`.
 
 The code verified on Vast was `102b367`. The later `b256987` commit only
 documents the chunk-size benchmark contract in `AGENTS.md`; no compiled source
 changed between the verified implementation and that documentation commit.
+Current active campaign branches may differ; update this board only when
+accepted executable gates or baseline performance move.
 
 ## Required Gates
 
