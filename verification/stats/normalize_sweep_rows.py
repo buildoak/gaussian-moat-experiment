@@ -78,6 +78,17 @@ def number_or_none(value: Any) -> int | float | None:
     return None
 
 
+def profile_timing_seconds(
+    profile: dict[str, Any], current_key: str, *legacy_values: Any
+) -> int | float | None:
+    return number_or_none(
+        first_value(
+            get_path(profile, "timings_seconds", current_key),
+            *legacy_values,
+        )
+    )
+
+
 def sum_ints(value: Any) -> int | None:
     if isinstance(value, bool) or value is None:
         return None
@@ -307,24 +318,24 @@ def normalize_row(
         ),
         "snapshot_path": stats_v2.get("snapshot_path"),
         "snapshot_sha256": stats_v2.get("snapshot_sha256"),
-        "total_seconds": number_or_none(
-            first_value(
-                profile.get("total_seconds"),
-                profile.get("total_time_seconds"),
-                get_path(profile, "timing", "total_seconds"),
-            )
+        "total_seconds": profile_timing_seconds(
+            profile,
+            "total",
+            profile.get("total_seconds"),
+            profile.get("total_time_seconds"),
+            get_path(profile, "timing", "total_seconds"),
         ),
-        "cuda_k1_k5_seconds": number_or_none(
-            first_value(
-                profile.get("cuda_k1_k5_seconds"),
-                get_path(profile, "timing", "cuda_k1_k5_seconds"),
-            )
+        "cuda_k1_k5_seconds": profile_timing_seconds(
+            profile,
+            "cuda_k1_k5",
+            profile.get("cuda_k1_k5_seconds"),
+            get_path(profile, "timing", "cuda_k1_k5_seconds"),
         ),
-        "compositor_seconds": number_or_none(
-            first_value(
-                profile.get("compositor_seconds"),
-                get_path(profile, "timing", "compositor_seconds"),
-            )
+        "compositor_seconds": profile_timing_seconds(
+            profile,
+            "compositor",
+            profile.get("compositor_seconds"),
+            get_path(profile, "timing", "compositor_seconds"),
         ),
     }
     return row
