@@ -9,14 +9,15 @@ math specification is `methodology/tile-operator-definition-v-claude.md`.
 Use the compact verification spine in
 `reference/current-verification-spine.md`. In short:
 
-1. methodology alignment;
-2. exact BZ/profile enforcement;
-3. local C++ CTest;
-4. CUDA CTest on a 4090/CUDA host;
-5. zero-overflow, full-ingest run contract;
-6. post-flight tile-sample audit, normally `512` samples;
-7. SPANNING coordinate certificate when the verdict is `SPANNING`;
-8. `stats_v2` telemetry for sweeps and anomaly analysis.
+1. Exact Profile Gate: exact row shape, BZ clean/no override, zero overflow,
+   coherent build/hash/artifact metadata, and required `stats_v2`.
+2. Independent Tile Sample Gate: deterministic manifested tile samples,
+   normally `512`, independently regenerated in post-flight.
+3. SPANNING Cert Gate: every accepted `SPANNING` carries an independently
+   checkable coordinate path from `geo_I` to `geo_O`.
+4. MOAT Hardening Gate: current `MOAT` rows require full ingest plus clean
+   profile/sample evidence; `MOAT_PROOF_PASS` is reserved for a future
+   independent negative certificate.
 
 No MOAT replay, K34 shell probe, golden JSON, snapshot SHA, bounded UF, or
 CPU/CUDA diff probe is an official claim-acceptance gate by itself. Those tools
@@ -32,7 +33,7 @@ Use the smallest experiment that answers the question.
 | C++ implementation change | Change local reference behavior | C++ CTest; methodology check if semantics moved. |
 | CUDA TileOp/kernel change | Change CUDA production | CUDA CTest on real CUDA hardware; targeted diff only if needed to localize. |
 | Host/campaign orchestration | Change CLI, batching, streams, profiles, samples, certs | CUDA CTest plus post-flight run contract on a representative row. |
-| Accepted/profile row | Produce campaign evidence | BZ clean, zero overflow, full-ingest when needed, 512-sample audit, SPANNING cert if applicable, `stats_v2`. |
+| Accepted/profile row | Produce campaign evidence | Exact Profile Gate, 512-sample audit, SPANNING cert if applicable, full ingest for `MOAT`, `stats_v2`. |
 | Performance experiment | Measure speed/profile bottlenecks | Correctness gate first, then isolated benchmark with profile JSON. |
 | Golden refresh | Update regression fixtures | Explicit reason; never to bless a stronger-gate failure. |
 
@@ -100,7 +101,7 @@ compositor time, snapshot time if any, produced/ingested tiles, and throughput.
 Use these when they answer a concrete debugging question:
 
 - `cuda_vs_cpu_diff --m4/--k5` for first divergent CUDA/CPU surface.
-- Snapshot SHA gates for host/snapshot parity regressions.
+- Snapshot SHA checks for host/snapshot parity regressions.
 - CUDA goldens for cheap drift detection.
 - K34 regression scripts for cross-K implementation drift.
 - `exact_global_uf` for bounded small/medium oracle checks.

@@ -1,6 +1,10 @@
 # vast.ai Operational Guide - gaussian-moat CUDA
 
-Operational reference for renting, deploying, building, and running the current CUDA campaign on vast.ai. This guide reflects the 2026-04-22/23 audit: the CUDA v2 solver is validated, the Tsuchimura bracket is `(80,015,782, 80,015,790)`, and the hard-negative sweep was voided because it used narrow-shell `R_inner` semantics.
+Operational reference for renting, deploying, building, and running the current
+CUDA campaign on vast.ai. The current accepted evidence path is the compact
+post-flight verification spine: exact profile, independent tile sample audit,
+SPANNING cert when applicable, and MOAT hardening. Tsuchimura's adjacent K36
+pair remains a calibration note, not the primary acceptance gate.
 
 ## Current Target
 
@@ -90,46 +94,65 @@ ctest --test-dir build-k36 --output-on-failure
 
 Use `-DCMAKE_CUDA_ARCHITECTURES=86` for a 3090, `80` for A100, or `87` for Jetson. The current CMake default is already `89`; do not patch local Makefiles for the v2 campaign.
 
-## Correct Moat-Detection Semantics
+## Correct Static-Annulus Semantics
 
-MOAT detection is a full-annulus origin-reachability test. Anchor `R_inner` at an origin-containing radius and vary `R_outer`.
+The current CUDA campaign computes static annulus crossing: `SPANNING` means
+some Gaussian-prime component connects `geo_I` to `geo_O`; `MOAT` means no such
+component was detected for that annulus. It is not an exact origin-component
+computation.
+
+For K36 hardening near 80M, keep `R_inner` anchored or deliberately define a
+radius-translation matrix, then vary `R_outer` by width.
 
 Correct:
 
 ```bash
---r-inner=80000000 --r-outer=<tested_outer_radius>
+--r-inner=80000000 --r-outer=<tested_outer_radius> --region full-octant
 ```
 
-Incorrect for moat detection:
+Different question:
 
 ```bash
 --r-inner=<tested_radius> --r-outer=<tested_radius + 8192>
 ```
 
-The incorrect form only asks whether a narrow shell is self-connected. That invocation caused the 2026-04-22 hard-negative sweep to be voided; see `docs/supportive/2026-04-23-hard-negative-sweep-postmortem.md`.
+That form asks a translated shell question. It can be valuable for radial
+stability experiments, but it must not be confused with the anchored K36
+hardening matrix.
 
 ## Validated Runs
 
-Tsuchimura reproduction checkpoint, k^2=36:
+Current K36 hardening checkpoint, `k^2=36`, `R_inner=80,000,000`:
 
 ```bash
-cd /workspace/gaussian-moat-cuda/tiles-maxxing/cuda-campaign-v2-sqrt-36
+cd /workspace/gaussian-moat-cuda
 
-scripts/run_tsuchimura_gate.sh \
-  --cuda-bin ./build-k36/campaign_main_cuda \
-  --chunk-size 200000 \
-  --timing \
-  --profile-dir /workspace/profiles
+python3 verification/postflight/moat_hardening_matrix.py \
+  --out-root /workspace/runs/k36-hardening \
+  --widths 17000 18000 19000 20000 32768 \
+  --campaign-bin tiles-maxxing/cuda-campaign-v2-sqrt-36/build-k36/campaign_main_cuda \
+  --execute
 ```
 
-Expected verdicts:
+Expected current K36 matrix verdicts:
 
-| `R_outer` | Expected verdict |
-|-----------|------------------|
-| 80,015,782 | SPANNING |
-| 80,015,790 | MOAT |
+| Width | Expected verdict | Role |
+|---:|---|---|
+| 17,000 | MOAT | primary hardening anchor |
+| 18,000 | MOAT | width monotonicity check |
+| 19,000 | MOAT | width monotonicity check |
+| 20,000 | MOAT | width monotonicity check |
+| 32,768 | MOAT | wider confirmation row |
 
-This is the validated bracket `(80,015,782, 80,015,790)`. Tsuchimura's value is the farthest reachable point; the moat begins just past it.
+Adjacent Tsuchimura calibration note:
+
+| `R_outer` with `R_inner=80,000,000` | Expected verdict | Role |
+|---:|---|---|
+| 80,015,782 | SPANNING | SPANNING cert sanity |
+| 80,015,790 | MOAT | boundary-adjacent calibration |
+
+Do not describe this pair as the primary current gate or as proof of exact
+origin reachability.
 
 The CUDA campaign default is verdict-only. Use `--snapshot-out` only when
 snapshot parity is the objective; snapshot mode intentionally disables early
@@ -184,7 +207,8 @@ If the instance was already running before your task, do not destroy it unless t
 
 ## References
 
-- `docs/supportive/2026-04-22-moat-boundary-final-sweep.md` - validated Tsuchimura bracket
-- `docs/supportive/2026-04-23-hard-negative-sweep-postmortem.md` - voided narrow-shell sweep
-- `docs/supportive/2026-04-22-overflow-diagnostic.md` - R=80M overflow check
-- `methodology/lemmas_v2/campaign-blueprint.md` - engineering SSoT
+- `AGENTS.md` - project correctness hierarchy and current gate canon
+- `reference/current-verification-spine.md` - active verification spine
+- `verification/postflight/README.md` - post-flight contract
+- `methodology/tile-operator-definition-v-claude.md` - mathematical TileOp
+  contract

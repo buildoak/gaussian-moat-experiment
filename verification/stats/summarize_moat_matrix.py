@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 
-ACCEPTANCE_K_SQ = 36
+HARDENING_K_SQ = 36
 MONOTONICITY_VIOLATION = "MONOTONICITY_VIOLATION"
 
 
@@ -110,7 +110,7 @@ def stats_v2_status(row: dict[str, Any]) -> str:
     return "PRESENT" if any(row.get(field) is not None for field in stats_fields) else "MISSING"
 
 
-def row_summary(row: dict[str, Any], acceptance_k_sq: int) -> dict[str, Any]:
+def row_summary(row: dict[str, Any], hardening_k_sq: int) -> dict[str, Any]:
     k_sq = int_or_none(row.get("k_sq"))
     r_inner = int_or_none(row.get("r_inner"))
     r_outer = int_or_none(row.get("r_outer"))
@@ -123,7 +123,7 @@ def row_summary(row: dict[str, Any], acceptance_k_sq: int) -> dict[str, Any]:
         "r_inner": r_inner,
         "r_outer": r_outer,
         "width": width,
-        "acceptance": k_sq == acceptance_k_sq,
+        "hardening": k_sq == hardening_k_sq,
         "verdict": status_or_missing(row.get("verdict")),
         "postflight_status": status_or_missing(row.get("postflight_status")),
         "run_contract_status": status_or_missing(row.get("run_contract_status")),
@@ -139,10 +139,10 @@ def row_summary(row: dict[str, Any], acceptance_k_sq: int) -> dict[str, Any]:
     }
 
 
-def monotonicity_findings(rows: list[dict[str, Any]], acceptance_k_sq: int) -> list[MatrixFinding]:
+def monotonicity_findings(rows: list[dict[str, Any]], hardening_k_sq: int) -> list[MatrixFinding]:
     grouped: dict[tuple[int | None, int | None], list[dict[str, Any]]] = {}
     for row in rows:
-        if row.get("k_sq") != acceptance_k_sq:
+        if row.get("k_sq") != hardening_k_sq:
             continue
         grouped.setdefault((row.get("k_sq"), row.get("r_inner")), []).append(row)
 
@@ -175,12 +175,12 @@ def monotonicity_findings(rows: list[dict[str, Any]], acceptance_k_sq: int) -> l
     return findings
 
 
-def summarize(rows: list[dict[str, Any]], acceptance_k_sq: int = ACCEPTANCE_K_SQ) -> dict[str, Any]:
-    matrix_rows = [row_summary(row, acceptance_k_sq) for row in rows]
-    findings = monotonicity_findings(matrix_rows, acceptance_k_sq)
+def summarize(rows: list[dict[str, Any]], hardening_k_sq: int = HARDENING_K_SQ) -> dict[str, Any]:
+    matrix_rows = [row_summary(row, hardening_k_sq) for row in rows]
+    findings = monotonicity_findings(matrix_rows, hardening_k_sq)
     return {
         "schema_version": 1,
-        "acceptance_k_sq": acceptance_k_sq,
+        "hardening_k_sq": hardening_k_sq,
         "rows": sorted(
             matrix_rows,
             key=lambda row: (
@@ -200,11 +200,11 @@ def summarize(rows: list[dict[str, Any]], acceptance_k_sq: int = ACCEPTANCE_K_SQ
 def format_text(summary: dict[str, Any]) -> str:
     lines = [
         "MOAT hardening matrix summary",
-        f"acceptance_k_sq: {summary['acceptance_k_sq']}",
+        f"hardening_k_sq: {summary['hardening_k_sq']}",
         "width k_sq role verdict postflight sample bz overflow stats_v2 geo_I geo_O active produced ingested",
     ]
     for row in summary["rows"]:
-        role = "acceptance" if row["acceptance"] else "telemetry"
+        role = "hardening" if row["hardening"] else "telemetry"
         lines.append(
             " ".join(
                 str(value)
@@ -243,7 +243,14 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="Summarize normalized rows for the K36 MOAT hardening matrix."
     )
     parser.add_argument("--rows", nargs="+", type=Path, required=True)
-    parser.add_argument("--acceptance-k-sq", type=int, default=ACCEPTANCE_K_SQ)
+    parser.add_argument(
+        "--hardening-k-sq",
+        "--acceptance-k-sq",
+        dest="hardening_k_sq",
+        type=int,
+        default=HARDENING_K_SQ,
+        help="K value used for the hardening matrix. --acceptance-k-sq is a legacy alias.",
+    )
     parser.add_argument("--out", type=Path)
     parser.add_argument("--format", choices=["text", "json"], default="text")
     parser.add_argument(
@@ -257,7 +264,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(sys.argv[1:] if argv is None else argv)
     try:
-        summary = summarize(load_jsonl(args.rows), args.acceptance_k_sq)
+        summary = summarize(load_jsonl(args.rows), args.hardening_k_sq)
     except ValueError as exc:
         print(f"summarize_moat_matrix: error: {exc}", file=sys.stderr)
         return 2

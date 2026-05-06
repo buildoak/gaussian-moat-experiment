@@ -17,7 +17,7 @@ Do not accept an optimization if any item below is unproven.
 - `MOAT` is a whole-region verdict and must not early-exit.
 - Snapshot mode must write every TileOp and must disable early exit.
 - Sparse/explicit region semantics must not be silently substituted for
-  full-octant Tsuchimura gates.
+  full-octant accepted/profile rows.
 
 ## Required Proof Surface
 
