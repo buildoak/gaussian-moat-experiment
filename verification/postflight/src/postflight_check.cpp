@@ -301,6 +301,16 @@ bool telemetry_at_least(const std::string& got, const std::string& needed) {
   return rank(got) >= rank(needed) && rank(needed) >= 0;
 }
 
+bool telemetry_requires_stats_v2(const Row& row) {
+  return row.telemetry_level == "profile" || row.telemetry_level == "audit" ||
+         row.telemetry_level == "full";
+}
+
+bool acceptance_row(const Row& row) {
+  return row.row_class == "accepted" || row.row_class == "profile" ||
+         row.row_class == "audit";
+}
+
 void check_row_contract(CheckResult& result, const Row& row) {
   if (row.k_sq == 0) add_error(result, "k_sq must be positive");
   if (row.r_outer <= row.r_inner) add_error(result, "r_outer must exceed r_inner");
@@ -326,6 +336,7 @@ void check_row_contract(CheckResult& result, const Row& row) {
 }
 
 void check_bz(CheckResult& result, const nlohmann::json& bundle) {
+  const Row row = parse_row(required_object(bundle, "row"));
   const nlohmann::json* bz = nullptr;
   if (bundle.contains("bz") && bundle.at("bz").is_object()) {
     bz = &bundle.at("bz");
@@ -356,24 +367,39 @@ void check_bz(CheckResult& result, const nlohmann::json& bundle) {
   } else if (*bad_norm_count != 0) {
     add_error(result, "bz.bad_norm_count must be zero");
   }
+  compare_row_shape(result, row, *bz, "bz");
+  if (acceptance_row(row)) {
+    for (const std::string& field : {"k_sq", "r_inner", "r_outer", "width"}) {
+      if (!row_number_from(*bz, field)) add_error(result, "bz." + field + " missing");
+    }
+    if (!row_string_from(*bz, "region")) add_error(result, "bz.region missing");
+  }
 }
 
 void scan_overflow_value(CheckResult& result,
                          const nlohmann::json& value,
                          const std::string& path) {
-  if (value.is_number_integer() || value.is_number_unsigned()) {
-    if (value.get<std::int64_t>() != 0) add_error(result, "nonzero overflow counter: " + path);
+  if (value.is_number_unsigned()) {
+    if (value.get<std::uint64_t>() != 0) add_error(result, "nonzero overflow counter: " + path);
     return;
   }
-  if (value.is_boolean()) {
-    if (value.get<bool>()) add_error(result, "true overflow flag: " + path);
+  if (value.is_number_integer()) {
+    const auto got = value.get<std::int64_t>();
+    if (got < 0) {
+      add_error(result, "negative overflow counter: " + path);
+    } else if (got != 0) {
+      add_error(result, "nonzero overflow counter: " + path);
+    }
     return;
   }
   if (value.is_object()) {
+    if (value.empty()) add_error(result, "empty overflow counter object: " + path);
     for (auto it = value.begin(); it != value.end(); ++it) {
       scan_overflow_value(result, it.value(), path + "." + it.key());
     }
+    return;
   }
+  add_error(result, "overflow counter has invalid shape: " + path);
 }
 
 void check_overflows(CheckResult& result, const nlohmann::json& bundle) {
@@ -387,9 +413,40 @@ void check_overflows(CheckResult& result, const nlohmann::json& bundle) {
     add_error(result, "missing overflow_counters");
     return;
   }
+  if (!counters->is_object()) {
+    add_error(result, "overflow_counters must be object");
+    return;
+  }
   scan_overflow_value(result, *counters, "overflow_counters");
   if (const auto emitted = nested_u64(bundle, {"profile", "emitted_tileop_overflow_count"})) {
     if (*emitted != 0) add_error(result, "profile.emitted_tileop_overflow_count must be zero");
+  }
+  const nlohmann::json* host_counters = nullptr;
+  if (bundle.contains("profile") && bundle.at("profile").is_object() &&
+      bundle.at("profile").contains("host_tileop_counters")) {
+    host_counters = &bundle.at("profile").at("host_tileop_counters");
+  }
+  if (host_counters == nullptr || !host_counters->is_object()) {
+    add_error(result, "profile.host_tileop_counters missing");
+  } else if (!host_counters->contains("emitted_overflow_bit_count")) {
+    add_error(result,
+              "profile.host_tileop_counters.emitted_overflow_bit_count missing");
+  } else if (!is_nonnegative_integer_value(
+                 host_counters->at("emitted_overflow_bit_count"))) {
+    add_error(result,
+              "profile.host_tileop_counters.emitted_overflow_bit_count must be a nonnegative integer");
+  } else {
+    const auto host_emitted = host_counters->at("emitted_overflow_bit_count")
+                                  .is_number_unsigned()
+                              ? host_counters->at("emitted_overflow_bit_count")
+                                    .get<std::uint64_t>()
+                              : static_cast<std::uint64_t>(
+                                    host_counters->at("emitted_overflow_bit_count")
+                                        .get<std::int64_t>());
+    if (host_emitted != 0) {
+      add_error(result,
+                "profile.host_tileop_counters.emitted_overflow_bit_count must be zero");
+    }
   }
 }
 
@@ -444,6 +501,20 @@ void check_nonnegative_counter_field(CheckResult& result,
   if (!is_nonnegative_integer_value(obj.at(key))) {
     add_error(result, path + "." + key + " must be a nonnegative integer");
   }
+}
+
+void check_nonnegative_counter_field_or_nested(CheckResult& result,
+                                               const nlohmann::json& obj,
+                                               const std::string& path,
+                                               const std::string& key,
+                                               const std::vector<std::string>& nested_path,
+                                               bool required) {
+  if (obj.contains(key) && !obj.at(key).is_null()) {
+    check_nonnegative_counter_field(result, obj, path, key, required);
+    return;
+  }
+  if (nested_u64(obj, nested_path)) return;
+  if (required) add_error(result, path + "." + key + " missing");
 }
 
 void check_distribution_counts(CheckResult& result,
@@ -622,12 +693,23 @@ void check_component_census(CheckResult& result,
 
 void check_stats_v2(CheckResult& result,
                     const nlohmann::json& owner,
-                    const std::string& owner_path) {
-  if (!owner.contains("stats_v2")) return;
+                    const std::string& owner_path,
+                    bool required) {
+  if (!owner.contains("stats_v2")) {
+    if (required) {
+      const std::string path = owner_path.empty() ? "stats_v2" : owner_path + ".stats_v2";
+      add_error(result, path + " missing");
+    }
+    return;
+  }
   const std::string stats_path = owner_path.empty() ? "stats_v2" : owner_path + ".stats_v2";
   const auto& stats = owner.at("stats_v2");
   if (stats.is_null()) {
-    add_warning(result, stats_path + " is null; analytical telemetry not checked");
+    if (required) {
+      add_error(result, stats_path + " must be object");
+    } else {
+      add_warning(result, stats_path + " is null; analytical telemetry not checked");
+    }
     return;
   }
   if (!stats.is_object()) {
@@ -635,11 +717,15 @@ void check_stats_v2(CheckResult& result,
     return;
   }
 
+  check_nonnegative_counter_field(result, stats, stats_path, "geo_i_tiles", required);
+  check_nonnegative_counter_field(result, stats, stats_path, "geo_o_tiles", required);
+  check_nonnegative_counter_field_or_nested(
+      result, stats, stats_path, "geo_i_ports",
+      {"geo_I", "port_population"}, required);
+  check_nonnegative_counter_field_or_nested(
+      result, stats, stats_path, "geo_o_ports",
+      {"geo_O", "port_population"}, required);
   for (const std::string& key : {
-           "geo_i_tiles",
-           "geo_o_tiles",
-           "geo_i_ports",
-           "geo_o_ports",
            "sample_count",
            "tile_sample_count",
            "tile_samples_written",
@@ -858,24 +944,45 @@ void check_moat_full_ingest(CheckResult& result,
                             const Row& row,
                             const nlohmann::json& profile) {
   if (row.verdict != "MOAT") return;
+  bool explicit_full_ingest = false;
   if (const auto full = nested_string(profile, {"early_exit", "state"})) {
-    if (*full == "full-ingest") return;
+    if (*full == "full-ingest") explicit_full_ingest = true;
   }
   if (profile.contains("early_exit") && profile.at("early_exit").is_object()) {
     const auto& ee = profile.at("early_exit");
     if (ee.contains("full_ingest") && ee.at("full_ingest").is_boolean() &&
         ee.at("full_ingest").get<bool>()) {
-      return;
+      explicit_full_ingest = true;
     }
     if (ee.contains("taken") && ee.at("taken").is_boolean() && ee.at("taken").get<bool>()) {
       add_error(result, "MOAT cannot use early-exit taken=true");
       return;
     }
   }
+  if (profile.contains("early_exit_enabled") &&
+      profile.at("early_exit_enabled").is_boolean() &&
+      !profile.at("early_exit_enabled").get<bool>()) {
+    explicit_full_ingest = true;
+  }
+  if (profile.contains("early_exit_taken") &&
+      profile.at("early_exit_taken").is_boolean() &&
+      profile.at("early_exit_taken").get<bool>()) {
+    add_error(result, "MOAT cannot use early_exit_taken=true");
+    return;
+  }
+  if (!explicit_full_ingest) {
+    add_error(result, "MOAT verdict requires explicit full-ingest evidence");
+  }
+  const auto active = nested_u64(profile, {"tiles", "active"});
   const auto produced = nested_u64(profile, {"tiles", "produced"});
   const auto ingested = nested_u64(profile, {"tiles", "ingested"});
-  if (produced && ingested && *produced == *ingested) return;
-  add_error(result, "MOAT verdict requires full ingest evidence");
+  if (!active || !produced || !ingested) {
+    add_error(result, "MOAT verdict requires active/produced/ingested tile counts");
+    return;
+  }
+  if (*active != *produced || *active != *ingested) {
+    add_error(result, "MOAT verdict requires active == produced == ingested");
+  }
 }
 
 void check_active_tile_count(CheckResult& result,
@@ -894,6 +1001,7 @@ void check_active_tile_count(CheckResult& result,
 }
 
 bool check_sample_audit(CheckResult& result, const Row& row, const nlohmann::json& bundle) {
+  const std::size_t error_count_before = result.errors.size();
   if (!bundle.contains("sample_audit") || bundle.at("sample_audit").is_null()) return false;
   const auto& audit = bundle.at("sample_audit");
   if (!audit.is_object()) {
@@ -959,16 +1067,26 @@ bool check_sample_audit(CheckResult& result, const Row& row, const nlohmann::jso
     ss << "sample_count below minimum: got " << sample_count << " expected >= " << minimum;
     add_error(result, ss.str());
   }
-  if (audit.contains("manifest") && audit.at("manifest").is_object()) {
+  if (audit.contains("manifest") && audit.at("manifest").is_object() &&
+      !audit.at("manifest").empty()) {
     compare_row_shape(result, row, audit.at("manifest"), "sample_audit.manifest");
   } else {
     add_error(result, "sample_audit.manifest missing");
   }
   if (audit.contains("quotas") && audit.at("quotas").is_object() &&
-      audit.contains("class_counts") && audit.at("class_counts").is_object()) {
+      !audit.at("quotas").empty() && audit.contains("class_counts") &&
+      audit.at("class_counts").is_object() && !audit.at("class_counts").empty()) {
     for (auto it = audit.at("quotas").begin(); it != audit.at("quotas").end(); ++it) {
       const std::string klass = it.key();
-      const std::uint64_t quota = it.value().get<std::uint64_t>();
+      if (!is_nonnegative_integer_value(it.value())) {
+        add_error(result, "sample_audit.quotas." + klass +
+                              " must be a nonnegative integer");
+        continue;
+      }
+      const std::uint64_t quota =
+          it.value().is_number_unsigned()
+              ? it.value().get<std::uint64_t>()
+              : static_cast<std::uint64_t>(it.value().get<std::int64_t>());
       const auto got = maybe_u64(audit.at("class_counts"), klass).value_or(0);
       const bool exhausted = class_exhausted(klass);
       if (got < quota && !exhausted) {
@@ -976,10 +1094,10 @@ bool check_sample_audit(CheckResult& result, const Row& row, const nlohmann::jso
       }
     }
   } else {
-    add_warning(result, "sample_audit quotas/class_counts are incomplete in this skeleton bundle");
+    add_error(result, "sample_audit quotas/class_counts missing or empty");
   }
   result.detail["sample_audit_checked"] = true;
-  return result.errors.empty();
+  return result.errors.size() == error_count_before;
 }
 
 Point parse_point(const nlohmann::json& item) {
@@ -991,6 +1109,7 @@ bool check_span_certificate(CheckResult& result,
                             const nlohmann::json& bundle,
                             const nlohmann::json& profile,
                             std::string& cert_path) {
+  const std::size_t error_count_before = result.errors.size();
   if (!bundle.contains("span_certificate") || bundle.at("span_certificate").is_null()) {
     return false;
   }
@@ -1098,7 +1217,7 @@ bool check_span_certificate(CheckResult& result,
   }
 
   result.detail["span_certificate_points"] = points.size();
-  return result.errors.empty();
+  return result.errors.size() == error_count_before;
 }
 
 CheckResult check_bundle(const nlohmann::json& bundle) {
@@ -1125,8 +1244,8 @@ CheckResult check_bundle(const nlohmann::json& bundle) {
   check_build_identity(result, profile);
   check_moat_full_ingest(result, row, profile);
   check_active_tile_count(result, bundle, profile);
-  check_stats_v2(result, bundle, "");
-  check_stats_v2(result, profile, "profile");
+  check_stats_v2(result, bundle, "", false);
+  check_stats_v2(result, profile, "profile", telemetry_requires_stats_v2(row));
   check_artifact_ledgers(result, bundle, profile);
 
   bool sample_audit_pass = false;
@@ -1149,6 +1268,13 @@ CheckResult check_bundle(const nlohmann::json& bundle) {
   const bool saw_cert_artifact = check_artifacts(result, bundle, require_any_artifact, cert_path);
   if (span_proof_pass && !saw_cert_artifact) {
     add_error(result, "span certificate artifact missing from artifact table");
+  }
+  if (row.row_class == "accepted" && row.verdict == "SPANNING") {
+    if (!span_proof_pass) {
+      add_error(result, "accepted SPANNING requires span certificate proof");
+    } else if (!saw_cert_artifact) {
+      add_error(result, "accepted SPANNING requires span certificate artifact");
+    }
   }
 
   result.detail["claim_id"] = row.claim_id;

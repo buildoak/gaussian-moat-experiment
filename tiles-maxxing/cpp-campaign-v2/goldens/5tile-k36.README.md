@@ -7,9 +7,9 @@ local `G_tile` UF, dense-remap, face-strip UF, canonical positional port
 sort, 256 B wire encode, snapshot header, and (downstream) compositor
 stitching along both shared-face types.
 
-**This is the correctness anchor.** The CPU reference and the future
-CUDA port are both validated byte-for-byte against
-`5tile-k36.snapshot.bin`.
+**Current status.** This is a historical/local regression fixture for byte-level
+TileOp parity outside the compact verification spine. The active gates are Exact
+Profile, Independent Tile Sample, SPANNING Cert, and MOAT Hardening.
 
 ## Contents
 
@@ -118,7 +118,7 @@ sieve output and their membership in canonical `geo_I` — was used to
 sanity-check the norm-form comparison path during development, but the
 committed snapshot bytes are whatever the script produces on the locked
 inputs. The parameterized `preflight-oracle.py` reuses this same
-norm-form predicate for non-square K values such as K=38 and K=40; the
+norm-form predicate for historical non-square K probes; the
 historical widened ceil band is valid only as a conservative prefilter,
 not as an acceptance boundary. Any future drift is a correctness bug in
 the script or a spec drift; the bytes are not negotiable artifact.

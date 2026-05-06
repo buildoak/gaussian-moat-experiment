@@ -41,6 +41,9 @@
       "taken": true,
       "full_ingest": false
     },
+    "host_tileop_counters": {
+      "emitted_overflow_bit_count": 0
+    },
     "stats_v2": {
       "geo_i_tiles": -1,
       "candidate_count_distribution": [1, 2, 3],
@@ -70,6 +73,11 @@
     "enumerated_active_tiles": 12
   },
   "bz": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
     "checked": true,
     "clean": true,
     "override_used": false,

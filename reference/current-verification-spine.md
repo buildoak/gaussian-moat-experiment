@@ -1,81 +1,56 @@
 # Current Verification Spine
 
-Updated: 2026-05-06 for the compact post-flight verification spine.
+Updated: 2026-05-06 for the compact verification spine.
 
-This board defines the current executable gates for accepted static-annulus
-campaign evidence. Long campaign ledgers are archived under `reference/archive/`.
+This board defines the current active gates for accepted static-annulus campaign
+evidence. Long campaign ledgers and stale gate boards are provenance under
+`reference/archive/`; they do not define current acceptance.
 
-## Accepted Evidence Package
+## Active Gates
 
-An accepted campaign row needs:
+The active gates are exactly:
 
 | Gate | Fires | Answers |
 |---|---|---|
-| Methodology alignment | Before changing grid, TileOp, port, stitching, boundary, or verdict logic. | Does the implementation still match the math canon? |
-| Exact BZ/profile enforcement | For every accepted/profiled row. | Are `geo_I`/`geo_O` boundary semantics clean and the run metadata coherent? |
-| Local C++ CTest | Before trusting local/reference changes. | Does the C++ implementation still satisfy its executable invariants? |
-| CUDA CTest on 4090/CUDA host | Before trusting CUDA campaign changes. | Does CUDA still pass parity, geometry, and campaign smoke coverage on real hardware? |
-| Run contract | For every post-flight bundle. | Did the row run full ingest when needed, with zero overflow counters and coherent profile/build/hash fields? |
-| Tile-sample audit | For accepted/profiled post-flight rows with emitted samples. | Do independently regenerated sampled TileOps match the CUDA-emitted TileOps? |
-| SPANNING certificate | For every accepted `SPANNING`. | Is there an independently checkable Gaussian-prime coordinate path from `geo_I` to `geo_O`? |
-| `stats_v2` telemetry | For sweeps and accepted/profile rows. | What did the run observe about geo bands, pressure distributions, timings, samples, and component state? |
+| Exact Profile | For every accepted/profiled row. | Is the profile/run evidence full-octant, BZ-clean, overflow-clean, internally coherent, and backed by matching build/hash/artifact metadata? |
+| Independent Tile Sample | For accepted/profiled rows with emitted samples. | Do deterministic emitted tile samples match independent TileOp regeneration? |
+| SPANNING Cert | For every accepted `SPANNING`. | Is there an independently checkable Gaussian-prime coordinate path from `geo_I` to `geo_O`? |
+| MOAT Hardening | For current `MOAT` rows. | Did the detector run full ingest with clean profile/sample evidence, while clearly remaining short of an independent negative certificate? |
 
-Production post-flight sample audits normally use `512` deterministic
-stratified samples. Larger counts are stress/checker benchmarks, not the
-default gate.
+Anything else is support, regression, telemetry, or provenance unless this file
+is deliberately updated.
 
 ## Status Vocabulary
 
 - `REJECT`: evidence cannot be used for the requested row class.
-- `RUN_CONTRACT_PASS`: run health is coherent, but no sample/proof artifact was
-  accepted.
-- `TILE_SAMPLE_AUDIT_PASS`: run health plus sampled TileOp regeneration passed.
+- `RUN_CONTRACT_PASS`: profile/run health is coherent, but no sample/proof
+  artifact was accepted.
+- `TILE_SAMPLE_AUDIT_PASS`: profile/run health plus sampled TileOp regeneration
+  passed.
 - `SPAN_PROOF_PASS`: SPANNING coordinate certificate passed.
 - `CLAIM_PROOF_MISSING`: detector/audit evidence exists, but no accepted proof
   artifact exists for the claim.
-- `MOAT_PROOF_PASS`: reserved for a future independent negative proof; not
-  currently reachable.
+- `MOAT_PROOF_PASS`: reserved for a future independent negative certificate;
+  not currently reachable.
 
 Current `MOAT` rows can reach `TILE_SAMPLE_AUDIT_PASS`; they are not independent
-global negative proofs. MOAT replay is demoted to forensic/debug work and is not
-an official gate.
+global negative proofs.
 
-## Canonical Commands
+## Current MOAT Matrix
 
-Local C++:
+Current MOAT-hardening work uses the same inner radius and four shell widths:
 
-```bash
-cd tiles-maxxing/cpp-campaign-v2
-cmake -S . -B build -DK_SQ=36 -DCMAKE_BUILD_TYPE=Release
-cmake --build build -j"$(sysctl -n hw.ncpu 2>/dev/null || nproc)"
-ctest --test-dir build --output-on-failure
-```
+| K scope | R_inner | Widths | Role |
+|---|---:|---|---|
+| K36 | `80,000,000` | `17k`, `18k`, `19k`, `20k`; optional `32,768` | Current MOAT hardening matrix. |
+| K37-K39 | `80,000,000` | optional same widths | Boundary/BZ stress telemetry only. |
 
-Independent verification:
+For a row at width `w`, `R_outer = R_inner + w`. Full ingest is mandatory for
+`MOAT`; `SPANNING` rows still need the SPANNING Cert gate.
 
-```bash
-cmake -S verification -B verification/build
-cmake --build verification/build -j
-ctest --test-dir verification/build --output-on-failure
-```
+## Canonical Post-Flight Shape
 
-CUDA on a CUDA host:
-
-```bash
-cd /workspace/gaussian-moat-cuda/tiles-maxxing/cuda-campaign-v2-sqrt-36
-cmake -S . -B build-k36 -DK_SQ=36 -DCMAKE_BUILD_TYPE=Release -DCMAKE_CUDA_ARCHITECTURES=89
-cmake --build build-k36 -j"$(nproc)"
-ctest --test-dir build-k36 --output-on-failure
-```
-
-Tsuchimura K36 known-answer sanity:
-
-| R_inner | R_outer | Mode | Expected | Required |
-|---:|---:|---|---|---|
-| `80,000,000` | `80,015,782` | full ingest or sound SPANNING early exit | `SPANNING` | zero overflows |
-| `80,000,000` | `80,015,790` | full ingest | `MOAT` | zero overflows |
-
-Accepted/profile post-flight rows should run with audit telemetry and persisted
+Accepted/profile post-flight rows should use audit telemetry and persisted
 sample/cert artifacts, for example:
 
 ```bash
@@ -101,20 +76,33 @@ verification/postflight/postflight_orchestrate.py \
   --fail-on-reject
 ```
 
-For `MOAT`, omit `--emit-span-cert`; full ingest is mandatory.
+For `MOAT`, omit `--emit-span-cert`; full ingest is mandatory and the result
+remains hardened detector/audit evidence, not `MOAT_PROOF_PASS`.
 
-## Demoted Tools
+Production post-flight sample audits normally use `512` deterministic
+stratified samples. Larger counts are stress/checker benchmarks, not the
+default gate.
+
+## Demoted Surfaces
 
 These remain useful, but are not claim-acceptance gates by themselves:
 
+- C++ 5-tile golden and snapshot parity tests: local byte-format regression.
+- `validate_campaign_run.py`: legacy local run validator.
+- C++ and CUDA CTest: implementation sanity before code changes.
+- Tsuchimura K36 adjacent pair: calibration note only; prefer the 17k+ matrix
+  for current MOAT hardening evidence.
 - `cuda_vs_cpu_diff --m4/--k5`: fault localization and CPU/CUDA drift checks.
-- Snapshot SHA gates: forensic parity and host-orchestration checks.
-- CUDA/JSON goldens: cheap regression tripwires, never proof.
+- Snapshot SHA checks and CUDA/JSON goldens: forensic parity and cheap
+  regression tripwires.
 - K34 scripts: cross-K regression only, not Tsuchimura external truth.
 - `exact_global_uf`: bounded oracle for small/medium tests, not campaign proof.
-- Compositor/MOAT replay: debug over emitted TileOps, not TileOp faithfulness.
+- Compositor or MOAT replay: debug over emitted TileOps, not TileOp
+  faithfulness or claim acceptance.
 
 ## Telemetry Limits
+
+K37-K39 telemetry is observation only until promoted by the active gates.
 
 `stats_v2` currently includes timings, stage timings, tile counts, BZ/overflow
 state, geo tile/port populations, group/port pressure distributions,

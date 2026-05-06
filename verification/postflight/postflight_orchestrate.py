@@ -339,7 +339,14 @@ def build_row(
 
 def build_bz(profile: dict[str, Any]) -> dict[str, Any]:
     bz = profile.get("bz") if isinstance(profile.get("bz"), dict) else {}
-    return {
+    k_sq = as_optional_int(first_value(get_path(profile, "radii", "k_sq"), profile.get("k_sq")))
+    r_inner = as_optional_int(first_value(get_path(profile, "radii", "r_inner"), profile.get("r_inner")))
+    r_outer = as_optional_int(first_value(get_path(profile, "radii", "r_outer"), profile.get("r_outer")))
+    width = as_optional_int(first_value(get_path(profile, "radii", "width"), profile.get("width")))
+    if width is None and r_inner is not None and r_outer is not None:
+        width = r_outer - r_inner
+    region = first_value(profile.get("region"), get_path(profile, "radii", "region"))
+    record = {
         "checked": bool(first_value(bz.get("checked"), profile.get("bz_checked"), False)),
         "clean": bool(first_value(bz.get("clean"), bz.get("bz_clean"), profile.get("bz_clean"), False)),
         "override_used": bool(
@@ -355,6 +362,17 @@ def build_bz(profile: dict[str, Any]) -> dict[str, Any]:
         )
         or 0,
     }
+    for key, value in (
+        ("k_sq", k_sq),
+        ("r_inner", r_inner),
+        ("r_outer", r_outer),
+        ("width", width),
+    ):
+        if value is not None:
+            record[key] = value
+    if isinstance(region, str) and region:
+        record["region"] = region
+    return record
 
 
 def build_sample_audit(
@@ -534,12 +552,13 @@ def orchestrate(args: argparse.Namespace) -> int:
                 command.extend(["--manifest", str(manifest_path)])
             tile_sample_result = run_command(command)
 
+        claim_proof_required = args.claim_proof_required or args.row_class == "accepted"
         row = build_row(
             profile,
             profile_path,
             args.row_class,
             args.telemetry_level,
-            args.claim_proof_required,
+            claim_proof_required,
         )
         bundle = build_bundle(
             profile_path,

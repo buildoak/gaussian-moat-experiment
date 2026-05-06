@@ -1,23 +1,29 @@
 # Gaussian Moat CUDA
 
-CUDA implementation work for Gaussian moat computation.
+CUDA/C++ implementation work for Gaussian moat computation.
 
-Current status: the `k^2 = 36` pipeline is mathematically grounded in the
-project methodology and verified against Tsuchimura's known moat boundary:
+Current status: the compact verification spine accepts campaign evidence through
+four gates only: Exact Profile, Independent Tile Sample, SPANNING Cert, and MOAT
+Hardening.
 
-- `R_inner=80,000,000`, `R_outer=80,015,782` => `SPANNING`
-- `R_inner=80,000,000`, `R_outer=80,015,790` => `MOAT`
+The current K36 hardening anchor is the full-ingest matrix at
+`R_inner=80,000,000`, especially the `17k` to `20k` widths, with a wider
+`32,768` confirmation row. All current K36 matrix rows postflight as `MOAT`
+with exact BZ, zero overflow, stats_v2 telemetry, and persisted 512-tile sample
+audit. The adjacent Tsuchimura pair remains useful as a calibration note:
+`R_outer=80,015,782` is `SPANNING`; `R_outer=80,015,790` is `MOAT`.
 
 On an RTX 4090, the current full CUDA pipeline runs at about `40k tiles/s`
 end-to-end. The GPU TileOp stage is around `70k tiles/s`; the full pipeline is
 currently bounded by CUDA work plus CPU streaming composition.
 
-Paper writeup, further performance optimization, `sqrt(40)`, and larger moat
-campaigns are work in progress.
+Paper writeup, further performance optimization, and larger moat campaigns are
+work in progress. K37-K39 rows are telemetry-only until promoted through the
+compact spine.
 
 See:
 
 - `AGENTS.md` for project rules and correctness hierarchy.
-- `reference/current-gate-board.md` for the current verified baseline.
+- `reference/current-verification-spine.md` for the active verification gates.
 - `methodology/tile-operator-definition-v-claude.md` for the mathematical
   implementation contract.

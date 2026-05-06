@@ -54,25 +54,20 @@ independent negative proof is built.
 
 Accepted campaign evidence is now this smaller set:
 
-1. **Methodology alignment.** Grid, TileOp, port, stitching, boundary, or verdict
-   changes must be checked against `methodology/tile-operator-definition-v-claude.md`.
-2. **Exact BZ/profile enforcement.** Profiles must be BZ-clean, no override, and
-   internally coherent.
-3. **Local C++ CTest.** Run `tiles-maxxing/cpp-campaign-v2` tests for local
-   implementation sanity.
-4. **CUDA CTest on 4090/CUDA host.** CUDA tests must pass on real CUDA hardware.
-5. **Run contract.** Campaign rows require full ingest for `MOAT`, zero overflow
-   counters, full-octant row shape for accepted annular claims, and coherent
-   build/hash/profile metadata.
-6. **Post-flight sample audit.** CUDA emits deterministic stratified tile
+1. **Exact Profile Gate.** Accepted/profile/audit rows must be full-octant,
+   exact on `K`, `R_inner`, `R_outer`, and width, BZ-clean with no override,
+   zero-overflow with strict counter shapes, backed by build/hash identity, and
+   carrying real `stats_v2` when telemetry claims `profile`, `audit`, or `full`.
+2. **Independent Tile Sample Gate.** CUDA emits deterministic stratified tile
    samples; independent C++ post-flight code regenerates and compares them.
-   Production sample audits normally use `512` samples. Larger sample counts are
-   deliberate stress/checker benchmarks, not the default gate.
-7. **SPANNING coordinate certificate.** Every accepted `SPANNING` should carry an
-   independently checkable Gaussian-prime coordinate path from `geo_I` to
-   `geo_O`.
-8. **Telemetry.** `stats_v2` profile data is first-class evidence for sweeps and
-   anomaly analysis.
+   Production sample audits use `512` manifested samples. Sample JSONL without a
+   manifest is debug only and cannot satisfy acceptance.
+3. **SPANNING Cert Gate.** Every accepted `SPANNING` must carry an independently
+   checkable Gaussian-prime coordinate path from `geo_I` to `geo_O`. This is a
+   hard post-flight requirement, not an optional flag.
+4. **MOAT Hardening Gate.** Current `MOAT` rows require full ingest plus clean
+   Exact Profile and Independent Tile Sample evidence. `MOAT_PROOF_PASS` remains
+   reserved for a future independent negative certificate.
 
 No MOAT replay is part of the official spine. Replaying emitted TileOps through
 another compositor mostly checks the emitted surface, not TileOp mathematical
@@ -90,19 +85,29 @@ Status vocabulary:
 
 ## External Truth And Regression
 
-Tsuchimura's K36 pair remains the strongest executable known-answer sanity check:
+The strongest current K36 executable hardening surface is the full-ingest
+matrix anchored at `R_inner=80,000,000`, especially widths `17k`, `18k`, `19k`,
+and `20k`, with a wider `32,768` confirmation row when run time permits. These
+rows must pass exact BZ, zero overflow, stats_v2 telemetry, and persisted
+512-tile postflight sample audit.
 
-| R_inner | R_outer | Expected |
-|---:|---:|---|
-| `80,000,000` | `80,015,782` | `SPANNING` |
-| `80,000,000` | `80,015,790` | `MOAT` |
+Tsuchimura's adjacent K36 pair is a calibration note, not the primary gate:
 
-This is an implementation sanity gate, not a proof source. K34 is not an
+| R_inner | R_outer | Expected | Role |
+|---:|---:|---|---|
+| `80,000,000` | `80,015,782` | `SPANNING` | SPANNING cert sanity. |
+| `80,000,000` | `80,015,790` | `MOAT` | Boundary-adjacent calibration. |
+
+This is implementation-level evidence, not a proof source. K34 is not an
 external annular truth gate; Tsuchimura's K34 result is about the
 origin-connected component. K34 scripts may be used for cross-K regression only.
 
 CPU/CUDA diff probes, snapshot SHA checks, exact bounded UF, and goldens are
 useful development/localization tools. They do not outrank the compact spine.
+
+If a narrower K36 matrix width is `MOAT`, a wider width becoming `SPANNING` is a
+monotonicity violation requiring investigation. K37-K39 runs are boundary/BZ
+stress telemetry only; they add no meaningful graph edges over K36.
 
 ## Experiment Defaults
 
@@ -135,8 +140,8 @@ useful development/localization tools. They do not outrank the compact spine.
   tracked.
 - Inspect `git status --short --untracked-files=all` before staging; prefer
   exact-path staging.
-- Run `reference/pre-push-secret-check.md` before pushing or publishing rewritten
-  history.
+- The historical pre-push and heavy-history runbooks live under
+  `reference/archive/`; use them only when that specific operation is requested.
 - The Mac Mini has no CUDA compiler. CUDA build/run work happens on remote CUDA
   hosts such as Vast; long remote jobs should run in `tmux`.
 - Do not destroy cloud instances, push branches, publish results, or mutate

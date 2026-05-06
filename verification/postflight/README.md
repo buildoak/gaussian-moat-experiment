@@ -10,6 +10,11 @@ It intentionally does not import campaign or CUDA implementation code. Inline
 SPANNING coordinate certificates are checked through
 `verification/include/independent_moat.hpp`.
 
+Post-flight owns the active Exact Profile, Independent Tile Sample, and SPANNING
+Cert evidence paths. For `MOAT`, it supports the hardening gate only:
+full-ingest, overflow-clean, BZ-clean detector evidence plus independent sample
+audit. It does not produce `MOAT_PROOF_PASS`.
+
 ## Bundle Contract
 
 The row declares:
@@ -20,7 +25,7 @@ The row declares:
 - `telemetry_level`: `none`, `profile`, `audit`, or `full`;
 - `claim_proof_required`.
 
-Run-contract checks cover row/profile/stdout agreement when present, full-octant
+Profile checks cover row/profile/stdout agreement when present, full-octant
 shape, BZ cleanliness, zero overflow counters, `MOAT` full-ingest evidence,
 build/hash identity, artifact table shape, telemetry sufficiency, sample-audit
 metadata, and SPANNING coordinate certificate validity.
@@ -75,7 +80,6 @@ Outputs are one `*.postflight.bundle.json`, one `*.postflight.report.json`,
 
 Residual limits:
 
-- Current `MOAT` bundles can pass run contract and sample audit, but there is no
-  independent negative-proof gate.
-- Compositor replay is not the official acceptance route for `MOAT`; it is
-  reserved for emitted-TileOp debugging.
+- Current `MOAT` bundles can pass profile coherence and sample audit, but there
+  is no independent negative-proof gate.
+- Compositor replay is reserved for emitted-TileOp debugging.

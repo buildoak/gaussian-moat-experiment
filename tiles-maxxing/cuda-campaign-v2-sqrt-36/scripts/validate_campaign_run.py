@@ -3,7 +3,7 @@
 # requires-python = ">=3.12"
 # ///
 
-"""Validate CUDA campaign run artifacts as citeable local-annulus evidence."""
+"""Legacy local CUDA run validator outside the compact verification spine."""
 
 from __future__ import annotations
 

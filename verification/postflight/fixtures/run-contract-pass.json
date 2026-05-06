@@ -40,12 +40,26 @@
     "early_exit": {
       "taken": true,
       "full_ingest": false
+    },
+    "stats_v2": {
+      "geo_i_tiles": 1,
+      "geo_o_tiles": 1,
+      "geo_i_ports": 1,
+      "geo_o_ports": 1
+    },
+    "host_tileop_counters": {
+      "emitted_overflow_bit_count": 0
     }
   },
   "run_contract": {
     "enumerated_active_tiles": 12
   },
   "bz": {
+    "k_sq": 36,
+    "r_inner": 2,
+    "r_outer": 8,
+    "width": 6,
+    "region": "full-octant",
     "checked": true,
     "clean": true,
     "override_used": false,

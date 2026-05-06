@@ -5,6 +5,18 @@ campaign evidence. It reads campaign artifacts, but it must not link against or
 import campaign `Grid`, `TileOp`, sieve, compositor, CUDA kernels, or validator
 implementations.
 
+The active compact spine is exactly:
+
+| Gate | Accepted evidence |
+|---|---|
+| Exact Profile | Profile/run metadata is internally coherent, BZ-clean, full-octant, and overflow-clean. |
+| Independent Tile Sample | Deterministic emitted tile samples match independent regeneration. |
+| SPANNING Cert | Accepted `SPANNING` rows carry an independently checkable coordinate certificate. |
+| MOAT Hardening | Current `MOAT` rows are hardened detector/audit evidence only; `MOAT_PROOF_PASS` is reserved for a future negative certificate. |
+
+C++ 5-tile goldens, campaign-run validators, exact bounded UF, and compositor or
+MOAT replay remain useful regression/debug tools outside the compact spine.
+
 ## Build
 
 ```bash
@@ -21,7 +33,7 @@ ctest --test-dir verification/build --output-on-failure
 | `boundary_semantics_test` | Axis, diagonal, collar, clipping, and geo predicate assertions. |
 | `tile_sample_check` | Independent production tile-sample checker. |
 | `span_cert_check` | Independent Gaussian-prime coordinate path checker. |
-| `postflight_check` | Compact bundle checker for run contract, sample audit, and SPANNING cert status. |
+| `postflight_check` | Compact bundle checker for profile coherence, sample audit, and SPANNING cert status. |
 | `stats/normalize_sweep_rows.py` | Normalizes profiles and post-flight reports into sweep rows. |
 | `stats/summarize_stats.py` | Quick shell summary for `stats_v2` profiles/rows. |
 | `exact_global_uf` | Bounded oracle for small/medium annuli; not a campaign gate. |
@@ -45,8 +57,8 @@ Post-flight statuses are separate:
 - `CLAIM_PROOF_MISSING`
 
 `MOAT_PROOF_PASS` is reserved for future work. Current negative `MOAT` rows can
-pass run contract and sample audit, but remain detector/audit evidence rather
-than independent global negative proof.
+pass profile coherence and sample audit, but remain detector/audit evidence
+rather than independent global negative proof.
 
 ## Sample Policy
 
@@ -85,4 +97,5 @@ Known limits:
 - Candidate-count and Gaussian-prime-count distributions may be null.
 - Component census is currently live-frontier telemetry, not full historical
   component anatomy.
-- Compositor replay is forensic/debug only, not the official post-flight spine.
+- Compositor/MOAT replay is forensic/debug only, not the official post-flight
+  spine.

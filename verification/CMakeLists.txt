@@ -46,6 +46,14 @@ if(Python3_Interpreter_FOUND)
   add_test(NAME stats_normalize_sweep_rows_py
     COMMAND ${Python3_EXECUTABLE}
             ${CMAKE_CURRENT_SOURCE_DIR}/stats/test_normalize_sweep_rows.py)
+  add_test(NAME stats_unittest_py
+    COMMAND ${Python3_EXECUTABLE} -m unittest discover
+            -s ${CMAKE_CURRENT_SOURCE_DIR}/stats -p test*.py)
+  add_test(NAME postflight_check_contract_py
+    COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/postflight/test_postflight_check_contract.py
+            --postflight-check $<TARGET_FILE:postflight_check>
+            --fixtures-dir ${CMAKE_CURRENT_SOURCE_DIR}/postflight/fixtures)
 endif()
 
 add_test(NAME span_cert_fixture_valid

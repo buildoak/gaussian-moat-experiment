@@ -21,8 +21,6 @@ First-read order:
 | `agentic-optimization-workflow.md` | Branch/report workflow for long optimization work. |
 | `optimization-safety-checklist.md` | Do-not-break checklist for math/TileOp/port/verdict changes. |
 | `performance-report-template.md` | Performance report shape. |
-| `pre-push-secret-check.md` | Credential scan runbook before push/publish. |
-| `heavy-history-cleanup-plan.md` | Large-history cleanup plan, only when explicitly authorized. |
 
 ## Archive
 
@@ -31,6 +29,8 @@ First-read order:
 | `archive/campaign-ledgers/` | May 2026 K34/K36/K38/K40 campaign notes and evidence indexes. | Provenance only. |
 | `archive/implemented-plans/` | Verification/postflight plans and evidence reports that have been implemented or superseded. | Historical context only. |
 | `archive/performance-and-handoffs/` | Old optimization plans, wave reports, and worker handoffs. | Provenance only. |
+| `archive/pre-push-secret-check.md` | Historical pre-push credential scan runbook. | Use only when pushing/publishing is requested. |
+| `archive/heavy-history-cleanup-plan.md` | Historical large-history cleanup plan. | Use only when history cleanup is explicitly authorized. |
 
 Archived files may contain obsolete sample budgets, gate ladders, branch names,
 and proof language. Use them as evidence pointers, not as current instructions.
