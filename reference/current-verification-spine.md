@@ -48,6 +48,12 @@ Current MOAT-hardening work uses the same inner radius and four shell widths:
 For a row at width `w`, `R_outer = R_inner + w`. Full ingest is mandatory for
 `MOAT`; `SPANNING` rows still need the SPANNING Cert gate.
 
+Additional attached static-annulus moat candidates live in
+`attached-static-annulus-moats.md`. In particular, the lower K36 `W=32768`
+bracket and K34 centered local moat rows are attached as zero-overflow
+shell-connectivity observations. They need current post-flight reruns before
+they count as accepted MOAT-hardening evidence.
+
 ## Canonical Post-Flight Shape
 
 Accepted/profile post-flight rows should use audit telemetry and persisted

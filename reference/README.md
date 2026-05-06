@@ -18,6 +18,7 @@ First-read order:
 | File | Role |
 |---|---|
 | `current-verification-spine.md` | Active compact verification gates, demoted tools, and sample policy. |
+| `attached-static-annulus-moats.md` | Attached lower-K36 and local K34 static-annulus moat evidence, with proof-status cautions. |
 | `agentic-optimization-workflow.md` | Branch/report workflow for long optimization work. |
 | `optimization-safety-checklist.md` | Do-not-break checklist for math/TileOp/port/verdict changes. |
 | `performance-report-template.md` | Performance report shape. |

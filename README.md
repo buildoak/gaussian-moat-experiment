@@ -25,5 +25,7 @@ See:
 
 - `AGENTS.md` for project rules and correctness hierarchy.
 - `reference/current-verification-spine.md` for the active verification gates.
+- `reference/attached-static-annulus-moats.md` for attached lower-K36 and
+  local K34 static-annulus moat evidence.
 - `methodology/tile-operator-definition-v-claude.md` for the mathematical
   implementation contract.

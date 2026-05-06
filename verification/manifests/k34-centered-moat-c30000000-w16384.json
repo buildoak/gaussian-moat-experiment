@@ -1,12 +1,12 @@
 {
   "schema_version": 1,
-  "claim_id": "k36-lower-moat-73359375-w32768",
-  "k_sq": 36,
-  "r_inner": 73359375,
-  "r_outer": 73392143,
-  "width": 32768,
+  "claim_id": "k34-centered-moat-c30000000-w16384",
+  "k_sq": 34,
+  "r_inner": 29991808,
+  "r_outer": 30008192,
+  "width": 16384,
   "region": "full-octant",
-  "seed": 36073359375,
+  "seed": 34029991808,
   "target_tile_samples": 512,
   "target_seam_samples": 128,
   "selection": [

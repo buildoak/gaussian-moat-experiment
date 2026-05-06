@@ -35,6 +35,9 @@ folders as authority surfaces. New durable operational docs go in `reference/`;
 math changes start in `methodology/`; generated evidence stays out of git unless
 explicitly accepted.
 
+Workbench material is not canon. Keep it under ignored `_archive/workbench/`
+only; do not introduce root `workbench/` or `_workbench/` surfaces.
+
 ## Current Claim Semantics
 
 Current campaign verdicts are static-annulus detector results:
@@ -101,6 +104,8 @@ Tsuchimura's adjacent K36 pair is a calibration note, not the primary gate:
 This is implementation-level evidence, not a proof source. K34 is not an
 external annular truth gate; Tsuchimura's K34 result is about the
 origin-connected component. K34 scripts may be used for cross-K regression only.
+Local K34 static-annulus moat rows may be attached as implementation evidence
+when labeled as shell-connectivity observations, not Tsuchimura origin proofs.
 
 CPU/CUDA diff probes, snapshot SHA checks, exact bounded UF, and goldens are
 useful development/localization tools. They do not outrank the compact spine.

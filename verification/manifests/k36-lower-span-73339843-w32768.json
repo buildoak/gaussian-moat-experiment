@@ -4,39 +4,35 @@
   "k_sq": 36,
   "r_inner": 73339843,
   "r_outer": 73372611,
+  "width": 32768,
   "region": "full-octant",
   "seed": 36073339843,
   "target_tile_samples": 512,
   "target_seam_samples": 128,
   "selection": [
     {
-      "class": "span_certificate_tiles",
-      "description": "All tiles touched by the coordinate certificate when available.",
-      "target_count": 0
-    },
-    {
-      "class": "geo_i_band",
+      "class": "geo_I",
       "description": "Tiles with primes flagged in the inner geometric band.",
       "target_count": 64
     },
     {
-      "class": "geo_o_band",
+      "class": "geo_O",
       "description": "Tiles with primes flagged in the outer geometric band.",
       "target_count": 64
     },
     {
-      "class": "axis_near",
+      "class": "axis",
       "description": "Tiles near x=0.",
       "target_count": 32
     },
     {
-      "class": "diagonal_near",
+      "class": "diagonal",
       "description": "Tiles near y=x.",
       "target_count": 32
     },
     {
-      "class": "chunk_boundary",
-      "description": "Tiles around app chunk boundaries.",
+      "class": "high_pressure",
+      "description": "Tiles selected from high pressure telemetry when available.",
       "target_count": 64
     },
     {
