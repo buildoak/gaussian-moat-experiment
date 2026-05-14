@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -375,6 +376,45 @@ def build_bz(profile: dict[str, Any]) -> dict[str, Any]:
     return record
 
 
+def parse_bz_log(path: Path, row: dict[str, Any]) -> dict[str, Any]:
+    text = path.read_text(errors="replace")
+    header = re.search(
+        r"^BZ check:\s+R_inner=([0-9]+)\s+R_outer=([0-9]+)\s+K=([0-9]+)\s+",
+        text,
+        re.MULTILINE,
+    )
+    if header is None:
+        raise PostflightError(f"{path}: missing BZ check header")
+
+    verdict_lines = [
+        line
+        for line in text.splitlines()
+        if line.startswith("PASS: no Gaussian-prime norms found")
+        or line.startswith("FAIL: Gaussian-prime norm")
+    ]
+    if len(verdict_lines) != 1:
+        raise PostflightError(f"{path}: expected exactly one BZ PASS/FAIL verdict")
+
+    bad_norm_count = 0
+    for match in re.finditer(r"^BZ_[IO]: gaussian_prime_norm_count=([0-9]+)$", text, re.MULTILINE):
+        bad_norm_count += int(match.group(1))
+
+    record: dict[str, Any] = {
+        "checked": True,
+        "clean": verdict_lines[0].startswith("PASS:") and bad_norm_count == 0,
+        "override_used": False,
+        "bad_norm_count": bad_norm_count,
+        "k_sq": int(header.group(3)),
+        "r_inner": int(header.group(1)),
+        "r_outer": int(header.group(2)),
+        "width": row.get("width"),
+        "region": row.get("region"),
+        "source": "external_bz_check",
+        "path": str(path),
+    }
+    return record
+
+
 def build_sample_audit(
     manifest_path: Path | None,
     samples_path: Path | None,
@@ -426,6 +466,7 @@ def build_bundle(
     profile_path: Path,
     profile: dict[str, Any],
     row: dict[str, Any],
+    bz_log_path: Path | None,
     manifest_path: Path | None,
     samples_path: Path | None,
     span_cert_path: Path | None,
@@ -438,7 +479,7 @@ def build_bundle(
         "bundle_id": f"{stem}-postflight",
         "row": row,
         "profile": profile,
-        "bz": build_bz(profile),
+        "bz": parse_bz_log(bz_log_path, row) if bz_log_path else build_bz(profile),
         "overflow_counters": profile.get("overflow_counters", {}),
     }
 
@@ -463,6 +504,8 @@ def build_bundle(
         artifacts.append(artifact_entry(samples_path, "tile_samples", "tile_samples"))
     if span_cert_path is not None:
         artifacts.append(artifact_entry(span_cert_path, "span_certificate", "span_certificate"))
+    if bz_log_path is not None:
+        artifacts.append(artifact_entry(bz_log_path, "bz_log", "bz_log"))
     if log_path is not None and log_path.exists():
         artifacts.append(artifact_entry(log_path, "log", "log"))
     if artifacts:
@@ -538,11 +581,13 @@ def orchestrate(args: argparse.Namespace) -> int:
         manifest_path = choose_by_index(args.sample_manifest, index, "--sample-manifest")
         samples_path = choose_by_index(args.samples, index, "--samples")
         span_cert_path = choose_by_index(args.span_cert, index, "--span-cert")
+        bz_log_path = choose_by_index(args.bz_log, index, "--bz-log")
         log_path = choose_by_index(args.log, index, "--log")
 
         manifest_path = manifest_path.expanduser().resolve() if manifest_path else infer_sample_manifest(profile, profile_path)
         samples_path = samples_path.expanduser().resolve() if samples_path else infer_samples(profile, profile_path)
         span_cert_path = span_cert_path.expanduser().resolve() if span_cert_path else None
+        bz_log_path = bz_log_path.expanduser().resolve() if bz_log_path else None
         log_path = log_path.expanduser().resolve() if log_path else None
 
         tile_sample_result = None
@@ -564,6 +609,7 @@ def orchestrate(args: argparse.Namespace) -> int:
             profile_path,
             profile,
             row,
+            bz_log_path,
             manifest_path,
             samples_path,
             span_cert_path,
@@ -587,6 +633,7 @@ def orchestrate(args: argparse.Namespace) -> int:
                 "accepted_status": status in POSTFLIGHT_STATUSES and status != "REJECT",
                 "sample_manifest": str(manifest_path) if manifest_path else None,
                 "samples": str(samples_path) if samples_path else None,
+                "bz_log": str(bz_log_path) if bz_log_path else None,
                 "tile_sample_check": tile_sample_result,
                 "postflight_check": {
                     "command": postflight["process"]["command"],
@@ -637,6 +684,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--sample-manifest", nargs="*", type=Path, default=[])
     parser.add_argument("--samples", nargs="*", type=Path, default=[])
     parser.add_argument("--span-cert", nargs="*", type=Path, default=[])
+    parser.add_argument("--bz-log", nargs="*", type=Path, default=[])
     parser.add_argument("--log", nargs="*", type=Path, default=[])
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--report-out", type=Path)

@@ -75,6 +75,11 @@ struct SnapshotOptions {
 // header.
 std::string grid_params_hash(const Grid& grid);
 
+// SHA-256 hex digest of the compact tower-table grid description. Unlike
+// grid_params_hash(), this does not enumerate every active tile and is suitable
+// for profile metadata on wide annuli.
+std::string grid_tower_table_hash(const Grid& grid);
+
 class SnapshotWriter {
  public:
   SnapshotWriter(const std::filesystem::path& path,

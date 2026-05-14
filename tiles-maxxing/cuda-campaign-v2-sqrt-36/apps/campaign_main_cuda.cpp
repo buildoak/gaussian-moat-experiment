@@ -1721,6 +1721,11 @@ void write_profile_json(const std::filesystem::path& path,
     });
   }
 
+  const std::string grid_hash = campaign::grid_tower_table_hash(grid);
+  const std::string constants_hash = constants.canonical_hash();
+  const std::string mr_witness_hash =
+      campaign::CampaignConstants::mr_witness_set_sha256();
+
   nlohmann::json profile = {
       {"schema_version", 1},
       {"telemetry_level", telemetry_level_name(telemetry_level)},
@@ -1738,13 +1743,13 @@ void write_profile_json(const std::filesystem::path& path,
         {"width", r_outer - r_inner}}},
       {"region", region_spec},
       {"hashes",
-       {{"grid", campaign::grid_params_hash(grid)},
-        {"grid_hash", campaign::grid_params_hash(grid)},
-        {"constants", constants.canonical_hash()},
-        {"constants_hash", constants.canonical_hash()},
-        {"mr_witness", campaign::CampaignConstants::mr_witness_set_sha256()},
-        {"mr_witness_hash",
-         campaign::CampaignConstants::mr_witness_set_sha256()}}},
+       {{"grid", grid_hash},
+        {"grid_hash", grid_hash},
+        {"grid_hash_schema", "tower_table_v1"},
+        {"constants", constants_hash},
+        {"constants_hash", constants_hash},
+        {"mr_witness", mr_witness_hash},
+        {"mr_witness_hash", mr_witness_hash}}},
       {"snapshot_enabled", snapshot_enabled},
       {"early_exit_enabled", early_exit_enabled},
       {"early_exit_taken", stats.early_exit_taken},

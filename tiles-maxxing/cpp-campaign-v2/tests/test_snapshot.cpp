@@ -119,6 +119,26 @@ campaign::Grid synthetic_grid() {
   return g;
 }
 
+campaign::Grid synthetic_wide_grid() {
+  campaign::Grid g{};
+  g.R_inner = 870000000;
+  g.R_outer = 870262144;
+  g.R_inner_sq = g.R_inner * g.R_inner;
+  g.R_outer_sq = g.R_outer * g.R_outer;
+  g.K_SQ_value = 40;
+  g.S_value = campaign::S;
+  g.C_value = campaign::C;
+  g.o_x = campaign::OFFSET_X;
+  g.o_y = campaign::OFFSET_Y;
+  g.i_min = 0;
+  g.i_max = 2;
+  g.j_low = {0, 0, 0};
+  g.j_high = {900000000, 900000000, 900000000};
+  g.tower_offset = {0, 900000001, 1800000002, 2700000003};
+  g.total_tiles = 2700000003LL;
+  return g;
+}
+
 campaign::CampaignConstants synthetic_constants(std::uint64_t r_inner = 10000,
                                                  std::uint64_t r_outer = 10032) {
   return campaign::CampaignConstants::from_radii(
@@ -222,6 +242,17 @@ TEST(Snapshot, GridParamsHashMatchesHeader) {
         std::stoul(byte_hex, nullptr, 16));
     EXPECT_EQ(header.grid_params_hash[i], byte);
   }
+}
+
+TEST(Snapshot, TowerTableHashIsStableAndWideSafe) {
+  const auto grid = synthetic_wide_grid();
+  const auto hash = campaign::grid_tower_table_hash(grid);
+  ASSERT_EQ(hash.size(), 64u);
+  EXPECT_EQ(hash, campaign::grid_tower_table_hash(grid));
+
+  auto shifted = grid;
+  shifted.j_low[1] += 1;
+  EXPECT_NE(hash, campaign::grid_tower_table_hash(shifted));
 }
 
 TEST(Snapshot, WriterMatchesVectorSnapshotWithFrozenTimestamp) {

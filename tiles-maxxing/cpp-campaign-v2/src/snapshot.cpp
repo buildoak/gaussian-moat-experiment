@@ -101,6 +101,47 @@ std::string grid_canonical_string(const Grid& grid) {
   return ss.str();
 }
 
+std::string grid_tower_table_canonical_string(const Grid& grid) {
+  std::ostringstream ss;
+  ss << "grid_hash_schema=tower_table_v1"
+     << ";R_inner=" << grid.R_inner
+     << ";R_outer=" << grid.R_outer
+     << ";R_inner_sq=" << grid.R_inner_sq
+     << ";R_outer_sq=" << grid.R_outer_sq
+     << ";K=" << grid.K_SQ_value
+     << ";S=" << grid.S_value
+     << ";C=" << grid.C_value
+     << ";offset=" << grid.o_x << "," << grid.o_y
+     << ";i_min=" << grid.i_min
+     << ";i_max=" << grid.i_max
+     << ";tile_count=" << grid.total_tiles
+     << ";j_low=";
+  for (std::size_t k = 0; k < grid.j_low.size(); ++k) {
+    if (k != 0) ss << ",";
+    ss << grid.j_low[k];
+  }
+  ss << ";j_high=";
+  for (std::size_t k = 0; k < grid.j_high.size(); ++k) {
+    if (k != 0) ss << ",";
+    ss << grid.j_high[k];
+  }
+  ss << ";tower_offset=";
+  for (std::size_t k = 0; k < grid.tower_offset.size(); ++k) {
+    if (k != 0) ss << ",";
+    ss << grid.tower_offset[k];
+  }
+  if (!grid.explicit_tiles.empty()) {
+    ss << ";explicit_tiles=";
+    for (std::size_t k = 0; k < grid.explicit_tiles.size(); ++k) {
+      if (k != 0) ss << "|";
+      const TileCoord& coord = grid.explicit_tiles[k];
+      ss << coord.i << "," << coord.j << "," << coord.a_lo << ","
+         << coord.b_lo;
+    }
+  }
+  return ss.str();
+}
+
 std::array<std::uint8_t, kHashBytes> digest_from_hex(const std::string& hex,
                                                      const char* field_name) {
   if (hex.size() != kHashBytes * 2) {
@@ -168,6 +209,10 @@ void write_tileop(std::ostream& out, const TileOp& op) {
 
 std::string grid_params_hash(const Grid& grid) {
   return detail::sha256_hex(grid_canonical_string(grid));
+}
+
+std::string grid_tower_table_hash(const Grid& grid) {
+  return detail::sha256_hex(grid_tower_table_canonical_string(grid));
 }
 
 SnapshotWriter::SnapshotWriter(const std::filesystem::path& path,
