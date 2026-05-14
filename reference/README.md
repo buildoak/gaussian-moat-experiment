@@ -19,6 +19,15 @@ First-read order:
 |---|---|
 | `current-verification-spine.md` | Active compact verification gates, demoted tools, and sample policy. |
 | `attached-static-annulus-moats.md` | Attached lower-K36 and local K34 static-annulus moat evidence, with proof-status cautions. |
+| `k34-current-campaign-plan-20260507.md` | Current-gate rerun plan for attaching K34 local static-annulus moat rows. |
+| `k34-tsuchimura-campaign-comparison-20260507.md` | Computational comparison between Tsuchimura's K34 campaign and the local CUDA K34 effective-width campaign. |
+| `k26-static-annulus-diagnostics.md` | K26 Tsuchimura-endpoint static-annulus diagnostics, hard negatives, and next lower-K target logic. |
+| `k36-lower-boundary-campaign-20260507.md` | K36 W32768 lower-boundary campaign that found the 72.875M sentinel moat and hard negatives to 60M. |
+| `k36-lowest-moat-refinement-20260508.md` | K36 W32768 refinement of the 72.875M sentinel into a 64-gap island near 72.740M, plus lower hard negatives to 60M. |
+| `k37-k39-k36-lowest-moat-scout-20260508.md` | Diagnostic K37-K39 full-ingest scout at the refined K36 lowest moat island. |
+| `k40-lower-scout-20260509.md` | Diagnostic K40 full-ingest scout showing the K36/K39 lower island does not survive at W32768. |
+| `k40-current-gate-campaign-20260509.md` | Current-gate K40 campaign: W32768 bracket `978M SPAN -> 979.5M MOAT`, larger-width W49152 bracket `937.5M SPAN -> 940.625M MOAT`, and profile-free early-exit W65536/W131072/W262144 scout branch points. |
+| `k26-k36-telemetry-calibration-20260508.md` | Lower-K telemetry calibration pilot for K40 moat-search triage. |
 | `agentic-optimization-workflow.md` | Branch/report workflow for long optimization work. |
 | `optimization-safety-checklist.md` | Do-not-break checklist for math/TileOp/port/verdict changes. |
 | `performance-report-template.md` | Performance report shape. |

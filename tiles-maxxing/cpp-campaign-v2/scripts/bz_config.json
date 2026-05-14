@@ -1,6 +1,14 @@
 {
   "_comment": "Canonical BZ-reconciliation radii tuple (audit Codex-M2, 2026-04-21). Both CMakeLists.txt and bz_check.py read from this file so the BZ gate binds to a single source. Deployments that change runtime radii must update this file AND re-run bz_check. K=36 campaign radii live here; K=38 and K=40 campaign entries are build anchors, while sweep radii still require per-run BZ logs.",
   "k_sq_to_radii": {
+    "26": {
+      "r_inner": 1015639,
+      "r_outer": 1023831
+    },
+    "32": {
+      "r_inner": 2823055,
+      "r_outer": 2831247
+    },
     "34": {
       "r_inner": 24289452,
       "r_outer": 24297644

@@ -27,5 +27,7 @@ See:
 - `reference/current-verification-spine.md` for the active verification gates.
 - `reference/attached-static-annulus-moats.md` for attached lower-K36 and
   local K34 static-annulus moat evidence.
+- `reference/k26-static-annulus-diagnostics.md` for the K26 Tsuchimura-endpoint
+  diagnostic campaign and why K32 is the next meaningful lower-K graph target.
 - `methodology/tile-operator-definition-v-claude.md` for the mathematical
   implementation contract.
