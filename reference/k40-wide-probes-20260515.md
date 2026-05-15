@@ -206,3 +206,14 @@ stdout_size=0
 stderr_size=0
 summary_has_no_new_row_yet=true
 ```
+
+At `2026-05-15T16:19:58Z`, the same row was still running and nearing its
+`8h` timeout:
+
+```text
+process_elapsed=7h22m55s
+gpu_util=100%
+gpu_memory=9133/24564 MiB
+gpu_temp=62 C
+summary_has_no_new_row_yet=true
+```
