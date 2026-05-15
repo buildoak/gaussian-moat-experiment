@@ -177,7 +177,19 @@ W=262144, R_inner=835,000,000:
   emitted_overflow=0
   elapsed_s=23
   status=early_span_clean
+
+W=262144, R_inner=845,000,000:
+  bz_rc=0, run_rc=0, verdict=SPANNING, early_exit_taken=1
+  active=2,658,359,419
+  produced=29,182,242
+  ingested=29,006,962
+  overflow_total=0
+  emitted_overflow=0
+  elapsed_s=356
+  status=early_span_clean
 ```
 
-At the last check, the script was running
-`W=262144, R_inner=845,000,000` under tmux with GPU work active.
+At `2026-05-15T09:24:36Z`, the script was running
+`W=262144, R_inner=855,000,000` under tmux with GPU work active.
+This row has an `8h` timeout and is the first row in the batch showing
+substantial late-span pressure.
