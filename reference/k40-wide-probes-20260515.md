@@ -193,3 +193,16 @@ At `2026-05-15T09:24:36Z`, the script was running
 `W=262144, R_inner=855,000,000` under tmux with GPU work active.
 This row has an `8h` timeout and is the first row in the batch showing
 substantial late-span pressure.
+
+At `2026-05-15T12:25:46Z`, the same `W=262144, R_inner=855,000,000`
+row was still running:
+
+```text
+process_elapsed=3h28m43s
+gpu_util=100%
+gpu_memory=9133/24564 MiB
+gpu_temp=66 C
+stdout_size=0
+stderr_size=0
+summary_has_no_new_row_yet=true
+```
