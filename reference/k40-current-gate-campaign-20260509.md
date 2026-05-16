@@ -347,9 +347,9 @@ The `2026-05-16` fine scout then tested:
 799,000,000 SPANNING elapsed=11s bz_rc=0 overflow=0
 ```
 
-This width remains trivially spanning through `799M`. The below-850M moat
-hunt should therefore probe the `800M-849M` band next before spending full
-audit time.
+This width remains trivially spanning through `799M`. The below-850M moat hunt
+should therefore build an adaptive low-band map starting at `400M-500M`, then
+probe the `805M-849.5M` pressure ladder before spending full audit time.
 
 ## Interpretation
 
@@ -374,8 +374,8 @@ What it does establish is:
   `860,000,000 SPANNING -> 870,000,000 MOAT`.
 - W262144 `870M` and `855000001` were later hardened as full-ingest,
   sample-audited `MOAT` detector rows with `TILE_SAMPLE_AUDIT_PASS`.
-- W524288 remains BZ-clean early `SPANNING` through `799M`; the next scout band
-  is `800M-849M`.
+- W524288 remains BZ-clean early `SPANNING` through `799M`; the next scout is
+  an adaptive below-850M mesh starting at `400M-500M`.
 
 ## Next Gates
 
@@ -384,7 +384,7 @@ What it does establish is:
 2. If the goal is W49152 bracket precision, continue bisection between
    `937.5M` and `940.625M`.
 3. If the goal is below-850M wider-annulus hunting, run the bounded W524288
-   `800M-849M` early-exit scout documented in
+   adaptive early-exit scout documented in
    `reference/k40-below-850-fine-probe-plan-20260516.md`.
 4. Confirm any new below-850M timeout/non-early-span candidate with a BZ-clean
    full-ingest audit row before calling it a detector moat.
