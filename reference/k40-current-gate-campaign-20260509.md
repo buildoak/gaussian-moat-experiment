@@ -264,16 +264,92 @@ emitted_overflow=0
 external_bz_rc=0
 ```
 
-The current profile-free W262144 diagnostic bracket is therefore:
+The initial profile-free W262144 diagnostic bracket was therefore:
 
 ```text
 860,000,000 SPANNING -> 870,000,000 MOAT
 ```
 
-This improves the older W49152 and W32768 surface, but it is not yet an
-accepted full-audit row under the compact spine because profile output and
-independent tile samples were disabled to avoid the W65536+ profile-hash memory
-failure.
+Two later audit runs hardened the `MOAT` side of this surface.
+
+First, `W=262144, R_inner=870000000` was rerun with audit telemetry and
+manifested tile samples:
+
+```text
+remote_run=/workspace/runs/k40-w262144-870m-audit-20260514-r2
+local_artifacts=/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-w262144-870m-audit-20260514-r2/
+commit=7ddbc3f25d7fe268399cf0a9f7ee7f55c378c950
+R_outer=870262144
+verdict=MOAT
+run_rc=0
+active=2,736,997,077
+produced=2,736,997,077
+ingested=2,736,997,077
+early_exit_taken=0
+total_s=33,062.774
+cuda_k1_k5_s=25,189.212
+compositor_s=6,216.621
+overflow_total=0
+emitted_overflow=0
+tile_sample_check=PASS checked=512
+postflight_status=TILE_SAMPLE_AUDIT_PASS
+```
+
+Second, a BZ-clean replacement for the invalid `855000000` pressure scout was
+run as a full audit row:
+
+```text
+remote_run=/workspace/runs/k40-w524288-fine-and-w262144-855000001-audit-20260516
+local_artifacts=/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-w524288-fine-and-w262144-855000001-audit-20260516/
+commit=7ddbc3f25d7fe268399cf0a9f7ee7f55c378c950
+R_inner=855000001
+R_outer=855262145
+verdict=MOAT
+bz_rc=0
+run_rc=0
+active=2,689,814,835
+produced=2,689,814,835
+ingested=2,689,814,835
+early_exit_taken=0
+total_s=32,931.8
+cuda_s=25,007.0
+compositor_s=6,297.73
+overflow_total=0
+emitted_overflow=0
+tile_samples_written=512
+tile_sample_check=PASS
+postflight_status=TILE_SAMPLE_AUDIT_PASS
+```
+
+The current W262144 detector/audit surface is:
+
+```text
+845,000,000 SPANNING scout -> 855,000,001 MOAT audit
+```
+
+The `MOAT` side is BZ-clean, full-ingest, sample-audited static-annulus
+detector evidence. The `SPANNING` side remains scout evidence unless rerun with
+an accepted SPANNING certificate. This is not `MOAT_PROOF_PASS`.
+
+## W524288 Fine Scout Addendum
+
+The `2026-05-15` radical scout tested `W=524288` at `600M`, `650M`, `700M`,
+and `750M`; all rows were BZ-clean early `SPANNING` rows in `<=8s`.
+
+The `2026-05-16` fine scout then tested:
+
+```text
+760,000,000 SPANNING elapsed=9s  bz_rc=0 overflow=0
+770,000,000 SPANNING elapsed=8s  bz_rc=0 overflow=0
+780,000,000 SPANNING elapsed=9s  bz_rc=0 overflow=0
+790,000,000 SPANNING elapsed=11s bz_rc=0 overflow=0
+795,000,000 SPANNING elapsed=8s  bz_rc=0 overflow=0
+799,000,000 SPANNING elapsed=11s bz_rc=0 overflow=0
+```
+
+This width remains trivially spanning through `799M`. The below-850M moat
+hunt should therefore probe the `800M-849M` band next before spending full
+audit time.
 
 ## Interpretation
 
@@ -294,8 +370,12 @@ What it does establish is:
 - profile-free early-exit wider probes can now run without the old
   profile-finalization OOM, with scout branch points at W65536/W131072/W262144
   between `780M` and `900M`.
-- corrected W262144 long rows found a profile-free diagnostic bracket:
+- corrected W262144 long rows found a diagnostic bracket:
   `860,000,000 SPANNING -> 870,000,000 MOAT`.
+- W262144 `870M` and `855000001` were later hardened as full-ingest,
+  sample-audited `MOAT` detector rows with `TILE_SAMPLE_AUDIT_PASS`.
+- W524288 remains BZ-clean early `SPANNING` through `799M`; the next scout band
+  is `800M-849M`.
 
 ## Next Gates
 
@@ -303,11 +383,10 @@ What it does establish is:
    `979.5M`.
 2. If the goal is W49152 bracket precision, continue bisection between
    `937.5M` and `940.625M`.
-3. If the goal is wider-annulus hunting, confirm the profile-free scout branch
-   points with no-early-exit/full-ingest rows or repair profile hashing so
-   W65536+ can carry accepted audit evidence.
-4. Confirm the W262144 `870M` moat candidate with the strongest feasible audit
-   path: repaired profile hashing and/or no-profile full-ingest sample
-   generation plus independent sample checks.
+3. If the goal is below-850M wider-annulus hunting, run the bounded W524288
+   `800M-849M` early-exit scout documented in
+   `reference/k40-below-850-fine-probe-plan-20260516.md`.
+4. Confirm any new below-850M timeout/non-early-span candidate with a BZ-clean
+   full-ingest audit row before calling it a detector moat.
 5. Promote SPANNING certificate support for large K40 rows before presenting
    these as more than detector/sample evidence.
