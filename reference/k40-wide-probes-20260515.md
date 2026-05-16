@@ -217,3 +217,59 @@ gpu_memory=9133/24564 MiB
 gpu_temp=62 C
 summary_has_no_new_row_yet=true
 ```
+
+## Final Scout Result
+
+The scout finished at `2026-05-15T16:57:29Z`.
+
+Remote artifacts were preserved locally under:
+
+```text
+/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-radical-wide-scout-20260515/
+```
+
+Summary:
+
+```text
+rows=9
+count_early_span_clean=8
+count_late_timeout_candidate=1
+```
+
+Final row table:
+
+```text
+W=262144, R=800,000,000: SPANNING, elapsed=7s, bz_rc=0, overflow=0
+W=262144, R=820,000,000: SPANNING, elapsed=8s, bz_rc=0, overflow=0
+W=262144, R=835,000,000: SPANNING, elapsed=23s, bz_rc=0, overflow=0
+W=262144, R=845,000,000: SPANNING, elapsed=356s, bz_rc=0, overflow=0
+W=262144, R=855,000,000: timeout after 28800s, bz_rc=1
+W=524288, R=600,000,000: SPANNING, elapsed=6s, bz_rc=0, overflow=0
+W=524288, R=650,000,000: SPANNING, elapsed=5s, bz_rc=0, overflow=0
+W=524288, R=700,000,000: SPANNING, elapsed=6s, bz_rc=0, overflow=0
+W=524288, R=750,000,000: SPANNING, elapsed=8s, bz_rc=0, overflow=0
+```
+
+Important caveat: `W=262144, R=855,000,000` is not a clean branch point because
+external BZ failed:
+
+```text
+BZ_I gaussian_prime_norms=[731025010814989637]
+```
+
+The nearest checked replacement offset is clean:
+
+```text
+W=262144, R=855,000,001
+R_outer=855,262,145
+bz_rc=0
+```
+
+Interpretation:
+
+- Same-width `W=262144` becomes sharply harder between `845M` and `855M`, but
+  the exact `855M` row must be discarded or rerun at a BZ-clean offset.
+- Wider `W=524288` remains trivially spanning through `750M`; the radical lower
+  600-750M band did not produce a candidate.
+- The next scout row should be `W=262144, R=855,000,001`, or a nearby
+  BZ-clean small ladder, before treating `855M` pressure as real evidence.
