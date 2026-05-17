@@ -351,6 +351,39 @@ This width remains trivially spanning through `799M`. The below-850M moat hunt
 should therefore build an adaptive low-band map starting at `400M-500M`, then
 probe the `805M-849.5M` pressure ladder before spending full audit time.
 
+The `2026-05-17` adaptive scout did that for `W=524288`:
+
+```text
+remote_run=/workspace/runs/k40-below850-w524288-adaptive-20260517
+local_artifacts=/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-below850-w524288-adaptive-20260517/
+commit=0bacf34b4888a6954641acc49f8de6cffb3530e4
+rows=20
+early_span_clean=19
+late_timeout_candidate=1
+```
+
+The clean early-span rows were:
+
+```text
+400M, 425M, 450M, 475M, 500M, 525M, 550M, 575M,
+625M, 675M, 725M, 775M,
+805M, 810M, 815M, 820M, 825M, 830M, 835M
+```
+
+The first candidate signal was:
+
+```text
+W=524288
+R_inner=840000000
+R_outer=840524288
+bz_rc=0
+run_rc=124
+timeout_s=2400
+status=late_timeout_candidate
+```
+
+This is a BZ-clean pressure signal only. It is not a `MOAT` claim.
+
 ## Interpretation
 
 This is now the best current static-annulus K40 bracket at `W=32768`, with a
@@ -374,8 +407,8 @@ What it does establish is:
   `860,000,000 SPANNING -> 870,000,000 MOAT`.
 - W262144 `870M` and `855000001` were later hardened as full-ingest,
   sample-audited `MOAT` detector rows with `TILE_SAMPLE_AUDIT_PASS`.
-- W524288 remains BZ-clean early `SPANNING` through `799M`; the next scout is
-  an adaptive below-850M mesh starting at `400M-500M`.
+- W524288 remains BZ-clean early `SPANNING` through `835M`; `840M` is the first
+  below-850M timeout candidate in this width.
 
 ## Next Gates
 
@@ -383,10 +416,9 @@ What it does establish is:
    `979.5M`.
 2. If the goal is W49152 bracket precision, continue bisection between
    `937.5M` and `940.625M`.
-3. If the goal is below-850M wider-annulus hunting, run the bounded W524288
-   adaptive early-exit scout documented in
-   `reference/k40-below-850-fine-probe-plan-20260516.md`.
-4. Confirm any new below-850M timeout/non-early-span candidate with a BZ-clean
-   full-ingest audit row before calling it a detector moat.
+3. If the goal is below-850M wider-annulus hunting, follow up the W524288
+   `835M SPANNING -> 840M late_timeout_candidate` pressure signal.
+4. Confirm the `840M` candidate with a longer scout or BZ-clean full-ingest
+   audit row before calling it a detector moat.
 5. Promote SPANNING certificate support for large K40 rows before presenting
    these as more than detector/sample evidence.

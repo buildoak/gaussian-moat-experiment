@@ -277,4 +277,73 @@ Failure modes and mitigations:
 
 ## Launch Decision
 
-This is a plan only. No compute has been launched from this document yet.
+Launched on Vast instance `36747212` at `2026-05-17T05:03:30Z`.
+
+Remote run:
+
+```text
+/workspace/runs/k40-below850-w524288-adaptive-20260517
+```
+
+Local artifact mirror:
+
+```text
+/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-below850-w524288-adaptive-20260517/
+```
+
+Generator:
+
+```text
+branch=repair/k40-w262144-telemetry-audit
+commit=0bacf34b4888a6954641acc49f8de6cffb3530e4
+GPU=NVIDIA GeForce RTX 4090
+driver=570.144
+```
+
+## Final Result
+
+The scout finished at `2026-05-17T05:59:32Z`.
+
+Summary:
+
+```text
+rows=20
+count_early_span_clean=19
+count_late_timeout_candidate=1
+```
+
+Final row table:
+
+```text
+W=524288, R=400,000,000: SPANNING, elapsed=4s,   bz_rc=0, overflow=0
+W=524288, R=425,000,000: SPANNING, elapsed=4s,   bz_rc=0, overflow=0
+W=524288, R=450,000,000: SPANNING, elapsed=5s,   bz_rc=0, overflow=0
+W=524288, R=475,000,000: SPANNING, elapsed=5s,   bz_rc=0, overflow=0
+W=524288, R=500,000,000: SPANNING, elapsed=5s,   bz_rc=0, overflow=0
+W=524288, R=525,000,000: SPANNING, elapsed=5s,   bz_rc=0, overflow=0
+W=524288, R=550,000,000: SPANNING, elapsed=5s,   bz_rc=0, overflow=0
+W=524288, R=575,000,000: SPANNING, elapsed=5s,   bz_rc=0, overflow=0
+W=524288, R=625,000,000: SPANNING, elapsed=6s,   bz_rc=0, overflow=0
+W=524288, R=675,000,000: SPANNING, elapsed=6s,   bz_rc=0, overflow=0
+W=524288, R=725,000,000: SPANNING, elapsed=6s,   bz_rc=0, overflow=0
+W=524288, R=775,000,000: SPANNING, elapsed=9s,   bz_rc=0, overflow=0
+W=524288, R=805,000,000: SPANNING, elapsed=11s,  bz_rc=0, overflow=0
+W=524288, R=810,000,000: SPANNING, elapsed=14s,  bz_rc=0, overflow=0
+W=524288, R=815,000,000: SPANNING, elapsed=14s,  bz_rc=0, overflow=0
+W=524288, R=820,000,000: SPANNING, elapsed=14s,  bz_rc=0, overflow=0
+W=524288, R=825,000,000: SPANNING, elapsed=29s,  bz_rc=0, overflow=0
+W=524288, R=830,000,000: SPANNING, elapsed=55s,  bz_rc=0, overflow=0
+W=524288, R=835,000,000: SPANNING, elapsed=759s, bz_rc=0, overflow=0
+W=524288, R=840,000,000: timeout after 2400s,    bz_rc=0
+```
+
+No nominal row required a BZ shift; every row had `bz_shift=0`.
+
+Interpretation:
+
+- `W=524288` now has a clean early-span map from `400M` through `835M`.
+- The first below-850M pressure signal in this width is the BZ-clean
+  `R_inner=840,000,000` timeout.
+- The timeout is a `late_timeout_candidate`, not a moat claim.
+- Next gate is a longer follow-up around `835M-840M`, or a no-early-exit audit
+  at `840M` if the goal is to test whether the candidate hardens to `MOAT`.
