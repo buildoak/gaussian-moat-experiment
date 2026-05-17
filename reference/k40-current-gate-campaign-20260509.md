@@ -487,7 +487,9 @@ What it does establish is:
    `937.5M` and `940.625M`.
 3. If the goal is below-850M wider-annulus hunting, continue above `840M` with
    longer early-exit rows before selecting any full-audit candidate.
-4. Confirm any new timeout/non-early-span candidate with a BZ-clean full-ingest
+4. For genuinely lower candidates, run wider sparse scouts at `W=786432` and
+   then `W=1048576` over `400M`, `500M`, `650M`, `780M`, `820M`, and `840M`.
+5. Confirm any new timeout/non-early-span candidate with a BZ-clean full-ingest
    audit row before calling it a detector moat.
-5. Promote SPANNING certificate support for large K40 rows before presenting
+6. Promote SPANNING certificate support for large K40 rows before presenting
    these as more than detector/sample evidence.

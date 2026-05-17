@@ -668,3 +668,101 @@ Interpretation:
 - Combined with the `300M-800M` mesh, every sampled/shifted row in
   `70M-800M` was BZ-clean, zero-overflow, early `SPANNING`.
 - This is dense scout coverage, not a proof over every integer `R_inner`.
+
+## Wider-Width Lower Candidate Scout Plan - 2026-05-17
+
+User requested keeping the GPU busy with genuinely wider scouts for lower moat
+candidates:
+
+```text
+W=786432 or W=1048576
+R around 400M, 500M, 650M, 780M, 820M, 840M
+```
+
+Purpose: find whether a width larger than `W=524288` produces a lower
+timeout/non-early-span candidate after the `W=524288` dense `70M-800M` map and
+late `840M` span removed the current lower candidate.
+
+### Scout Matrix
+
+Stage 1:
+
+```text
+W=786432
+R_inner = 400M, 500M, 650M, 780M, 820M, 840M
+```
+
+Stage 2, only if Stage 1 cleanly early-spans every row:
+
+```text
+W=1048576
+R_inner = 400M, 500M, 650M, 780M, 820M, 840M
+```
+
+Common row shape:
+
+```text
+K_SQ=40
+region=full-octant
+R_outer=R_inner+W
+external_bz=required before CUDA
+telemetry=none
+profile=disabled
+samples=disabled
+span_cert=disabled
+early_exit=enabled
+```
+
+Timeout schedule:
+
+```text
+400M, 500M, 650M: 1800s per row
+780M, 820M:       3600s per row
+840M:             7200s per row
+```
+
+BZ rule:
+
+```text
+If nominal row is BZ-invalid:
+  shift upward by the first clean delta in [1, 128],
+  require shifted R_inner < 850000000,
+  record nominal R_inner, actual R_inner, and bz_shift.
+
+If no clean shifted row exists:
+  mark bz_reject_no_clean_offset and stop.
+```
+
+Stop rule:
+
+```text
+Stop the whole scout on first:
+  late_timeout_candidate,
+  candidate_moat_full_ingest_unprofiled,
+  BZ reject without clean replacement,
+  non-zero overflow,
+  unexpected run code.
+
+If W=786432 has no candidate, proceed to W=1048576.
+```
+
+Pre-mortem changes:
+
+- Do not launch full audit from this run. These are scout rows only.
+- Do not run both wider families if `W=786432` already finds a candidate.
+- Keep every timeout labeled `late_timeout_candidate`, not `MOAT`.
+- Mirror artifacts locally before any cloud cleanup.
+
+Success output:
+
+```text
+summary.tsv
+run-matrix.tsv
+per-row BZ logs
+per-row stdout/stderr
+driver.log
+git commit/status
+GPU metadata
+local artifact mirror under pratchett-os/data/vast/
+reference doc update with final table or compact branch point
+```
