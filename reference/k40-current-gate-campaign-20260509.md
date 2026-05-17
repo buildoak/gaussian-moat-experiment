@@ -417,8 +417,11 @@ What it does establish is:
 2. If the goal is W49152 bracket precision, continue bisection between
    `937.5M` and `940.625M`.
 3. If the goal is below-850M wider-annulus hunting, follow up the W524288
-   `835M SPANNING -> 840M late_timeout_candidate` pressure signal.
-4. Confirm the `840M` candidate with a longer scout or BZ-clean full-ingest
-   audit row before calling it a detector moat.
-5. Promote SPANNING certificate support for large K40 rows before presenting
+   `835M SPANNING -> 840M late_timeout_candidate` pressure signal with a long
+   early-exit falsification row before full audit.
+4. Build the proposed dense `300M-800M` / `500k` low-band mesh for `W=524288`
+   if the goal is a finer scouting map below the current pressure zone.
+5. Confirm the `840M` candidate with a BZ-clean full-ingest audit row before
+   calling it a detector moat.
+6. Promote SPANNING certificate support for large K40 rows before presenting
    these as more than detector/sample evidence.

@@ -347,3 +347,180 @@ Interpretation:
 - The timeout is a `late_timeout_candidate`, not a moat claim.
 - Next gate is a longer follow-up around `835M-840M`, or a no-early-exit audit
   at `840M` if the goal is to test whether the candidate hardens to `MOAT`.
+
+## Proposed Next Runs - 2026-05-17
+
+User requested:
+
+```text
+1. clean run for the new 840M candidate;
+2. finer early-exit probes for 300M-800M;
+3. maybe 1M or 500k spacing;
+4. roughly 500k window.
+```
+
+Assumption: keep the established near-500k width as `W=524288`, not exact
+`W=500000`, because the current evidence and scripts are already on the
+power-of-two width.
+
+### Precondition
+
+Push the current result documentation before launching more compute:
+
+```text
+local_head=fc26988 Record K40 below-850 W524288 scout result
+remote_branch=origin/repair/k40-w262144-telemetry-audit
+```
+
+### Run A - Candidate Clean Follow-Up
+
+Purpose: avoid mistaking a short timeout for a moat, following the lesson from
+the earlier `W=262144` late-span correction.
+
+Stage A1, long early-exit falsification row:
+
+```text
+K_SQ=40
+W=524288
+R_inner=840000000
+R_outer=840524288
+region=full-octant
+external_bz=required
+telemetry=none
+profile=disabled
+samples=disabled
+span_cert=disabled
+early_exit=enabled
+timeout=36000s
+```
+
+Gate:
+
+```text
+SPANNING with early_exit_taken=1 and zero overflow:
+  candidate is killed; record late span timing.
+
+timeout after 36000s with bz_rc=0:
+  candidate survives; proceed to Stage A2 only if we want an expensive audit.
+
+overflow, BZ failure, unexpected rc:
+  reject/repair before interpretation.
+```
+
+Stage A2, audit only if A1 still times out:
+
+```text
+K_SQ=40
+W=524288
+R_inner=840000000
+R_outer=840524288
+region=full-octant
+external_bz=required
+telemetry=audit
+profile=enabled
+tile_sample_count=512
+samples=manifested
+early_exit=disabled
+timeout=108000s
+postflight=tile_sample_check + postflight_orchestrate
+```
+
+Gate:
+
+```text
+MOAT + full ingest + bz_rc=0 + overflow=0 + 512-sample audit PASS:
+  static-annulus detector/audit evidence, status TILE_SAMPLE_AUDIT_PASS.
+
+SPANNING:
+  not accepted as proof unless a SPANNING coordinate certificate is produced
+  and independently checked.
+```
+
+Do not call either stage `MOAT_PROOF_PASS`.
+
+### Run B - Dense 300M-800M Early-Exit Mesh
+
+Purpose: build a high-resolution low-band map and catch any unexpected local
+pressure below the already clean `805M` point.
+
+Mesh:
+
+```text
+K_SQ=40
+W=524288
+R_inner_start=300000000
+R_inner_stop=800000000
+R_inner_step=500000
+row_count=1001
+R_outer=R_inner+524288
+region=full-octant
+external_bz=required before CUDA
+telemetry=none
+profile=disabled
+samples=disabled
+span_cert=disabled
+early_exit=enabled
+```
+
+Timeout schedule:
+
+```text
+300M-700M: 120s per row
+700M-800M: 300s per row
+```
+
+Expected runtime: likely a few hours if rows remain quick early spans. Worst
+case is intentionally bounded by stopping on the first non-clean row.
+
+BZ rule:
+
+```text
+If nominal row is BZ-invalid:
+  shift upward by the first clean delta in [1, 128],
+  require shifted R_inner < 800500000,
+  record nominal R_inner, actual R_inner, and bz_shift.
+
+If no clean shifted row exists:
+  mark bz_reject_no_clean_offset and stop.
+```
+
+Stop rule:
+
+```text
+Continue through early_span_clean rows.
+Stop immediately on:
+  late_timeout_candidate,
+  candidate_moat_full_ingest_unprofiled,
+  BZ reject without clean replacement,
+  non-zero overflow,
+  unexpected run code.
+```
+
+Dense-mesh output:
+
+```text
+summary.tsv
+run-matrix.tsv
+per-row BZ logs
+per-row stdout/stderr
+driver.log
+git commit/status
+GPU metadata
+local artifact mirror under pratchett-os/data/vast/
+reference doc update with final table or compact ranges
+```
+
+### Sequencing Recommendation
+
+Run A1 first. If `840M` spans late within `10h`, do not spend on A2; launch the
+dense `300M-800M` mesh next.
+
+If A1 times out, choose between:
+
+```text
+Option 1: launch A2 audit immediately.
+Option 2: run dense mesh first while preserving the 840M candidate for audit.
+```
+
+Pragmatic recommendation: A1 first, then dense mesh, then A2 only if the
+candidate still matters after the low-band map.
