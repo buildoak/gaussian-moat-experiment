@@ -422,6 +422,36 @@ emitted_overflow=0
 The `840M` timeout candidate is therefore falsified as a moat candidate by a
 late span. No full audit was run.
 
+The same dense `W=524288`, `500k`-step logic was then extended downward:
+
+```text
+remote_run=/workspace/runs/k40-dense70-300-w524288-20260517
+local_artifacts=/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-dense70-300-w524288-20260517/
+commit=c9b93f7eb5410cf851029cdac018c04c4b423915
+```
+
+Dense lower-band mesh:
+
+```text
+W=524288
+R_inner=70000000..300000000
+step=500000
+rows=461
+early_span_clean=461
+overflow_rows=0
+bz_nonzero_after_shift=0
+shifted_rows=8
+```
+
+The shifted BZ-clean replacements were all `+1` rows:
+
+```text
+107000000, 122500000, 146000000, 157000000,
+175500000, 207500000, 214000000, 287000000
+```
+
+All shifted rows also returned clean early `SPANNING`.
+
 ## Interpretation
 
 This is now the best current static-annulus K40 bracket at `W=32768`, with a
@@ -445,8 +475,9 @@ What it does establish is:
   `860,000,000 SPANNING -> 870,000,000 MOAT`.
 - W262144 `870M` and `855000001` were later hardened as full-ingest,
   sample-audited `MOAT` detector rows with `TILE_SAMPLE_AUDIT_PASS`.
-- W524288 remains BZ-clean early `SPANNING` across the dense `300M-800M` mesh,
-  and the `840M` timeout candidate later became a clean late `SPANNING` row.
+- W524288 remains BZ-clean early `SPANNING` across the dense `70M-800M` sampled
+  mesh, and the `840M` timeout candidate later became a clean late `SPANNING`
+  row.
 
 ## Next Gates
 

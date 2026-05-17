@@ -601,3 +601,70 @@ Interpretation:
 
 Next useful scout band is above `840M`, for example `841M-850M` with longer
 timeouts, before spending full-audit time.
+
+## Dense 70M-300M Sanity Scout Result - 2026-05-17
+
+User requested covering `70M-300M` with the same overlapping-window logic.
+
+Remote run:
+
+```text
+/workspace/runs/k40-dense70-300-w524288-20260517
+```
+
+Local artifact mirror:
+
+```text
+/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-dense70-300-w524288-20260517/
+```
+
+Generator:
+
+```text
+branch=repair/k40-w262144-telemetry-audit
+commit=c9b93f7eb5410cf851029cdac018c04c4b423915
+GPU=NVIDIA GeForce RTX 4090
+driver=570.144
+```
+
+The run finished at `2026-05-17T18:08:43Z`.
+
+Dense mesh result:
+
+```text
+W=524288
+R_inner_start=70000000
+R_inner_stop=300000000
+R_inner_step=500000
+rows=461
+early_span_clean=461
+overflow_rows=0
+bz_nonzero_after_shift=0
+shifted_rows=8
+last_nominal_r_inner=300000000
+last_actual_r_inner=300000000
+```
+
+Rows shifted by `+1` to avoid BZ-invalid nominal boundaries:
+
+```text
+107000000 -> 107000001
+122500000 -> 122500001
+146000000 -> 146000001
+157000000 -> 157000001
+175500000 -> 175500001
+207500000 -> 207500001
+214000000 -> 214000001
+287000000 -> 287000001
+```
+
+All shifted rows also returned clean early `SPANNING`.
+
+Interpretation:
+
+- The same `W=524288`, `500k`-spaced overlapping-window scout now covers
+  `70M-800M` in two dense runs.
+- The `70M-300M` band produced no pressure candidate.
+- Combined with the `300M-800M` mesh, every sampled/shifted row in
+  `70M-800M` was BZ-clean, zero-overflow, early `SPANNING`.
+- This is dense scout coverage, not a proof over every integer `R_inner`.
