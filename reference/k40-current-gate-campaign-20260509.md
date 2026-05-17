@@ -384,6 +384,44 @@ status=late_timeout_candidate
 
 This is a BZ-clean pressure signal only. It is not a `MOAT` claim.
 
+The follow-up `2026-05-17` dense scout and long candidate row then found:
+
+```text
+remote_run=/workspace/runs/k40-dense300800-and-840-followup-20260517
+local_artifacts=/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-dense300800-and-840-followup-20260517/
+commit=c9b93f7eb5410cf851029cdac018c04c4b423915
+```
+
+Dense low-band mesh:
+
+```text
+W=524288
+R_inner=300000000..800000000
+step=500000
+rows=1001
+early_span_clean=1001
+```
+
+Long `840M` candidate follow-up:
+
+```text
+W=524288
+R_inner=840000000
+R_outer=840524288
+bz_rc=0
+run_rc=0
+verdict=SPANNING
+early_exit_taken=1
+elapsed_s=3274
+produced=260,831,721
+ingested=260,727,141
+overflow_total=0
+emitted_overflow=0
+```
+
+The `840M` timeout candidate is therefore falsified as a moat candidate by a
+late span. No full audit was run.
+
 ## Interpretation
 
 This is now the best current static-annulus K40 bracket at `W=32768`, with a
@@ -407,8 +445,8 @@ What it does establish is:
   `860,000,000 SPANNING -> 870,000,000 MOAT`.
 - W262144 `870M` and `855000001` were later hardened as full-ingest,
   sample-audited `MOAT` detector rows with `TILE_SAMPLE_AUDIT_PASS`.
-- W524288 remains BZ-clean early `SPANNING` through `835M`; `840M` is the first
-  below-850M timeout candidate in this width.
+- W524288 remains BZ-clean early `SPANNING` across the dense `300M-800M` mesh,
+  and the `840M` timeout candidate later became a clean late `SPANNING` row.
 
 ## Next Gates
 
@@ -416,12 +454,9 @@ What it does establish is:
    `979.5M`.
 2. If the goal is W49152 bracket precision, continue bisection between
    `937.5M` and `940.625M`.
-3. If the goal is below-850M wider-annulus hunting, follow up the W524288
-   `835M SPANNING -> 840M late_timeout_candidate` pressure signal with a long
-   early-exit falsification row before full audit.
-4. Build the proposed dense `300M-800M` / `500k` low-band mesh for `W=524288`
-   if the goal is a finer scouting map below the current pressure zone.
-5. Confirm the `840M` candidate with a BZ-clean full-ingest audit row before
-   calling it a detector moat.
-6. Promote SPANNING certificate support for large K40 rows before presenting
+3. If the goal is below-850M wider-annulus hunting, continue above `840M` with
+   longer early-exit rows before selecting any full-audit candidate.
+4. Confirm any new timeout/non-early-span candidate with a BZ-clean full-ingest
+   audit row before calling it a detector moat.
+5. Promote SPANNING certificate support for large K40 rows before presenting
    these as more than detector/sample evidence.

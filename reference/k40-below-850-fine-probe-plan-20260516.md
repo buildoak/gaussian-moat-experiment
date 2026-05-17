@@ -524,3 +524,80 @@ Option 2: run dense mesh first while preserving the 840M candidate for audit.
 
 Pragmatic recommendation: A1 first, then dense mesh, then A2 only if the
 candidate still matters after the low-band map.
+
+## Dense Scout And Candidate Follow-Up Result - 2026-05-17
+
+Launched after pushing `c9b93f7` to
+`origin/repair/k40-w262144-telemetry-audit`.
+
+Remote run:
+
+```text
+/workspace/runs/k40-dense300800-and-840-followup-20260517
+```
+
+Local artifact mirror:
+
+```text
+/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-dense300800-and-840-followup-20260517/
+```
+
+Generator:
+
+```text
+branch=repair/k40-w262144-telemetry-audit
+commit=c9b93f7eb5410cf851029cdac018c04c4b423915
+GPU=NVIDIA GeForce RTX 4090
+driver=570.144
+```
+
+The run finished at `2026-05-17T16:44:56Z`.
+
+Dense mesh result:
+
+```text
+W=524288
+R_inner_start=300000000
+R_inner_stop=800000000
+R_inner_step=500000
+rows=1001
+early_span_clean=1001
+last_nominal_r_inner=800000000
+last_actual_r_inner=800000000
+```
+
+Every dense mesh row was BZ-clean, zero-overflow, and early `SPANNING`.
+
+Candidate long follow-up:
+
+```text
+W=524288
+R_inner=840000000
+R_outer=840524288
+bz_rc=0
+run_rc=0
+verdict=SPANNING
+early_exit_taken=1
+elapsed_s=3274
+active=5,282,807,025
+produced=260,831,721
+ingested=260,727,141
+overflow_total=0
+emitted_overflow=0
+```
+
+Interpretation:
+
+- The dense `300M-800M` / `500k` mesh found no lower pressure candidate.
+- The `840M` timeout candidate from the earlier `2400s` scout was killed by a
+  late span at `3274s`.
+- No full audit was launched because the long early-exit row falsified the
+  candidate before audit.
+- The current `W=524288` pressure bracket is now:
+
+```text
+840,000,000 SPANNING late -> next untested pressure above 840M
+```
+
+Next useful scout band is above `840M`, for example `841M-850M` with longer
+timeouts, before spending full-audit time.
