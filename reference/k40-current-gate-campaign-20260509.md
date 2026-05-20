@@ -452,6 +452,73 @@ The shifted BZ-clean replacements were all `+1` rows:
 
 All shifted rows also returned clean early `SPANNING`.
 
+## W786432 / W720896 840M Width-Bracket Addendum
+
+The next wider sparse scout was run on Vast instance `36747212`:
+
+```text
+remote_run=/workspace/runs/k40-wider-lower-sparse-scout-20260517
+local_artifacts=/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-wider-lower-sparse-scout-20260517/
+commit=0eab4a6a19e1d97a0e98ed9f3b218751a748acb5
+rows=6
+early_span_clean=5
+late_timeout_candidate=1
+```
+
+Final table:
+
+```text
+W=786432, R=400000000: SPANNING, elapsed=5s, bz_rc=0, overflow=0
+W=786432, R=500000000: SPANNING, elapsed=5s, bz_rc=0, overflow=0
+W=786432, R=650000000: SPANNING, elapsed=6s, bz_rc=0, overflow=0
+W=786432, R=780000000: SPANNING, elapsed=9s, bz_rc=0, overflow=0
+W=786432, R=820000000: SPANNING, elapsed=17s, bz_rc=0, overflow=0
+W=786432, R=840000000: timeout after 7200s, bz_rc=0, status=late_timeout_candidate
+```
+
+The intended `W=1048576` family did not run because the scout stopped at the
+first non-clean `W=786432` row. Therefore there is no `W=1048576` evidence from
+this instance.
+
+A no-internal-timeout lower-width follow-up was then run:
+
+```text
+remote_run=/workspace/runs/k40-w720896-840m-clean-run-20260518
+local_artifacts=/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-k40-w720896-840m-clean-run-20260518/
+commit=0eab4a6a19e1d97a0e98ed9f3b218751a748acb5
+```
+
+Final row:
+
+```text
+W=720896
+R_inner=840000000
+R_outer=840720896
+bz_rc=0
+run_rc=0
+verdict=SPANNING
+early_exit_taken=1
+active=7,263,478,353
+produced=5,596,023,359
+ingested=5,595,879,483
+overflow_total=0
+emitted_overflow=0
+elapsed_s=71,494
+status=early_span_clean
+```
+
+Interpretation: `W=720896, R=840M` is not a detector moat candidate; it
+eventually found a clean span after about `19h51m34s`. The `W=786432, R=840M`
+row remains unresolved pressure, but only as a timeout branch point, not a
+moat claim.
+
+The final full `/workspace/runs` snapshot for instance `36747212` was mirrored
+before destruction under:
+
+```text
+/Users/otonashi/thinking/pratchett-os/data/vast/instance-36747212-final-runs-snapshot-20260519/
+```
+
 ## Interpretation
 
 This is now the best current static-annulus K40 bracket at `W=32768`, with a
@@ -478,6 +545,9 @@ What it does establish is:
 - W524288 remains BZ-clean early `SPANNING` across the dense `70M-800M` sampled
   mesh, and the `840M` timeout candidate later became a clean late `SPANNING`
   row.
+- W720896 at `840M` also eventually became a clean late `SPANNING` row after
+  about `19h51m34s`; W786432 at `840M` remains only an unresolved timeout
+  pressure branch.
 
 ## Next Gates
 

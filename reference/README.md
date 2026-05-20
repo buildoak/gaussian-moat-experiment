@@ -27,6 +27,7 @@ First-read order:
 | `k37-k39-k36-lowest-moat-scout-20260508.md` | Diagnostic K37-K39 full-ingest scout at the refined K36 lowest moat island. |
 | `k40-lower-scout-20260509.md` | Diagnostic K40 full-ingest scout showing the K36/K39 lower island does not survive at W32768. |
 | `k40-current-gate-campaign-20260509.md` | Current-gate K40 campaign: W32768 bracket `978M SPAN -> 979.5M MOAT`, larger-width W49152 bracket `937.5M SPAN -> 940.625M MOAT`, and profile-free early-exit W65536/W131072/W262144 scout branch points. |
+| `k40-w786432-840m-candidate-and-w720896-clean-run-20260518.md` | W786432 `840M` timeout branch and W720896 no-timeout follow-up, which eventually found a late clean span after ~19h51m. |
 | `k26-k36-telemetry-calibration-20260508.md` | Lower-K telemetry calibration pilot for K40 moat-search triage. |
 | `agentic-optimization-workflow.md` | Branch/report workflow for long optimization work. |
 | `optimization-safety-checklist.md` | Do-not-break checklist for math/TileOp/port/verdict changes. |
